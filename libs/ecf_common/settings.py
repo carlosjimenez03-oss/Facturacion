@@ -33,6 +33,11 @@ class EcfBaseSettings(BaseSettings):
 
     allowed_origins: list[str] = ["*"]
 
+    # Auditoría en PostgreSQL (opcional). Si queda vacío, los módulos que
+    # registran envíos a la DGII simplemente no auditan — no es un
+    # requisito duro para operar. Formato: postgresql://user:pass@host:5432/db
+    database_url: str = ""
+
     @property
     def dgii_environment(self) -> DGIIEnvironment:
         return dgii_environment_for(self.app_env)

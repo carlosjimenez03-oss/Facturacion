@@ -3,14 +3,19 @@
 Recibe (de un sistema interno) el XML (ANECF) con los rangos de secuencias
 no utilizadas a anular, lo firma con el certificado digital y lo envía a la
 DGII.
+
+Cada envío se audita (best-effort) en facturacion.envios_dgii vía
+libs.ecf_common.db — ver el docstring de ese módulo.
 """
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.auth.token_provider import TokenProvider
+from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
 from libs.ecf_common.http_client import DGIIServiceError
 
 from .config import AnulacionSettings, get_settings
@@ -21,7 +26,16 @@ settings = get_settings()
 logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title=settings.app_name, debug=settings.debug)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.db_pool = await crear_pool(settings.database_url)
+    yield
+    await cerrar_pool(app.state.db_pool)
+
+
+app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
+app.state.db_pool = None
 
 app.add_middleware(
     CORSMiddleware,
@@ -60,9 +74,26 @@ async def anular_rango(
         nombre_archivo = f"{settings.emisor_rnc}-anulacion.xml"
 
         cliente = AnulacionDGIIClient(settings.dgii_environment)
-        return await cliente.anular_rango(xml_firmado, nombre_archivo, token.token)
+        respuesta = await cliente.anular_rango(xml_firmado, nombre_archivo, token.token)
+
+        await registrar_envio(
+            app.state.db_pool,
+            modulo="anulacion_encf",
+            ambiente=settings.app_env,
+            rnc_emisor=settings.emisor_rnc,
+            codigo=respuesta.codigo,
+            respuesta=respuesta.model_dump(),
+        )
+        return respuesta
     except DGIIServiceError as exc:
         logger.error("La DGII rechazó la anulación de rango: %s", exc)
+        await registrar_envio(
+            app.state.db_pool,
+            modulo="anulacion_encf",
+            ambiente=settings.app_env,
+            rnc_emisor=settings.emisor_rnc,
+            error=str(exc),
+        )
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except (FileNotFoundError, ValueError) as exc:
         logger.error("Error de configuración/certificado: %s", exc)

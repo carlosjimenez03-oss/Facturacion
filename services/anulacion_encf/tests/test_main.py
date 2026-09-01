@@ -25,6 +25,20 @@ def test_health(client):
     assert response.status_code == 200
 
 
+async def _fake_registrar_envio(pool, **kwargs):
+    _fake_registrar_envio.llamadas.append(kwargs)
+
+
+_fake_registrar_envio.llamadas = []
+
+
+@pytest.fixture(autouse=True)
+def _reset_auditoria(monkeypatch):
+    _fake_registrar_envio.llamadas = []
+    monkeypatch.setattr(main, "registrar_envio", _fake_registrar_envio)
+    yield
+
+
 def test_anular_rango_ok(client, monkeypatch, credencial_prueba):
     monkeypatch.setattr(main, "cargar_certificado_p12", lambda path, password: credencial_prueba)
     monkeypatch.setattr(main, "firmar_xml", lambda xml_bytes, credencial: b"<ANECF>firmado</ANECF>")
@@ -44,6 +58,8 @@ def test_anular_rango_ok(client, monkeypatch, credencial_prueba):
 
     assert response.status_code == 200
     assert response.json()["rnc"] == "101672919"
+    assert len(_fake_registrar_envio.llamadas) == 1
+    assert _fake_registrar_envio.llamadas[0]["modulo"] == "anulacion_encf"
 
 
 def test_anular_rango_error_dgii(client, monkeypatch, credencial_prueba):
@@ -63,3 +79,4 @@ def test_anular_rango_error_dgii(client, monkeypatch, credencial_prueba):
     response = client.post("/anulacion", files={"xml": ("anulacion.xml", io.BytesIO(b"<ANECF/>"), "text/xml")})
 
     assert response.status_code == 502
+    assert _fake_registrar_envio.llamadas[0]["error"] == "rechazado"

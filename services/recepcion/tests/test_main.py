@@ -26,6 +26,20 @@ def test_health(client):
     assert response.json() == {"status": "ok", "app_env": "test", "dgii_environment": "testecf"}
 
 
+async def _fake_registrar_envio(pool, **kwargs):
+    _fake_registrar_envio.llamadas.append(kwargs)
+
+
+_fake_registrar_envio.llamadas = []
+
+
+@pytest.fixture(autouse=True)
+def _reset_auditoria(monkeypatch):
+    _fake_registrar_envio.llamadas = []
+    monkeypatch.setattr(main, "registrar_envio", _fake_registrar_envio)
+    yield
+
+
 def test_enviar_ecf_ok(client, monkeypatch, credencial_prueba):
     monkeypatch.setattr(main, "cargar_certificado_p12", lambda path, password: credencial_prueba)
     monkeypatch.setattr(main, "firmar_xml", lambda xml_bytes, credencial: b"<ECF>firmado</ECF>")
@@ -51,6 +65,9 @@ def test_enviar_ecf_ok(client, monkeypatch, credencial_prueba):
 
     assert response.status_code == 200
     assert response.json()["trackId"] == "track-1"
+    assert len(_fake_registrar_envio.llamadas) == 1
+    assert _fake_registrar_envio.llamadas[0]["track_id"] == "track-1"
+    assert _fake_registrar_envio.llamadas[0]["modulo"] == "recepcion"
 
 
 def test_enviar_ecf_error_dgii(client, monkeypatch, credencial_prueba):
@@ -74,3 +91,5 @@ def test_enviar_ecf_error_dgii(client, monkeypatch, credencial_prueba):
     )
 
     assert response.status_code == 502
+    assert len(_fake_registrar_envio.llamadas) == 1
+    assert _fake_registrar_envio.llamadas[0]["error"] == "rechazado por la DGII"
