@@ -2,11 +2,11 @@ import httpx
 import pytest
 import respx
 
-from libs.ecf_common.environments import DGIIEnvironment
-from services.autenticacion.app.dgii_client import (
+from libs.ecf_common.auth.dgii_client import (
     AutenticacionDGIIClient,
     DGIIAutenticacionError,
 )
+from libs.ecf_common.environments import DGIIEnvironment
 
 BASE_URL = "https://ecf.dgii.gov.do/testecf/autenticacion"
 

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
-from services.autenticacion.app.schemas import TokenResponse
-from services.autenticacion.app.token_cache import TokenCache, parse_dgii_datetime
+from libs.ecf_common.auth.schemas import TokenResponse
+from libs.ecf_common.auth.token_cache import TokenCache, parse_dgii_datetime
 
 
 def test_parse_dgii_datetime_con_fraccion_larga():

@@ -33,7 +33,18 @@ jobs:
     needs: lint-test
     strategy:
       matrix:
-        modulo: [autenticacion]
+        modulo:
+          - autenticacion
+          - recepcion
+          - recepcion_rfce
+          - consulta_rfce
+          - consulta_resultado
+          - consulta_estado
+          - consulta_trackids
+          - aprobacion_comercial
+          - anulacion_encf
+          - consulta_directorio
+          - consulta_timbre
     steps:
       - uses: actions/checkout@v4
 

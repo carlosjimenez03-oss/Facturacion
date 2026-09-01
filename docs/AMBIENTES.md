@@ -23,12 +23,23 @@ configuración, cliente HTTP con TLS forzado, utilidades XML) desde
 `libs/ecf_common/`:
 
 ```
-libs/ecf_common/       # Compartido por todos los módulos
+libs/ecf_common/       # Compartido por todos los módulos (incluye auth/: token DGII reutilizable)
 services/
-  autenticacion/        # Módulo 1: Autenticación (semilla, firma, token) — implementado
-  recepcion/             # Módulo 2: Recepción de e-CF — pendiente
-  ...                     # Resto de módulos del catálogo (ver SERVICIOS_DGII.md)
+  autenticacion/         # Autenticación (semilla, firma, token)
+  recepcion/              # Recepción de e-CF
+  recepcion_rfce/          # Recepción de resumen factura de consumo (RFCE)
+  consulta_rfce/            # Consulta de RFCE
+  consulta_resultado/        # Consulta de resultado e-CF
+  consulta_estado/            # Consulta de estado e-CF
+  consulta_trackids/           # Consulta de trackId e-CF
+  aprobacion_comercial/         # Recepción de aprobación comercial
+  anulacion_encf/                # Anulación de e-NCF
+  consulta_directorio/            # Consulta Directorio de Servicios
+  consulta_timbre/                 # Consulta timbre (QR) e-CF y FC
 ```
+
+Los 11 módulos están implementados. Ver el detalle de cada uno (y el
+endpoint propio que expone) en la tabla de [`README.md`](../README.md).
 
 Cada módulo tiene su propio `app/`, `tests/` y `Dockerfile` (con build
 context en la raíz del repo, para poder copiar `libs/`).
@@ -59,7 +70,13 @@ docker compose -f docker-compose.yml -f docker-compose.qa.yml up --build -d
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
 ```
 
-Verificar que el ambiente activo es el esperado (módulo Autenticación, puerto 8000):
+Cada módulo queda expuesto en un puerto distinto (ver `docker-compose.test.yml`):
+`autenticacion`=8000, `recepcion`=8001, `recepcion-rfce`=8002,
+`consulta-rfce`=8003, `consulta-resultado`=8004, `consulta-estado`=8005,
+`consulta-trackids`=8006, `aprobacion-comercial`=8007, `anulacion-encf`=8008,
+`consulta-directorio`=8009, `consulta-timbre`=8010.
+
+Verificar que el ambiente activo es el esperado:
 
 ```bash
 curl http://localhost:8000/health
@@ -75,9 +92,9 @@ curl http://localhost:8000/health
 | `.github/workflows/deploy-qa.yml`      | Push a `qa`               | `qa`             | Build, push de imagen y deploy a QA (matriz por módulo) |
 | `.github/workflows/deploy-prod.yml`    | Push a `main`             | `production`     | Build, push de imagen y deploy a Producción (requiere aprobación manual) |
 
-Los workflows usan una matriz (`matrix.modulo`) que hoy solo incluye
-`autenticacion`; al agregar un nuevo módulo (p. ej. `recepcion`) basta con
-añadirlo a la lista `modulo: [...]` en los 4 workflows.
+Los workflows usan una matriz (`matrix.modulo`) con los 11 módulos actuales;
+al agregar un módulo nuevo basta con sumarlo a esa lista en los 4 workflows
+y en `docker-compose*.yml`.
 
 ### Configuración pendiente en GitHub (Settings → Environments)
 
@@ -100,6 +117,14 @@ construyen y publican la imagen Docker de cada módulo en GHCR, pero el paso
 final de despliegue (`Deploy al servidor de ...`) queda como placeholder
 hasta definir la infraestructura destino de cada ambiente (servidor propio,
 Kubernetes, Cloud Run, etc.).
+
+### Despliegue real: Dokploy
+
+El despliegue efectivo del proyecto se hace en [Dokploy](https://dokploy.com)
+con un archivo separado y autocontenido,
+[`docker-compose.dokploy.yml`](../docker-compose.dokploy.yml) (los 11
+módulos + Postgres + PostgREST + pgAdmin). Ver la guía completa en
+[`docs/DOKPLOY.md`](DOKPLOY.md).
 
 ## Flujo de ramas sugerido
 

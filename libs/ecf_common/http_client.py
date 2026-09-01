@@ -42,3 +42,17 @@ class DGIIAsyncClient:
     async def __aexit__(self, *exc_info: object) -> None:
         assert self._client is not None
         await self._client.aclose()
+
+
+class DGIIServiceError(RuntimeError):
+    """Error al comunicarse con un servicio web de la DGII (HTTP no exitoso)."""
+
+
+def raise_for_dgii_status(response: httpx.Response, accion: str) -> None:
+    """Lanza DGIIServiceError con contexto si la respuesta no fue exitosa (2xx)."""
+    if response.is_success:
+        return
+    raise DGIIServiceError(
+        f"La DGII rechazó la solicitud para {accion} "
+        f"(HTTP {response.status_code}): {response.text}"
+    )

@@ -1,6 +1,6 @@
 from functools import lru_cache
 
-from libs.ecf_common.settings import EcfBaseSettings, env_file_for
+from libs.ecf_common.settings import EcfBaseSettings, load_settings
 
 
 class AutenticacionSettings(EcfBaseSettings):
@@ -13,7 +13,4 @@ class AutenticacionSettings(EcfBaseSettings):
 
 @lru_cache
 def get_settings() -> AutenticacionSettings:
-    import os
-
-    app_env = os.getenv("APP_ENV", "test")
-    return AutenticacionSettings(_env_file=env_file_for(app_env))  # type: ignore[call-arg]
+    return load_settings(AutenticacionSettings)

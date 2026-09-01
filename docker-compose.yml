@@ -3,16 +3,111 @@
 #   docker compose -f docker-compose.yml -f docker-compose.test.yml up
 #
 # Cada módulo de facturación electrónica (services/<modulo>) es un servicio
-# Docker independiente. Por ahora solo existe "autenticacion"; los próximos
-# módulos (recepcion, consulta, etc.) se agregan aquí de la misma forma.
+# Docker independiente que comparte libs/ecf_common. Para agregar un nuevo
+# módulo: crear services/<modulo>/{app,Dockerfile}, agregar el bloque aquí
+# (siguiendo el mismo patrón) y sumarlo a la matriz `modulo` de los 4
+# workflows en .github/workflows/.
+x-comun: &comun
+  restart: unless-stopped
+  volumes:
+    - ./certs:/app/certs:ro
+
 services:
   autenticacion:
+    <<: *comun
     build:
       context: .
       dockerfile: services/autenticacion/Dockerfile
       args:
         APP_ENV: ${APP_ENV:-test}
     image: facturacion-electronica/autenticacion:${APP_ENV:-test}
-    restart: unless-stopped
-    volumes:
-      - ./certs:/app/certs:ro
+
+  recepcion:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/recepcion/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/recepcion:${APP_ENV:-test}
+
+  recepcion-rfce:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/recepcion_rfce/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/recepcion-rfce:${APP_ENV:-test}
+
+  consulta-rfce:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/consulta_rfce/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/consulta-rfce:${APP_ENV:-test}
+
+  consulta-resultado:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/consulta_resultado/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/consulta-resultado:${APP_ENV:-test}
+
+  consulta-estado:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/consulta_estado/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/consulta-estado:${APP_ENV:-test}
+
+  consulta-trackids:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/consulta_trackids/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/consulta-trackids:${APP_ENV:-test}
+
+  aprobacion-comercial:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/aprobacion_comercial/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/aprobacion-comercial:${APP_ENV:-test}
+
+  anulacion-encf:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/anulacion_encf/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/anulacion-encf:${APP_ENV:-test}
+
+  consulta-directorio:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/consulta_directorio/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/consulta-directorio:${APP_ENV:-test}
+
+  consulta-timbre:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/consulta_timbre/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/consulta-timbre:${APP_ENV:-test}

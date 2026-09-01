@@ -1,17 +1,47 @@
 # Ambiente de QA / CERTIFICACION. DGII: CerteCF.
 # Uso: docker compose -f docker-compose.yml -f docker-compose.qa.yml up --build -d
+#
+# Los secretos reales (EMISOR_RNC, CERTIFICADO_PASSWORD, etc.) se inyectan
+# desde el entorno del runner de CI/CD o del orquestador, sobreescribiendo el
+# .env.qa. El certificado .p12 se monta como volumen (./certs), nunca se
+# incluye en la imagen.
+x-qa-comun: &qa-comun
+  env_file:
+    - .env.qa
+  environment:
+    APP_ENV: qa
+
 services:
   autenticacion:
-    build:
-      args:
-        APP_ENV: qa
-    env_file:
-      - .env.qa
-    environment:
-      APP_ENV: qa
-      # Los secretos reales (EMISOR_RNC, CERTIFICADO_PASSWORD, etc.) se
-      # inyectan desde el entorno del runner de CI/CD o del orquestador,
-      # sobreescribiendo el .env.qa. El certificado .p12 se monta como
-      # volumen (./certs), nunca se incluye en la imagen.
-    ports:
-      - "8001:8000"
+    <<: *qa-comun
+    ports: ["8000:8000"]
+  recepcion:
+    <<: *qa-comun
+    ports: ["8001:8000"]
+  recepcion-rfce:
+    <<: *qa-comun
+    ports: ["8002:8000"]
+  consulta-rfce:
+    <<: *qa-comun
+    ports: ["8003:8000"]
+  consulta-resultado:
+    <<: *qa-comun
+    ports: ["8004:8000"]
+  consulta-estado:
+    <<: *qa-comun
+    ports: ["8005:8000"]
+  consulta-trackids:
+    <<: *qa-comun
+    ports: ["8006:8000"]
+  aprobacion-comercial:
+    <<: *qa-comun
+    ports: ["8007:8000"]
+  anulacion-encf:
+    <<: *qa-comun
+    ports: ["8008:8000"]
+  consulta-directorio:
+    <<: *qa-comun
+    ports: ["8009:8000"]
+  consulta-timbre:
+    <<: *qa-comun
+    ports: ["8010:8000"]

@@ -1,0 +1,175 @@
+# Despliegue único para Dokploy: los 11 módulos de facturación electrónica +
+# Postgres + PostgREST + pgAdmin, en un solo archivo (sin encadenar -f -f
+# como en docker-compose.yml + overrides, pensado para desarrollo local).
+#
+# Uso en Dokploy: crear un recurso tipo "Compose", apuntarlo a este
+# repositorio y configurar "Compose Path" = docker-compose.dokploy.yml.
+#
+# Todas las variables (${...}) se configuran como Environment Variables del
+# proyecto en el panel de Dokploy — NUNCA se commitean aquí. Ver
+# docs/DOKPLOY.md para la lista completa y el paso manual de subir el
+# certificado .p12 del emisor (no se puede commitear).
+x-modulo-env: &modulo-env
+  APP_ENV: ${APP_ENV:-production}
+  DEBUG: ${DEBUG:-false}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  EMISOR_RNC: ${EMISOR_RNC:?EMISOR_RNC es requerido}
+  CERTIFICADO_PATH: /app/certs/emisor.p12
+  CERTIFICADO_PASSWORD: ${CERTIFICADO_PASSWORD:?CERTIFICADO_PASSWORD es requerido}
+  ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["*"]}
+  DATABASE_URL: postgresql://${POSTGRES_USER:-facturacion}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-facturacion}
+
+x-modulo-comun: &modulo-comun
+  restart: unless-stopped
+  environment: *modulo-env
+  volumes:
+    - ./certs:/app/certs:ro
+  depends_on:
+    postgres:
+      condition: service_healthy
+  networks: [facturacion]
+
+services:
+  # --- Base de datos y herramientas de administración ---
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-facturacion}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD es requerido}
+      POSTGRES_DB: ${POSTGRES_DB:-facturacion}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    expose: ["5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-facturacion}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [facturacion]
+
+  postgrest:
+    image: postgrest/postgrest:v12.2.3
+    restart: unless-stopped
+    environment:
+      PGRST_DB_URI: postgresql://${POSTGRES_USER:-facturacion}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-facturacion}
+      PGRST_DB_SCHEMA: facturacion
+      PGRST_DB_ANON_ROLE: web_anon
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose: ["3000"]
+    networks: [facturacion]
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:?PGADMIN_DEFAULT_EMAIL es requerido}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?PGADMIN_DEFAULT_PASSWORD es requerido}
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    expose: ["80"]
+    networks: [facturacion]
+
+  # --- Módulos de facturación electrónica (uno por servicio DGII) ---
+
+  autenticacion:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/autenticacion/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8000:8000"]
+
+  recepcion:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/recepcion/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8001:8000"]
+
+  recepcion-rfce:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/recepcion_rfce/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8002:8000"]
+
+  consulta-rfce:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/consulta_rfce/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8003:8000"]
+
+  consulta-resultado:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/consulta_resultado/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8004:8000"]
+
+  consulta-estado:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/consulta_estado/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8005:8000"]
+
+  consulta-trackids:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/consulta_trackids/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8006:8000"]
+
+  aprobacion-comercial:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/aprobacion_comercial/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8007:8000"]
+
+  anulacion-encf:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/anulacion_encf/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8008:8000"]
+
+  consulta-directorio:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/consulta_directorio/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8009:8000"]
+
+  consulta-timbre:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/consulta_timbre/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8010:8000"]
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+
+networks:
+  facturacion:
