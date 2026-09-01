@@ -1,20 +1,21 @@
 """Módulo 1: Autenticación.
 
-Expone un API REST propio (para que otros módulos/sistemas internos lo
-consuman) que envuelve el servicio de Autenticación de la DGII: obtiene la
-semilla, la firma con el certificado digital del emisor y la valida para
-obtener un token, cacheándolo en memoria mientras siga vigente.
+Expone un API REST propio (para que sistemas externos no-Python, p. ej. un
+ERP, lo consuman) que envuelve el servicio de Autenticación de la DGII. La
+lógica en sí (semilla, firma, validarsemilla, cache) vive en
+`libs.ecf_common.auth.token_provider.TokenProvider`, reutilizada también por
+el resto de módulos Python de este monorepo sin pasar por HTTP.
 """
 import logging
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+from libs.ecf_common.auth.dgii_client import DGIIAutenticacionError
+from libs.ecf_common.auth.schemas import TokenResponse
+from libs.ecf_common.auth.token_provider import TokenProvider
+
 from .config import AutenticacionSettings, get_settings
-from .dgii_client import AutenticacionDGIIClient, DGIIAutenticacionError
-from .schemas import TokenResponse
-from .signing import cargar_certificado_p12, firmar_xml
-from .token_cache import TokenCache
 
 settings = get_settings()
 logging.basicConfig(level=settings.log_level)
@@ -29,7 +30,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_cache = TokenCache()
+_token_provider = TokenProvider(
+    ambiente=settings.dgii_environment,
+    certificado_path=settings.certificado_path,
+    certificado_password=settings.certificado_password,
+    margen_segundos=settings.token_cache_margen_segundos,
+)
 
 
 @app.get("/health")
@@ -41,37 +47,11 @@ def health(settings: AutenticacionSettings = Depends(get_settings)) -> dict:
     }
 
 
-async def _obtener_token(settings: AutenticacionSettings, forzar_renovacion: bool) -> TokenResponse:
-    if not forzar_renovacion:
-        token = _cache.vigente()
-        if token is not None:
-            return token
-
-    async with _cache.lock:
-        if not forzar_renovacion:
-            token = _cache.vigente()
-            if token is not None:
-                return token
-
-        credencial = cargar_certificado_p12(settings.certificado_path, settings.certificado_password)
-        cliente = AutenticacionDGIIClient(settings.dgii_environment)
-
-        semilla = await cliente.obtener_semilla()
-        semilla_firmada = firmar_xml(semilla, credencial)
-        token = await cliente.validar_semilla(semilla_firmada)
-
-        _cache.guardar(token)
-        return token
-
-
 @app.get("/token", response_model=TokenResponse)
-async def obtener_token(
-    forzar_renovacion: bool = False,
-    settings: AutenticacionSettings = Depends(get_settings),
-) -> TokenResponse:
+async def obtener_token(forzar_renovacion: bool = False) -> TokenResponse:
     """Retorna un token de sesión vigente, renovándolo con la DGII si hace falta."""
     try:
-        return await _obtener_token(settings, forzar_renovacion)
+        return await _token_provider.obtener_token(forzar_renovacion)
     except DGIIAutenticacionError as exc:
         logger.error("Fallo al autenticar con la DGII: %s", exc)
         raise HTTPException(status_code=502, detail=str(exc)) from exc

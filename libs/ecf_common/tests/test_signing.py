@@ -1,7 +1,7 @@
 from lxml import etree
 from signxml import XMLVerifier
 
-from services.autenticacion.app.signing import cargar_certificado_p12, firmar_xml
+from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 
 XML_SEMILLA = (
     b'<?xml version="1.0" encoding="UTF-8"?>'

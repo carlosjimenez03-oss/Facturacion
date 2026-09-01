@@ -4,16 +4,13 @@ Endpoints confirmados en docs/dgii/SERVICIOS_DGII.md (sección "1. Autenticació
 - GET  {base}/api/autenticacion/semilla
 - POST {base}/api/autenticacion/validarsemilla  (multipart, campo "xml")
 """
-import httpx
-
 from libs.ecf_common.environments import DGIIEnvironment, DGIIService, dgii_service_base_url
-from libs.ecf_common.http_client import DGIIAsyncClient
+from libs.ecf_common.http_client import DGIIAsyncClient, DGIIServiceError, raise_for_dgii_status
 
 from .schemas import TokenResponse
 
-
-class DGIIAutenticacionError(RuntimeError):
-    """Error al comunicarse con el servicio de autenticación de la DGII."""
+# Alias retrocompatible: código existente puede referenciar este nombre.
+DGIIAutenticacionError = DGIIServiceError
 
 
 class AutenticacionDGIIClient:
@@ -25,7 +22,7 @@ class AutenticacionDGIIClient:
         url = f"{self._base_url}/api/autenticacion/semilla"
         async with DGIIAsyncClient() as client:
             response = await client.get(url, headers={"accept": "*/*"})
-        _raise_for_status(response, "obtener la semilla")
+        raise_for_dgii_status(response, "obtener la semilla")
         return response.content
 
     async def validar_semilla(self, semilla_firmada: bytes) -> TokenResponse:
@@ -34,14 +31,5 @@ class AutenticacionDGIIClient:
         files = {"xml": ("semilla.xml", semilla_firmada, "text/xml")}
         async with DGIIAsyncClient() as client:
             response = await client.post(url, files=files, headers={"accept": "application/json"})
-        _raise_for_status(response, "validar la semilla firmada")
+        raise_for_dgii_status(response, "validar la semilla firmada")
         return TokenResponse.model_validate(response.json())
-
-
-def _raise_for_status(response: httpx.Response, accion: str) -> None:
-    if response.is_success:
-        return
-    raise DGIIAutenticacionError(
-        f"La DGII rechazó la solicitud para {accion} "
-        f"(HTTP {response.status_code}): {response.text}"
-    )

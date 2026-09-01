@@ -1,3 +1,5 @@
+"""Fixtures compartidas por TODOS los módulos y libs (pytest las descubre
+automáticamente por vivir en el conftest.py de la raíz del repo)."""
 import datetime
 import os
 from pathlib import Path
@@ -11,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509.oid import NameOID
 
-from services.autenticacion.app.signing import CredencialFirma
+from libs.ecf_common.auth.signing import CredencialFirma
 
 
 def _generar_par_llave_certificado():
