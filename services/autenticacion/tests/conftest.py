@@ -1,0 +1,53 @@
+import datetime
+import os
+from pathlib import Path
+
+os.environ.setdefault("APP_ENV", "test")
+
+import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import pkcs12
+from cryptography.x509.oid import NameOID
+
+from services.autenticacion.app.signing import CredencialFirma
+
+
+def _generar_par_llave_certificado():
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Emisor de Prueba")])
+    ahora = datetime.datetime.now(datetime.timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(ahora)
+        .not_valid_after(ahora + datetime.timedelta(days=1))
+        .sign(key, hashes.SHA256())
+    )
+    return key, cert
+
+
+@pytest.fixture
+def credencial_prueba() -> CredencialFirma:
+    key, cert = _generar_par_llave_certificado()
+    return CredencialFirma(private_key=key, certificate=cert)
+
+
+@pytest.fixture
+def p12_prueba(tmp_path: Path) -> tuple[Path, str]:
+    key, cert = _generar_par_llave_certificado()
+    password = "clave-prueba"
+    p12_bytes = pkcs12.serialize_key_and_certificates(
+        name=b"emisor-prueba",
+        key=key,
+        cert=cert,
+        cas=None,
+        encryption_algorithm=serialization.BestAvailableEncryption(password.encode()),
+    )
+    p12_path = tmp_path / "emisor.p12"
+    p12_path.write_bytes(p12_bytes)
+    return p12_path, password

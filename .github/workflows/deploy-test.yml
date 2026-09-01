@@ -15,6 +15,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        modulo: [autenticacion]
     steps:
       - uses: actions/checkout@v4
 
@@ -25,19 +28,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build y push de imagen (ambiente test)
+      - name: Build y push de imagen (ambiente test) - ${{ matrix.modulo }}
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: services/${{ matrix.modulo }}/Dockerfile
           push: true
           build-args: |
             APP_ENV=test
-          tags: ghcr.io/${{ github.repository }}:test-${{ github.sha }},ghcr.io/${{ github.repository }}:test-latest
+          tags: |
+            ghcr.io/${{ github.repository }}/${{ matrix.modulo }}:test-${{ github.sha }}
+            ghcr.io/${{ github.repository }}/${{ matrix.modulo }}:test-latest
 
       # Paso de despliegue especifico de infraestructura (SSH, Kubernetes,
       # Cloud Run, etc.). Placeholder hasta definir el destino del ambiente
       # de test; usar los secretos del environment "test" configurados en
       # Settings > Environments > test.
-      - name: Deploy al servidor de pruebas
+      - name: Deploy al servidor de pruebas - ${{ matrix.modulo }}
         run: |
-          echo "TODO: definir pasos de despliegue del ambiente de test"
+          echo "TODO: definir pasos de despliegue del ambiente de test para ${{ matrix.modulo }}"

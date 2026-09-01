@@ -1,15 +1,19 @@
+# Build context: raíz del repositorio (para poder copiar libs/ además del
+# propio módulo). Uso: docker build -f services/autenticacion/Dockerfile .
 FROM python:3.12-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app ./app
+COPY libs ./libs
+COPY services/autenticacion/app ./app
 
 ARG APP_ENV=production
 ENV APP_ENV=${APP_ENV}

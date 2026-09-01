@@ -18,6 +18,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        modulo: [autenticacion]
     steps:
       - uses: actions/checkout@v4
 
@@ -28,20 +31,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build y push de imagen (ambiente produccion)
+      - name: Build y push de imagen (ambiente produccion) - ${{ matrix.modulo }}
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: services/${{ matrix.modulo }}/Dockerfile
           push: true
           build-args: |
             APP_ENV=production
-          tags: ghcr.io/${{ github.repository }}:prod-${{ github.sha }},ghcr.io/${{ github.repository }}:prod-latest
+          tags: |
+            ghcr.io/${{ github.repository }}/${{ matrix.modulo }}:prod-${{ github.sha }}
+            ghcr.io/${{ github.repository }}/${{ matrix.modulo }}:prod-latest
 
       # Paso de despliegue especifico de infraestructura (SSH, Kubernetes,
       # Cloud Run, etc.). Placeholder hasta definir el destino de produccion;
       # usar los secretos del environment "production" configurados en
-      # Settings > Environments > production (EMISOR_RNC, DGII_API_USER,
-      # DGII_API_PASSWORD, CERTIFICADO_PASSWORD, POSTGRES_PASSWORD, etc.).
-      - name: Deploy al servidor de produccion
+      # Settings > Environments > production (EMISOR_RNC, CERTIFICADO_PASSWORD, etc.).
+      - name: Deploy al servidor de produccion - ${{ matrix.modulo }}
         run: |
-          echo "TODO: definir pasos de despliegue del ambiente de produccion"
+          echo "TODO: definir pasos de despliegue del ambiente de produccion para ${{ matrix.modulo }}"

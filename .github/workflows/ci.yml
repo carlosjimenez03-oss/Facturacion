@@ -26,13 +26,19 @@ jobs:
         run: ruff check .
 
       - name: Tests
-        run: pytest --cov=app --cov-report=term-missing
+        run: pytest --cov=libs --cov=services --cov-report=term-missing
 
   docker-build:
     runs-on: ubuntu-latest
     needs: lint-test
+    strategy:
+      matrix:
+        modulo: [autenticacion]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build de imagen Docker (validacion)
-        run: docker build --build-arg APP_ENV=test -t facturacion-electronica:ci .
+      - name: Build de imagen Docker (validacion) - ${{ matrix.modulo }}
+        run: |
+          docker build --build-arg APP_ENV=test \
+            -f services/${{ matrix.modulo }}/Dockerfile \
+            -t facturacion-electronica/${{ matrix.modulo }}:ci .

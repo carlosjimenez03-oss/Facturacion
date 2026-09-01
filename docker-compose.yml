@@ -1,11 +1,18 @@
 # Configuracion base compartida por los tres ambientes. Combinar siempre con
 # el override correspondiente, por ejemplo:
 #   docker compose -f docker-compose.yml -f docker-compose.test.yml up
+#
+# Cada módulo de facturación electrónica (services/<modulo>) es un servicio
+# Docker independiente. Por ahora solo existe "autenticacion"; los próximos
+# módulos (recepcion, consulta, etc.) se agregan aquí de la misma forma.
 services:
-  api:
+  autenticacion:
     build:
       context: .
+      dockerfile: services/autenticacion/Dockerfile
       args:
         APP_ENV: ${APP_ENV:-test}
-    image: facturacion-electronica:${APP_ENV:-test}
+    image: facturacion-electronica/autenticacion:${APP_ENV:-test}
     restart: unless-stopped
+    volumes:
+      - ./certs:/app/certs:ro
