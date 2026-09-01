@@ -1,0 +1,11 @@
+# Configuracion base compartida por los tres ambientes. Combinar siempre con
+# el override correspondiente, por ejemplo:
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up
+services:
+  api:
+    build:
+      context: .
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica:${APP_ENV:-test}
+    restart: unless-stopped

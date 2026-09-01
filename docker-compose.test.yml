@@ -1,0 +1,16 @@
+# Ambiente de PRUEBAS (local/dev). DGII: TesteCF.
+# Uso: docker compose -f docker-compose.yml -f docker-compose.test.yml up --build
+services:
+  api:
+    build:
+      args:
+        APP_ENV: test
+    env_file:
+      - .env.test
+    environment:
+      APP_ENV: test
+    volumes:
+      - ./app:/app/app:ro
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    ports:
+      - "8000:8000"

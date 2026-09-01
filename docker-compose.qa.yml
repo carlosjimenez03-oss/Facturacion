@@ -1,0 +1,31 @@
+# Ambiente de QA / CERTIFICACION. DGII: CerteCF.
+# Uso: docker compose -f docker-compose.yml -f docker-compose.qa.yml up --build -d
+services:
+  api:
+    build:
+      args:
+        APP_ENV: qa
+    env_file:
+      - .env.qa
+    environment:
+      APP_ENV: qa
+      # Los secretos reales (EMISOR_RNC, DGII_API_USER, DGII_API_PASSWORD,
+      # CERTIFICADO_PASSWORD, DATABASE_URL) se inyectan desde el entorno del
+      # runner de CI/CD o del orquestador, sobreescribiendo el .env.qa.
+    depends_on:
+      - db
+    ports:
+      - "8001:8000"
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: facturacion_qa
+      POSTGRES_USER: facturacion
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD es requerido en QA}
+    volumes:
+      - db_qa_data:/var/lib/postgresql/data
+
+volumes:
+  db_qa_data:

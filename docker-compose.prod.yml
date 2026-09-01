@@ -1,0 +1,34 @@
+# Ambiente de PRODUCCION. DGII: eCF (comprobantes con validez fiscal real).
+# Uso: docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+services:
+  api:
+    build:
+      args:
+        APP_ENV: production
+    env_file:
+      - .env.production
+    environment:
+      APP_ENV: production
+      # Los secretos reales se inyectan desde el gestor de secretos del
+      # entorno de despliegue; nunca se commitean en .env.production.
+    depends_on:
+      - db
+    ports:
+      - "8000:8000"
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 5
+
+  db:
+    image: postgres:16-alpine
+    restart: always
+    environment:
+      POSTGRES_DB: facturacion_prod
+      POSTGRES_USER: facturacion
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD es requerido en produccion}
+    volumes:
+      - db_prod_data:/var/lib/postgresql/data
+
+volumes:
+  db_prod_data:
