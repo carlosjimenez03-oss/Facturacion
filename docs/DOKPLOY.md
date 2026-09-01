@@ -73,17 +73,23 @@ a donde Dokploy clona el repo en el servidor). Pasos:
 - **PostgREST** expone ese esquema como API REST de **solo lectura** (rol
   `web_anon`) en el puerto interno `3000`. No requiere autenticación por
   defecto — ver la nota de seguridad abajo.
-- **pgAdmin** (puerto interno `80`) permite administrar la base visualmente;
-  conectarse ahí al host `postgres`, puerto `5432`, con `POSTGRES_USER`/
-  `POSTGRES_PASSWORD`.
+- **pgAdmin** (puerto interno `80`, publicado en el host como `8901`) permite
+  administrar la base visualmente; conectarse ahí al host `postgres`, puerto
+  `5432`, con `POSTGRES_USER`/`POSTGRES_PASSWORD`.
 
 ### Dominios (exponer al público)
 
-Los tres servicios de infraestructura (`postgres`, `postgrest`, `pgadmin`) NO
-publican puertos al host (`expose`, no `ports`) — son alcanzables solo dentro
-de la red interna `facturacion`. Para exponer `postgrest` y/o `pgadmin` con
-un dominio propio, usar la función de Dokploy de asignar un dominio a un
-servicio del compose (Dokploy detecta el puerto interno vía `expose`).
+`postgres` y `postgrest` NO publican puertos al host (`expose`, no `ports`)
+— son alcanzables solo dentro de la red interna `facturacion`.
+
+`pgadmin` sí publica su puerto al host (`ports: ["8901:80"]`), en vez de usar
+la función de "Domains" de Dokploy (que depende de un Traefik gestionado por
+Dokploy — en instalaciones donde ese Traefik no está desplegado, como cuando
+coexiste con otro reverse proxy ya usando los puertos 80/443, esa función no
+enruta nada). Para darle un dominio propio a pgAdmin en ese caso, apuntar un
+Cloudflare Tunnel (u otro reverse proxy externo) directo a `<IP-del-servidor>:8901`,
+en vez de depender de Dokploy.
+
 **No exponer pgAdmin ni Postgres directamente a Internet** sin al menos
 restringir por IP o poner autenticación adicional delante.
 

@@ -74,7 +74,7 @@ services:
       - pgadmin_data:/var/lib/pgadmin
     depends_on:
       - postgres
-    expose: ["80"]
+    ports: ["8901:80"]
     networks: [facturacion]
 
   # --- Módulos de facturación electrónica (uno por servicio DGII) ---
