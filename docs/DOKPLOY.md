@@ -60,7 +60,12 @@ a donde Dokploy clona el repo en el servidor). Pasos:
 
 - **Postgres** inicializa automáticamente el esquema `facturacion` (tabla
   `envios_dgii`) la primera vez que arranca, vía
-  [`db/init/001_schema.sql`](../db/init/001_schema.sql).
+  [`db/init/001_schema.sql`](../db/init/001_schema.sql). El servicio `postgres`
+  se construye desde [`db/Dockerfile`](../db/Dockerfile) (`build: ./db`), que
+  copia ese script dentro de la imagen en `/docker-entrypoint-initdb.d/` — no
+  se usa un bind-mount de `./db/init`, porque algunas plataformas de
+  despliegue (incluyendo Dokploy) no resuelven de forma confiable el path
+  relativo de un bind-mount de subcarpeta del repo.
 - Los módulos `recepcion`, `recepcion_rfce`, `aprobacion_comercial` y
   `anulacion_encf` registran ahí, de forma best-effort (nunca bloquean la
   respuesta si falla), cada envío a la DGII: módulo, RNC emisor, e-NCF,
