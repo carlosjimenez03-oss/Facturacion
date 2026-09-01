@@ -1,0 +1,21 @@
+# Ambiente de PRODUCCION. DGII: eCF (comprobantes con validez fiscal real).
+# Uso: docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+services:
+  autenticacion:
+    build:
+      args:
+        APP_ENV: production
+    env_file:
+      - .env.production
+    environment:
+      APP_ENV: production
+      # Los secretos reales se inyectan desde el gestor de secretos del
+      # entorno de despliegue; nunca se commitean en .env.production. El
+      # certificado .p12 se monta como volumen (./certs), nunca se incluye
+      # en la imagen.
+    ports:
+      - "8000:8000"
+    deploy:
+      restart_policy:
+        condition: on-failure
+        max_attempts: 5
