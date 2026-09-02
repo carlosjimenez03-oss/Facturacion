@@ -48,3 +48,8 @@ services:
   consulta-timbre:
     <<: *prod-comun
     ports: ["8010:8000"]
+  facturas-api:
+    <<: *prod-comun
+    ports: ["8011:8000"]
+  frontend:
+    ports: ["5173:80"]

@@ -1,0 +1,233 @@
+:root {
+  color-scheme: light;
+  --azul: #1d4ed8;
+  --azul-suave: #eef2ff;
+  --gris: #6b7280;
+  --borde: #d1d5db;
+  --rojo: #b91c1c;
+  --verde: #15803d;
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #f9fafb;
+  color: #111827;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  background: white;
+  border-bottom: 1px solid var(--borde);
+}
+
+.app-title {
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--azul);
+  text-decoration: none;
+}
+
+.app-header nav a {
+  margin-left: 1.25rem;
+  color: #374151;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.app-header nav a:hover {
+  color: var(--azul);
+}
+
+main {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.factura-form section {
+  background: white;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  padding: 1.25rem;
+  margin-bottom: 1.25rem;
+}
+
+.factura-form h2 {
+  margin-top: 0;
+  font-size: 1rem;
+  color: var(--gris);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.factura-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.9rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.factura-form input,
+.factura-form select {
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--borde);
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+
+.btn-primario,
+.btn-secundario {
+  border: none;
+  border-radius: 6px;
+  padding: 0.6rem 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+
+.btn-primario {
+  background: var(--azul);
+  color: white;
+}
+
+.btn-primario:disabled,
+.btn-secundario:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-secundario {
+  background: var(--azul-suave);
+  color: var(--azul);
+  margin-right: 0.5rem;
+}
+
+.btn-icono {
+  border: none;
+  background: transparent;
+  color: var(--rojo);
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.items-editor table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.items-editor th,
+.items-editor td {
+  padding: 0.4rem;
+  border-bottom: 1px solid var(--borde);
+  text-align: left;
+}
+
+.items-editor input,
+.items-editor select {
+  width: 100%;
+  padding: 0.3rem;
+  border: 1px solid var(--borde);
+  border-radius: 4px;
+}
+
+.monto-item {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.totales-preview dl {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.35rem 1rem;
+  margin: 0;
+}
+
+.totales-preview dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.error {
+  color: var(--rojo);
+  font-weight: 600;
+}
+
+.mensaje {
+  color: var(--verde);
+  font-weight: 600;
+}
+
+.errores-validacion {
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  color: var(--rojo);
+}
+
+.lista-facturas {
+  width: 100%;
+  border-collapse: collapse;
+  background: white;
+  border: 1px solid var(--borde);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.lista-facturas th,
+.lista-facturas td {
+  padding: 0.6rem 0.8rem;
+  border-bottom: 1px solid var(--borde);
+  text-align: left;
+}
+
+.estado {
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: #e5e7eb;
+}
+
+.estado-enviado,
+.estado-aceptado {
+  background: #dcfce7;
+  color: var(--verde);
+}
+
+.estado-rechazado,
+.estado-error {
+  background: #fee2e2;
+  color: var(--rojo);
+}
+
+.factura-detalle pre {
+  background: #111827;
+  color: #f3f4f6;
+  padding: 1rem;
+  border-radius: 8px;
+  overflow-x: auto;
+  font-size: 0.8rem;
+}
+
+.factura-detalle .acciones {
+  margin: 1rem 0;
+}
+
+.lista-vacia {
+  text-align: center;
+  padding: 3rem 1rem;
+}

@@ -36,10 +36,12 @@ services/
   anulacion_encf/                # Anulación de e-NCF
   consulta_directorio/            # Consulta Directorio de Servicios
   consulta_timbre/                 # Consulta timbre (QR) e-CF y FC
+  facturas_api/                     # Generación/gestión de e-CF (backend del frontend React)
 ```
 
-Los 11 módulos están implementados. Ver el detalle de cada uno (y el
-endpoint propio que expone) en la tabla de [`README.md`](../README.md).
+Los 11 módulos del catálogo DGII más `facturas_api` están implementados. Ver
+el detalle de cada uno (y el endpoint propio que expone) en la tabla de
+[`README.md`](../README.md).
 
 Cada módulo tiene su propio `app/`, `tests/` y `Dockerfile` (con build
 context en la raíz del repo, para poder copiar `libs/`).
@@ -74,7 +76,14 @@ Cada módulo queda expuesto en un puerto distinto (ver `docker-compose.test.yml`
 `autenticacion`=8000, `recepcion`=8001, `recepcion-rfce`=8002,
 `consulta-rfce`=8003, `consulta-resultado`=8004, `consulta-estado`=8005,
 `consulta-trackids`=8006, `aprobacion-comercial`=8007, `anulacion-encf`=8008,
-`consulta-directorio`=8009, `consulta-timbre`=8010.
+`consulta-directorio`=8009, `consulta-timbre`=8010, `facturas-api`=8011.
+
+`facturas-api` además requiere Postgres (`DATABASE_URL`) para funcionar —
+a diferencia de los demás módulos, donde la base de datos es solo para
+auditoría opcional, aquí es donde viven las facturas. Para levantarlo
+localmente hace falta un Postgres accesible (ver
+[`docker-compose.dokploy.yml`](../docker-compose.dokploy.yml), que sí incluye
+uno, o correr uno propio y setear `DATABASE_URL` en `.env.test`).
 
 Verificar que el ambiente activo es el esperado:
 
@@ -92,9 +101,9 @@ curl http://localhost:8000/health
 | `.github/workflows/deploy-qa.yml`      | Push a `qa`               | `qa`             | Build, push de imagen y deploy a QA (matriz por módulo) |
 | `.github/workflows/deploy-prod.yml`    | Push a `main`             | `production`     | Build, push de imagen y deploy a Producción (requiere aprobación manual) |
 
-Los workflows usan una matriz (`matrix.modulo`) con los 11 módulos actuales;
-al agregar un módulo nuevo basta con sumarlo a esa lista en los 4 workflows
-y en `docker-compose*.yml`.
+Los workflows usan una matriz (`matrix.modulo`) con los 12 módulos actuales
+(los 11 del catálogo DGII + `facturas_api`); al agregar un módulo nuevo
+basta con sumarlo a esa lista en los 4 workflows y en `docker-compose*.yml`.
 
 ### Configuración pendiente en GitHub (Settings → Environments)
 

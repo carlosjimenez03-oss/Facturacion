@@ -167,6 +167,30 @@ services:
       args: {APP_ENV: "${APP_ENV:-production}"}
     ports: ["8010:8000"]
 
+  facturas-api:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/facturas_api/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8011:8000"]
+
+  # --- Frontend (React) ---
+
+  frontend:
+    restart: unless-stopped
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      # VITE_API_URL se hornea en el bundle en build time -- debe ser la URL
+      # PÚBLICA (alcanzable desde el navegador del usuario) de facturas-api,
+      # p. ej. http://<ip-o-dominio-del-servidor>:8011. No usar el nombre
+      # interno del servicio Docker (http://facturas-api:8000) aquí, ese
+      # solo es resoluble dentro de la red `facturacion`.
+      args: {VITE_API_URL: "${VITE_API_URL:?VITE_API_URL es requerido (URL publica de facturas-api)}"}
+    ports: ["8012:80"]
+    networks: [facturacion]
+
 volumes:
   postgres_data:
   pgadmin_data:

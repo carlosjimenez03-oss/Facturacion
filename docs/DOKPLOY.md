@@ -3,7 +3,8 @@
 Este proyecto se despliega en [Dokploy](https://dokploy.com) como un único
 recurso tipo **Compose**, definido en
 [`docker-compose.dokploy.yml`](../docker-compose.dokploy.yml): los 11 módulos
-de facturación electrónica + Postgres + PostgREST + pgAdmin.
+del catálogo DGII + `facturas-api` + el `frontend` (React) + Postgres +
+PostgREST + pgAdmin.
 
 > Este archivo es distinto de `docker-compose.yml` (+ overrides
 > `docker-compose.{test,qa,prod}.yml`), que son para **desarrollo local**
@@ -27,6 +28,7 @@ de facturación electrónica + Postgres + PostgREST + pgAdmin.
 | `POSTGRES_PASSWORD` | Contraseña del usuario de Postgres |
 | `PGADMIN_DEFAULT_EMAIL` | Email de acceso a pgAdmin |
 | `PGADMIN_DEFAULT_PASSWORD` | Contraseña de acceso a pgAdmin |
+| `VITE_API_URL` | URL **pública** (alcanzable desde el navegador del usuario) de `facturas-api`, p. ej. `http://<ip-o-dominio-del-servidor>:8011`. Se hornea en el bundle del frontend en build time — cambiarla exige reconstruir la imagen del `frontend` (redeploy), no basta con reiniciar el contenedor |
 
 Opcionales (con default razonable si se omiten):
 
@@ -70,6 +72,11 @@ a donde Dokploy clona el repo en el servidor). Pasos:
   `anulacion_encf` registran ahí, de forma best-effort (nunca bloquean la
   respuesta si falla), cada envío a la DGII: módulo, RNC emisor, e-NCF,
   trackId, estado/código y la respuesta completa de la DGII.
+- `facturas-api` (backend del frontend) usa la misma base de datos, pero de
+  forma **obligatoria** (no best-effort): las facturas que crea el usuario
+  desde el frontend viven únicamente en la tabla `facturacion.facturas`
+  ([`db/init/002_facturas.sql`](../db/init/002_facturas.sql)) — si
+  `DATABASE_URL` no está disponible, `facturas-api` no arranca.
 - **PostgREST** expone ese esquema como API REST de **solo lectura** (rol
   `web_anon`) en el puerto interno `3000`. No requiere autenticación por
   defecto — ver la nota de seguridad abajo.
@@ -123,6 +130,8 @@ para poder asignarle un dominio en Dokploy:
 | anulacion-encf | 8008 |
 | consulta-directorio | 8009 |
 | consulta-timbre | 8010 |
+| facturas-api | 8011 |
+| frontend | 8012 (nginx sirve en el 80 del contenedor) |
 
 ## 6. Verificar el despliegue
 
@@ -136,3 +145,10 @@ curl https://<dominio-o-ip>:8000/health
 Y que la auditoría funciona: enviar un e-CF de prueba por `recepcion` y
 verificar la fila en Postgres (vía pgAdmin, o `SELECT * FROM
 facturacion.envios_dgii ORDER BY creado_en DESC LIMIT 5;`).
+
+Para el frontend: abrir `http://<dominio-o-ip>:8012`, crear una factura de
+prueba y confirmar que "Generar XML" no reporta errores de validación contra
+el XSD. Si `VITE_API_URL` quedó mal configurado, el formulario cargará pero
+las llamadas a `facturas-api` fallarán en la consola del navegador (CORS o
+conexión rechazada) — corregirlo exige reconstruir la imagen `frontend`
+(ver la nota en la tabla de variables de la sección 2), no solo reiniciarla.

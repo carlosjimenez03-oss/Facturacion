@@ -45,3 +45,8 @@ services:
   consulta-timbre:
     <<: *qa-comun
     ports: ["8010:8000"]
+  facturas-api:
+    <<: *qa-comun
+    ports: ["8011:8000"]
+  frontend:
+    ports: ["5173:80"]
