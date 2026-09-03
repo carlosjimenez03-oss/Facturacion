@@ -9,6 +9,7 @@ enorme y quedaría desincronizado de la fuente de verdad (el propio XSD).
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -39,8 +40,8 @@ class FacturaResumen(BaseModel):
     dgii_estado: str | None = None
     dgii_codigo: str | None = None
     error: str | None = None
-    creado_en: str
-    actualizado_en: str
+    creado_en: datetime
+    actualizado_en: datetime
 
 
 class FacturaDetalle(FacturaResumen):
