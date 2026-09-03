@@ -599,13 +599,24 @@ button.btn-secundario:disabled {
   font-family: "IBM Plex Mono", ui-monospace, monospace;
 }
 
-.factura-detalle > .acciones {
+.factura-detalle > .acciones,
+.acciones-secundarias {
   position: static;
   box-shadow: none;
   background: transparent;
   border: none;
   padding: 0;
   margin: 1rem 0;
+}
+
+.factura-acciones-panel {
+  margin-top: 1.1rem;
+}
+
+.nota-acciones {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+  margin: 0 0 0.8rem;
 }
 
 .factura-detalle details {
