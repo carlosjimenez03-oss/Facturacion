@@ -31,6 +31,7 @@ from contextlib import asynccontextmanager
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.db import cerrar_pool, crear_pool
@@ -39,6 +40,7 @@ from libs.ecf_common.xml_tools import nombre_archivo_ecf
 from . import repository
 from .config import FacturasApiSettings, get_settings
 from .repository import FacturaNoEncontradaError
+from .representacion_impresa import RepresentacionImpresaError, generar_pdf
 from .schemas import (
     EnviarResponse,
     FacturaActualizar,
@@ -222,6 +224,27 @@ async def firmar_factura(factura_id: str, settings: FacturasApiSettings = Depend
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     return await repository.guardar_xml_firmado(_pool(), fid, xml_firmado.decode("utf-8"))
+
+
+@app.get("/facturas/{factura_id}/representacion-impresa")
+async def obtener_representacion_impresa(
+    factura_id: str, settings: FacturasApiSettings = Depends(get_settings)
+):
+    """PDF de la Representación Impresa (RI) del e-CF, a partir de la vista
+    previa firmada (POST /facturas/{id}/firmar)."""
+    fid = _parse_id(factura_id)
+    factura = await _obtener_o_404(fid)
+    try:
+        pdf_bytes = generar_pdf(factura, settings.dgii_environment)
+    except RepresentacionImpresaError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    nombre_archivo = f"RI-{factura['encf'] or factura['id']}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{nombre_archivo}"'},
+    )
 
 
 @app.post("/facturas/{factura_id}/enviar", response_model=EnviarResponse)

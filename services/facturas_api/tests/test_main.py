@@ -226,6 +226,38 @@ def test_firmar_factura_ok(client, monkeypatch, credencial_prueba):
     assert response.json()["xml_firmado"] == "<ECF>firmado</ECF>"
 
 
+def test_representacion_impresa_sin_firmar(client, monkeypatch):
+    factura = _factura(xml_firmado=None)
+
+    async def fake_obtener(pool, fid):
+        return factura
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+
+    response = client.get(f"/facturas/{factura['id']}/representacion-impresa")
+    assert response.status_code == 409
+
+
+def test_representacion_impresa_ok(client, monkeypatch, credencial_prueba):
+    from libs.ecf_common.auth.signing import firmar_xml
+    from services.facturas_api.app.xml_builder import construir_xml_ecf
+
+    factura = _factura(estado="firmado", xml_generado="<ECF><Encabezado/></ECF>")
+    xml_sin_firmar = construir_xml_ecf(factura["tipo_ecf"], factura["datos"])
+    factura["xml_firmado"] = firmar_xml(xml_sin_firmar, credencial_prueba).decode("utf-8")
+
+    async def fake_obtener(pool, fid):
+        return factura
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+
+    response = client.get(f"/facturas/{factura['id']}/representacion-impresa")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content.startswith(b"%PDF")
+
+
 def test_enviar_factura_sin_encf(client, monkeypatch):
     factura = _factura(xml_generado="<ECF/>", encf=None)
 

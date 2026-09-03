@@ -410,7 +410,8 @@ button:focus-visible {
 
 button.btn-primario,
 a.btn-primario,
-button.btn-secundario {
+button.btn-secundario,
+a.btn-secundario {
   font: inherit;
   font-size: 0.85rem;
   font-weight: 600;
@@ -434,13 +435,15 @@ a.btn-primario:hover {
   filter: brightness(1.08);
 }
 
-button.btn-secundario {
+button.btn-secundario,
+a.btn-secundario {
   background: var(--accent-soft);
   color: var(--accent-ink);
   border-color: var(--accent-soft-border);
 }
 
-button.btn-secundario:hover {
+button.btn-secundario:hover,
+a.btn-secundario:hover {
   filter: brightness(0.98);
   background: var(--accent-soft-border);
 }
