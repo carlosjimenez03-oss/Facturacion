@@ -45,16 +45,18 @@ export function FacturaForm() {
     <form className="factura-form" onSubmit={guardar}>
       <section>
         <h2>Tipo de comprobante</h2>
-        <label>
-          Tipo de e-CF
-          <select value={tipoEcf} onChange={(e) => cambiarTipo(e.target.value)}>
-            {TIPOS_ECF.map((t) => (
-              <option key={t.value} value={t.value}>
-                {t.label}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="tipo-picker">
+          {TIPOS_ECF.map((t) => (
+            <button
+              key={t.value}
+              type="button"
+              className={`tipo-pill${t.value === tipoEcf ? " active" : ""}`}
+              onClick={() => cambiarTipo(t.value)}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
         <label>
           e-NCF
           <input
