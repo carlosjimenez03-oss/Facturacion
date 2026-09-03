@@ -5,6 +5,8 @@ import { CODIGOS_MODIFICACION, TIPOS_ECF, TIPOS_INGRESOS, TIPOS_PAGO } from "../
 import { calcularTotales, decimal2 } from "../lib/format";
 import { configParaTipo } from "../lib/tipoConfig";
 import { construirDatos, datosAFormState, estadoInicial } from "../lib/buildDatos";
+import type { FacturaDetalle } from "../lib/types";
+import { FacturaAcciones } from "./FacturaAcciones";
 import { ItemsEditor } from "./ItemsEditor";
 
 export function FacturaForm() {
@@ -14,9 +16,15 @@ export function FacturaForm() {
 
   const [tipoEcf, setTipoEcf] = useState("31");
   const [form, setForm] = useState(estadoInicial("31"));
+  const [facturaCompleta, setFacturaCompleta] = useState<FacturaDetalle | null>(null);
   const [cargando, setCargando] = useState(editando);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  function cargarFacturaCompleta() {
+    if (!id) return;
+    api.obtener(id).then(setFacturaCompleta).catch(() => {});
+  }
 
   useEffect(() => {
     if (!id) return;
@@ -25,6 +33,7 @@ export function FacturaForm() {
     api
       .obtener(id)
       .then((factura) => {
+        setFacturaCompleta(factura);
         if (factura.estado !== "borrador") {
           setError(
             `Solo se pueden editar facturas en estado "borrador" (esta está en "${factura.estado}").`,
@@ -304,6 +313,10 @@ export function FacturaForm() {
           {guardando ? "Guardando…" : editando ? "Guardar cambios" : "Guardar borrador"}
         </button>
       </div>
+
+      {editando && facturaCompleta && (
+        <FacturaAcciones factura={facturaCompleta} onRecargar={cargarFacturaCompleta} />
+      )}
     </form>
   );
 }
