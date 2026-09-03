@@ -16,8 +16,8 @@ export default function App() {
             </span>
           </Link>
           <nav className="tabs">
-            <Link to="/">Facturas</Link>
             <Link to="/facturas/nueva">Nueva factura</Link>
+            <Link to="/">Historial</Link>
           </nav>
         </div>
       </header>
