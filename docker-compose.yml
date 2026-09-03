@@ -111,3 +111,21 @@ services:
       args:
         APP_ENV: ${APP_ENV:-test}
     image: facturacion-electronica/consulta-timbre:${APP_ENV:-test}
+
+  facturas-api:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/facturas_api/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/facturas-api:${APP_ENV:-test}
+
+  frontend:
+    restart: unless-stopped
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8011}
+    image: facturacion-electronica/frontend:${APP_ENV:-test}

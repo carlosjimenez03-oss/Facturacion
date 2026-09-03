@@ -106,3 +106,17 @@ services:
       - ./certs:/app/certs:ro
     ports:
       - "8010:8000"
+
+  facturas-api:
+    <<: *test-comun
+    volumes:
+      - ./services/facturas_api/app:/app/app:ro
+      - ./services/facturas_api/xsd:/app/xsd:ro
+      - ./libs:/app/libs:ro
+      - ./certs:/app/certs:ro
+    ports:
+      - "8011:8000"
+
+  frontend:
+    ports:
+      - "5173:80"

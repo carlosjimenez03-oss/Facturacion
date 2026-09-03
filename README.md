@@ -26,6 +26,9 @@ del catálogo están implementados:
 | `services/consulta_directorio` | Consulta Directorio de Servicios | `GET /directorio`, `GET /directorio/{rnc}` |
 | `services/consulta_timbre` | Consulta timbre (QR) e-CF y FC | `GET /timbre/*`, `GET /timbre-fc/*` |
 
+Además, `services/facturas_api` genera, valida, firma (vista previa) y envía
+e-CF construidos desde el `frontend/` — ver [Facturación (frontend + API)](#facturación-frontend--api).
+
 Nota: el servicio "Comunicación Emisor-Receptor" (simulación de contraparte
 en TesteCF) está documentado parcialmente en el PDF oficial recibido — su
 especificación completa vive en un documento separado
@@ -94,6 +97,34 @@ pytest --cov=libs --cov=services
 ## Docker
 
 ```bash
-# Levanta los 11 módulos a la vez (puertos 8000-8010, ver docker-compose.test.yml)
+# Levanta los 12 módulos backend a la vez (puertos 8000-8011, ver docker-compose.test.yml)
 docker compose -f docker-compose.yml -f docker-compose.test.yml up --build
 ```
+
+`facturas-api` (puerto 8011) además requiere Postgres (`DATABASE_URL`) para
+funcionar — ver la nota en [`docs/AMBIENTES.md`](docs/AMBIENTES.md).
+
+## Facturación (frontend + API)
+
+`frontend/` es una app React (Vite + TypeScript) que permite crear e-CF de
+cualquiera de los 10 tipos del catálogo (31, 32, 33, 34, 41, 43, 44, 45, 46,
+47) desde un formulario, validando la estructura contra los XSD oficiales de
+la DGII antes de firmar y enviar.
+
+```bash
+cd frontend
+npm install
+npm run dev       # http://localhost:5173, apunta a VITE_API_URL (default http://localhost:8011)
+```
+
+Flujo de una factura: **borrador** (se guarda en Postgres) → **Generar XML**
+(se arma y valida contra el XSD del tipo, `services/facturas_api/app/xml_builder.py`)
+→ **Vista previa firmada** (opcional, firma local para revisión) →
+**Enviar a la DGII** (el backend `facturas_api` delega la firma real y el
+envío al módulo `recepcion`, que ya implementa ese flujo). El resultado
+(`trackId`, estado, XML) queda guardado en `facturacion.facturas`.
+
+Ver [`services/facturas_api/`](services/facturas_api) para el backend y
+[`services/facturas_api/xsd/`](services/facturas_api/xsd) para los XSD
+oficiales bundleados (uno de ellos, `eCF_31.xsd`, corrige un typo del
+documento original de la DGII — ver el comentario en ese archivo).

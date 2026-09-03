@@ -32,8 +32,17 @@ jobs:
           - anulacion_encf
           - consulta_directorio
           - consulta_timbre
+          - facturas_api
     steps:
       - uses: actions/checkout@v4
+
+      # Los nombres de repositorio en un registro OCI/Docker deben ser en
+      # minusculas; github.repository conserva las mayusculas del nombre
+      # real del repo (Facturacion-electronica), por lo que hay que
+      # normalizarlo antes de usarlo en un tag de imagen.
+      - name: Normalizar nombre de imagen a minusculas
+        id: repo
+        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
 
       - name: Login a GHCR
         uses: docker/login-action@v3
@@ -51,8 +60,8 @@ jobs:
           build-args: |
             APP_ENV=production
           tags: |
-            ghcr.io/${{ github.repository }}/${{ matrix.modulo }}:prod-${{ github.sha }}
-            ghcr.io/${{ github.repository }}/${{ matrix.modulo }}:prod-latest
+            ghcr.io/${{ steps.repo.outputs.name }}/${{ matrix.modulo }}:prod-${{ github.sha }}
+            ghcr.io/${{ steps.repo.outputs.name }}/${{ matrix.modulo }}:prod-latest
 
       # Paso de despliegue especifico de infraestructura (SSH, Kubernetes,
       # Cloud Run, etc.). Placeholder hasta definir el destino de produccion;
@@ -61,3 +70,42 @@ jobs:
       - name: Deploy al servidor de produccion - ${{ matrix.modulo }}
         run: |
           echo "TODO: definir pasos de despliegue del ambiente de produccion para ${{ matrix.modulo }}"
+
+  frontend-build-and-push:
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Normalizar nombre de imagen a minusculas
+        id: repo
+        run: echo "name=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Login a GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # VITE_API_URL debe ser la URL PUBLICA de facturas-api en produccion
+      # (se hornea en el bundle en build time). Configurar como variable del
+      # environment "production" en Settings > Environments > production > Variables.
+      - name: Build y push de imagen (ambiente produccion) - frontend
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: frontend/Dockerfile
+          push: true
+          build-args: |
+            VITE_API_URL=${{ vars.VITE_API_URL }}
+          tags: |
+            ghcr.io/${{ steps.repo.outputs.name }}/frontend:prod-${{ github.sha }}
+            ghcr.io/${{ steps.repo.outputs.name }}/frontend:prod-latest
+
+      - name: Deploy al servidor de produccion - frontend
+        run: |
+          echo "TODO: definir pasos de despliegue del ambiente de produccion para frontend"
