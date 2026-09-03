@@ -28,7 +28,7 @@ PostgREST + pgAdmin.
 | `POSTGRES_PASSWORD` | Contraseña del usuario de Postgres |
 | `PGADMIN_DEFAULT_EMAIL` | Email de acceso a pgAdmin |
 | `PGADMIN_DEFAULT_PASSWORD` | Contraseña de acceso a pgAdmin |
-| `VITE_API_URL` | URL **pública** (alcanzable desde el navegador del usuario) de `facturas-api`, p. ej. `http://<ip-o-dominio-del-servidor>:8011`. Se hornea en el bundle del frontend en build time — cambiarla exige reconstruir la imagen del `frontend` (redeploy), no basta con reiniciar el contenedor |
+| `VITE_API_URL` | URL **pública** (alcanzable desde el navegador del usuario) de `facturas-api`, p. ej. `http://<ip-o-dominio-del-servidor>:8012`. Se hornea en el bundle del frontend en build time — cambiarla exige reconstruir la imagen del `frontend` (redeploy), no basta con reiniciar el contenedor |
 
 Opcionales (con default razonable si se omiten):
 
@@ -115,30 +115,33 @@ exponerlo.
 ## 5. Puertos de los módulos
 
 Cada módulo publica su puerto interno `8000` en un puerto de host distinto
-para poder asignarle un dominio en Dokploy:
+para poder asignarle un dominio en Dokploy. El rango arranca en **8001**, no
+8000, porque en un servidor Dokploy real es común que el puerto 8000 ya esté
+tomado por otro servicio del host (si tu servidor no tiene ese conflicto,
+puedes correr el rango de vuelta a 8000 editando `docker-compose.dokploy.yml`):
 
 | Módulo | Puerto |
 |---|---|
-| autenticacion | 8000 |
-| recepcion | 8001 |
-| recepcion-rfce | 8002 |
-| consulta-rfce | 8003 |
-| consulta-resultado | 8004 |
-| consulta-estado | 8005 |
-| consulta-trackids | 8006 |
-| aprobacion-comercial | 8007 |
-| anulacion-encf | 8008 |
-| consulta-directorio | 8009 |
-| consulta-timbre | 8010 |
-| facturas-api | 8011 |
-| frontend | 8012 (nginx sirve en el 80 del contenedor) |
+| autenticacion | 8001 |
+| recepcion | 8002 |
+| recepcion-rfce | 8003 |
+| consulta-rfce | 8004 |
+| consulta-resultado | 8005 |
+| consulta-estado | 8006 |
+| consulta-trackids | 8007 |
+| aprobacion-comercial | 8008 |
+| anulacion-encf | 8009 |
+| consulta-directorio | 8010 |
+| consulta-timbre | 8011 |
+| facturas-api | 8012 |
+| frontend | 8013 (nginx sirve en el 80 del contenedor) |
 
 ## 6. Verificar el despliegue
 
 Tras el primer deploy, confirmar que cada módulo responde:
 
 ```bash
-curl https://<dominio-o-ip>:8000/health
+curl https://<dominio-o-ip>:8001/health
 # {"status":"ok","app_env":"production","dgii_environment":"ecf"}
 ```
 
@@ -146,7 +149,7 @@ Y que la auditoría funciona: enviar un e-CF de prueba por `recepcion` y
 verificar la fila en Postgres (vía pgAdmin, o `SELECT * FROM
 facturacion.envios_dgii ORDER BY creado_en DESC LIMIT 5;`).
 
-Para el frontend: abrir `http://<dominio-o-ip>:8012`, crear una factura de
+Para el frontend: abrir `http://<dominio-o-ip>:8013`, crear una factura de
 prueba y confirmar que "Generar XML" no reporta errores de validación contra
 el XSD. Si `VITE_API_URL` quedó mal configurado, el formulario cargará pero
 las llamadas a `facturas-api` fallarán en la consola del navegador (CORS o
