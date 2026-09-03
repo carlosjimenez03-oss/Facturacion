@@ -25,6 +25,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<FacturaList />} />
           <Route path="/facturas/nueva" element={<FacturaForm />} />
+          <Route path="/facturas/:id/editar" element={<FacturaForm />} />
           <Route path="/facturas/:id" element={<FacturaDetailPage />} />
         </Routes>
       </main>
