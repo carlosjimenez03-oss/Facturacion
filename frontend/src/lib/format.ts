@@ -7,6 +7,12 @@ export function fechaADgii(fechaIso: string): string {
   return `${dia}-${mes}-${anio}`;
 }
 
+/** Inverso de fechaADgii: DD-MM-YYYY -> YYYY-MM-DD (para precargar <input type="date">). */
+export function fechaDeDgii(fechaDgii: string): string {
+  const [dia, mes, anio] = fechaDgii.split("-");
+  return `${anio}-${mes}-${dia}`;
+}
+
 export function decimal2(valor: number): string {
   return valor.toFixed(2);
 }

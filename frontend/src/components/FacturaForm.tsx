@@ -1,23 +1,49 @@
-import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { CODIGOS_MODIFICACION, TIPOS_ECF, TIPOS_INGRESOS, TIPOS_PAGO } from "../lib/catalogos";
 import { calcularTotales, decimal2 } from "../lib/format";
 import { configParaTipo } from "../lib/tipoConfig";
-import { construirDatos, estadoInicial } from "../lib/buildDatos";
+import { construirDatos, datosAFormState, estadoInicial } from "../lib/buildDatos";
 import { ItemsEditor } from "./ItemsEditor";
 
 export function FacturaForm() {
   const navigate = useNavigate();
+  const { id } = useParams<{ id: string }>();
+  const editando = Boolean(id);
+
   const [tipoEcf, setTipoEcf] = useState("31");
   const [form, setForm] = useState(estadoInicial("31"));
+  const [cargando, setCargando] = useState(editando);
   const [guardando, setGuardando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!id) return;
+    setCargando(true);
+    setError(null);
+    api
+      .obtener(id)
+      .then((factura) => {
+        if (factura.estado !== "borrador") {
+          setError(
+            `Solo se pueden editar facturas en estado "borrador" (esta está en "${factura.estado}").`,
+          );
+          return;
+        }
+        const tipo = String(factura.tipo_ecf);
+        setTipoEcf(tipo);
+        setForm(datosAFormState(tipo, factura.encf ?? "", factura.datos));
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : String(err)))
+      .finally(() => setCargando(false));
+  }, [id]);
 
   const config = useMemo(() => configParaTipo(tipoEcf), [tipoEcf]);
   const totales = useMemo(() => calcularTotales(form.items), [form.items]);
 
   function cambiarTipo(nuevoTipo: string) {
+    if (editando) return; // el tipo no se puede cambiar después de creada
     setTipoEcf(nuevoTipo);
     setForm((prev) => ({ ...prev, tipoEcf: nuevoTipo }));
   }
@@ -32,14 +58,21 @@ export function FacturaForm() {
     setGuardando(true);
     try {
       const datos = construirDatos(form, config);
-      const creada = await api.crear({ tipo_ecf: Number(tipoEcf), encf: form.encf || null, datos });
-      navigate(`/facturas/${creada.id}`);
+      if (editando && id) {
+        await api.actualizar(id, { encf: form.encf || null, datos });
+        navigate(`/facturas/${id}`);
+      } else {
+        const creada = await api.crear({ tipo_ecf: Number(tipoEcf), encf: form.encf || null, datos });
+        navigate(`/facturas/${creada.id}`);
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
       setGuardando(false);
     }
   }
+
+  if (cargando) return <p>Cargando…</p>;
 
   return (
     <form className="factura-form" onSubmit={guardar}>
@@ -52,6 +85,8 @@ export function FacturaForm() {
               type="button"
               className={`tipo-pill${t.value === tipoEcf ? " active" : ""}`}
               onClick={() => cambiarTipo(t.value)}
+              disabled={editando}
+              title={editando ? "El tipo no se puede cambiar después de creada la factura" : undefined}
             >
               {t.label}
             </button>
@@ -266,7 +301,7 @@ export function FacturaForm() {
 
       <div className="acciones">
         <button type="submit" className="btn-primario" disabled={guardando}>
-          {guardando ? "Guardando…" : "Guardar borrador"}
+          {guardando ? "Guardando…" : editando ? "Guardar cambios" : "Guardar borrador"}
         </button>
       </div>
     </form>

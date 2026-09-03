@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import type { FacturaDetalle } from "../lib/types";
 
@@ -105,6 +105,11 @@ export function FacturaDetailPage() {
       {mensaje && <p className="mensaje">{mensaje}</p>}
 
       <div className="acciones">
+        {factura.estado === "borrador" && (
+          <Link to={`/facturas/${factura.id}/editar`} className="btn-secundario">
+            Editar borrador
+          </Link>
+        )}
         <button type="button" className="btn-secundario" onClick={generarXml} disabled={procesando}>
           Generar XML
         </button>

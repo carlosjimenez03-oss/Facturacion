@@ -1,4 +1,4 @@
-import { calcularMontoItem, calcularTotales, decimal2, fechaADgii } from "./format";
+import { calcularMontoItem, calcularTotales, decimal2, fechaADgii, fechaDeDgii } from "./format";
 import type { FacturaDatos, FormaPago, ItemFactura } from "./types";
 import type { TipoEcfConfig } from "./tipoConfig";
 
@@ -161,4 +161,42 @@ export function construirDatos(form: FormState, config: TipoEcfConfig): FacturaD
   }
 
   return datos;
+}
+
+/** Inverso de construirDatos: reconstruye el FormState a partir de una
+ * factura ya guardada, para poder recuperar/editar un borrador. */
+export function datosAFormState(tipoEcf: string, encf: string, datos: FacturaDatos): FormState {
+  const idDoc = (datos.Encabezado.IdDoc ?? {}) as Record<string, unknown>;
+  const emisor = (datos.Encabezado.Emisor ?? {}) as Record<string, unknown>;
+  const comprador = (datos.Encabezado.Comprador ?? {}) as Record<string, unknown>;
+  const referencia = (datos.InformacionReferencia ?? {}) as Record<string, unknown>;
+  const tablaFormasPago = idDoc.TablaFormasPago as { FormaDePago?: FormaPago[] } | undefined;
+
+  return {
+    tipoEcf,
+    encf,
+    fechaVencimientoSecuencia: idDoc.FechaVencimientoSecuencia
+      ? fechaDeDgii(String(idDoc.FechaVencimientoSecuencia))
+      : "",
+    tipoIngresos: (idDoc.TipoIngresos as string) ?? "01",
+    tipoPago: (idDoc.TipoPago as string) ?? "1",
+    formasPago: tablaFormasPago?.FormaDePago ?? [],
+    rncEmisor: (emisor.RNCEmisor as string) ?? "",
+    razonSocialEmisor: (emisor.RazonSocialEmisor as string) ?? "",
+    direccionEmisor: (emisor.DireccionEmisor as string) ?? "",
+    fechaEmision: emisor.FechaEmision
+      ? fechaDeDgii(String(emisor.FechaEmision))
+      : new Date().toISOString().slice(0, 10),
+    correoEmisor: (emisor.CorreoEmisor as string) ?? "",
+    compradorRnc: (comprador.RNCComprador as string) ?? "",
+    compradorIdentificadorExtranjero: (comprador.IdentificadorExtranjero as string) ?? "",
+    razonSocialComprador: (comprador.RazonSocialComprador as string) ?? "",
+    correoComprador: (comprador.CorreoComprador as string) ?? "",
+    direccionComprador: (comprador.DireccionComprador as string) ?? "",
+    items: datos.DetallesItems.Item.length > 0 ? datos.DetallesItems.Item : [nuevoItem(1)],
+    ncfModificado: (referencia.NCFModificado as string) ?? "",
+    fechaNcfModificado: referencia.FechaNCFModificado ? fechaDeDgii(String(referencia.FechaNCFModificado)) : "",
+    codigoModificacion: (referencia.CodigoModificacion as string) ?? "1",
+    indicadorNotaCredito: (idDoc.IndicadorNotaCredito as string) ?? "0",
+  };
 }
