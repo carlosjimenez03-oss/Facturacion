@@ -7,13 +7,19 @@ export default function App() {
   return (
     <div className="app">
       <header className="app-header">
-        <Link to="/" className="app-title">
-          Facturación Electrónica RD
-        </Link>
-        <nav>
-          <Link to="/">Facturas</Link>
-          <Link to="/facturas/nueva">Nueva factura</Link>
-        </nav>
+        <div className="app-bar">
+          <Link to="/" className="brand">
+            <span className="brand-mark">e·CF</span>
+            <span className="brand-text">
+              <b className="app-title">Facturación Electrónica RD</b>
+              <span>Emisor electrónico certificado · DGII</span>
+            </span>
+          </Link>
+          <nav className="tabs">
+            <Link to="/">Facturas</Link>
+            <Link to="/facturas/nueva">Nueva factura</Link>
+          </nav>
+        </div>
       </header>
       <main>
         <Routes>
