@@ -9,6 +9,10 @@ from services.facturas_api.app import main
 from services.facturas_api.app import repository
 
 
+async def _sin_espera(segundos):
+    return None
+
+
 @pytest.fixture
 def client(monkeypatch):
     async def fake_crear_pool(database_url):
@@ -278,3 +282,34 @@ def test_enviar_factura_error_dgii(client, monkeypatch):
     response = client.post(f"/facturas/{factura['id']}/enviar")
 
     assert response.status_code == 502
+
+
+def test_lifespan_reintenta_conexion_hasta_lograrla(monkeypatch):
+    intentos = []
+
+    async def fake_crear_pool(database_url):
+        intentos.append(database_url)
+        if len(intentos) < 3:
+            return None
+        return object()
+
+    monkeypatch.setattr(main, "crear_pool", fake_crear_pool)
+    monkeypatch.setattr(main, "cerrar_pool", lambda pool: _sin_espera(None))
+    monkeypatch.setattr(main.asyncio, "sleep", _sin_espera)
+
+    with TestClient(main.app):
+        pass
+
+    assert len(intentos) == 3
+
+
+def test_lifespan_falla_tras_agotar_reintentos(monkeypatch):
+    async def fake_crear_pool(database_url):
+        return None
+
+    monkeypatch.setattr(main, "crear_pool", fake_crear_pool)
+    monkeypatch.setattr(main.asyncio, "sleep", _sin_espera)
+
+    with pytest.raises(RuntimeError, match="requiere DATABASE_URL"):
+        with TestClient(main.app):
+            pass

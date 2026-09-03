@@ -23,6 +23,7 @@ completo. Este servicio siempre genera y envía el e-CF COMPLETO tipo 32 vía
 `recepcion` -- el flujo de RFCE es una funcionalidad aparte, ya existente,
 fuera del alcance de este módulo.
 """
+import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
@@ -53,9 +54,31 @@ logging.basicConfig(level=settings.log_level)
 logger = logging.getLogger(__name__)
 
 
+_POOL_REINTENTOS = 10
+_POOL_ESPERA_SEGUNDOS = 3
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    pool = await crear_pool(settings.database_url)
+    # Reintenta con espera: en Docker Compose, `depends_on: condition:
+    # service_healthy` solo se respeta en el `up` inicial -- si Postgres se
+    # reinicia luego (p. ej. presión de memoria en el host) y este contenedor
+    # se reinicia casi al mismo tiempo por su `restart: unless-stopped`, un
+    # solo intento puede perder la carrera contra Postgres todavía
+    # arrancando.
+    pool = None
+    for intento in range(1, _POOL_REINTENTOS + 1):
+        pool = await crear_pool(settings.database_url)
+        if pool is not None:
+            break
+        logger.warning(
+            "No se pudo conectar a la base de datos (intento %s/%s), "
+            "reintentando en %ss...",
+            intento,
+            _POOL_REINTENTOS,
+            _POOL_ESPERA_SEGUNDOS,
+        )
+        await asyncio.sleep(_POOL_ESPERA_SEGUNDOS)
     if pool is None:
         raise RuntimeError(
             "facturas_api requiere DATABASE_URL configurado y una base de datos "
