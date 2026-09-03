@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime, timezone
 
 import pytest
 import respx
@@ -282,6 +283,24 @@ def test_enviar_factura_error_dgii(client, monkeypatch):
     response = client.post(f"/facturas/{factura['id']}/enviar")
 
     assert response.status_code == 502
+
+
+def test_crear_factura_serializa_datetime_reales(client, monkeypatch):
+    """asyncpg devuelve datetime.datetime real (no str) para creado_en/actualizado_en."""
+    ahora = datetime.now(timezone.utc)
+    creada = _factura(creado_en=ahora, actualizado_en=ahora)
+
+    async def fake_crear(pool, **kwargs):
+        return creada
+
+    monkeypatch.setattr(repository, "crear_factura", fake_crear)
+
+    response = client.post(
+        "/facturas",
+        json={"tipo_ecf": 31, "encf": "E310000000001", "datos": creada["datos"]},
+    )
+
+    assert response.status_code == 201
 
 
 def test_lifespan_reintenta_conexion_hasta_lograrla(monkeypatch):
