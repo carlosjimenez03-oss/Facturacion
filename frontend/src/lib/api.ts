@@ -6,7 +6,7 @@ import type {
   GenerarXmlResponse,
 } from "./types";
 
-const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8011";
+export const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8011";
 
 class ApiError extends Error {
   constructor(
@@ -68,6 +68,8 @@ export const api = {
   firmar: (id: string) => request<FacturaDetalle>(`/facturas/${id}/firmar`, { method: "POST" }),
 
   enviar: (id: string) => request<EnviarResponse>(`/facturas/${id}/enviar`, { method: "POST" }),
+
+  representacionImpresaUrl: (id: string) => `${API_URL}/facturas/${id}/representacion-impresa`,
 };
 
 export { ApiError };

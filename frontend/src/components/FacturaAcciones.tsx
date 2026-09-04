@@ -113,6 +113,16 @@ export function FacturaAcciones({
         >
           Enviar a la DGII
         </button>
+        {factura.xml_firmado && (
+          <a
+            className="btn-secundario"
+            href={api.representacionImpresaUrl(factura.id)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Ver Representación Impresa (PDF)
+          </a>
+        )}
       </div>
 
       {factura.track_id && (
