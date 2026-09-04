@@ -100,6 +100,47 @@ en vez de depender de Dokploy.
 **No exponer pgAdmin ni Postgres directamente a Internet** sin al menos
 restringir por IP o poner autenticación adicional delante.
 
+#### IMPORTANTE: no asignar un "Domain" de Dokploy a `facturas-api` (ni a ningún módulo)
+
+**Síntoma:** después de cada redeploy, `facturas-api` (o cualquier módulo) no
+puede resolver `postgres` y hay que reconectarlo manualmente a la red:
+
+```
+docker network connect <proyecto>_facturacion <proyecto>-facturas-api-1
+docker exec <proyecto>-facturas-api-1 getent hosts postgres   # para confirmar
+```
+
+**Causa raíz confirmada:** todos los servicios de `docker-compose.dokploy.yml`
+declaran `networks: [facturacion]` de forma explícita y consistente (vía el
+ancla `x-modulo-comun`), así que `docker compose up` por sí solo siempre deja
+cada contenedor correctamente conectado a esa red. El problema NO está en el
+`docker-compose.dokploy.yml` de este repo. Está en la función "Domains" del
+panel de Dokploy: cuando le asignas un Domain a un servicio del Compose (p. ej.
+`apifa.acentosdeco.lat` -> `facturas-api`), Dokploy gestiona el enrutamiento de
+ese contenedor por fuera de `docker compose up` (para conectarlo a la red de
+su Traefik) y, en instalaciones donde ese Traefik no está activo o coexiste
+con otro reverse proxy en 80/443 (exactamente el caso de este servidor, ver
+párrafo de pgAdmin arriba), ese paso de Dokploy puede dejar el contenedor sin
+la red `facturacion` original en el siguiente redeploy. Por eso el fix manual
+(`docker network connect`) soluciona el síntoma una vez, pero vuelve a pasar
+en el próximo despliegue: la causa (el Domain de Dokploy) sigue ahí.
+
+**Fix de raíz (permanente, sin tocar código ni redeploys):** en el panel de
+Dokploy, quitar/eliminar el Domain asignado a `facturas-api` (y a cualquier
+otro módulo que tenga uno). `facturas-api` ya publica su puerto al host
+(`ports: ["8012:8000"]`, ver sección 5) exactamente igual que `pgadmin`, así
+que sigue siendo alcanzable sin ningún Domain de Dokploy:
+
+- Uso directo: `http://<IP-del-servidor>:8012` (esto es lo que debe llevar
+  `VITE_API_URL`, ver sección 2 -- si `VITE_API_URL` apunta hoy al Domain de
+  Dokploy, hay que cambiarlo a esta URL y reconstruir el `frontend`).
+- Para conservar un hostname propio con HTTPS (p. ej. seguir usando
+  `apifa.acentosdeco.lat`), apuntar un Cloudflare Tunnel (u otro reverse
+  proxy externo, fuera de Dokploy) directo a `<IP-del-servidor>:8012`, igual
+  que se documenta arriba para pgAdmin -- así el contenedor nunca vuelve a
+  ser tocado por la lógica de Domains de Dokploy y el problema no puede
+  recurrir.
+
 ### Nota de seguridad sobre PostgREST
 
 El rol anónimo (`web_anon`) tiene acceso de **solo lectura** a
@@ -155,3 +196,9 @@ el XSD. Si `VITE_API_URL` quedó mal configurado, el formulario cargará pero
 las llamadas a `facturas-api` fallarán en la consola del navegador (CORS o
 conexión rechazada) — corregirlo exige reconstruir la imagen `frontend`
 (ver la nota en la tabla de variables de la sección 2), no solo reiniciarla.
+
+Si algún módulo (típicamente `facturas-api`) no puede resolver `postgres`
+después de un redeploy, no es un problema del `docker-compose.dokploy.yml`
+-- es casi seguro un Domain de Dokploy asignado a ese servicio. Ver "IMPORTANTE:
+no asignar un 'Domain' de Dokploy a `facturas-api`" en la sección 4 arriba
+para la causa raíz y el fix permanente (no requiere tocar código).
