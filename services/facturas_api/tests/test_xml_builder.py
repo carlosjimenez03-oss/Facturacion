@@ -72,16 +72,34 @@ def test_generar_y_validar_detecta_campo_requerido_faltante():
     assert errores, "debía reportar error por MontoTotal faltante"
 
 
-def test_generar_y_validar_detecta_orden_incorrecto():
-    """xs:sequence exige orden; invertir dos campos del mismo nivel debe fallar."""
+def test_generar_y_validar_ignora_orden_de_insercion_del_dict():
+    """xs:sequence exige orden en el XML, pero construir_xml_ecf reordena cada
+    nivel de `datos` según el XSD (ver _orden_elementos) antes de construir el
+    árbol -- así que el orden de inserción del dict de entrada no debe
+    importar (p. ej. tras un round-trip por una columna jsonb de Postgres,
+    que no preserva el orden de las claves)."""
     datos = _datos_minimos_31()
     encabezado = datos["Encabezado"]
-    # IdDoc debe ir antes que Emisor según el XSD -- los invertimos.
+    # IdDoc debe ir antes que Emisor según el XSD -- los invertimos a propósito.
     reordenado = {"Emisor": encabezado["Emisor"], "IdDoc": encabezado["IdDoc"]}
     reordenado.update({k: v for k, v in encabezado.items() if k not in ("Emisor", "IdDoc")})
     datos["Encabezado"] = reordenado
     _, errores = xb.generar_y_validar(31, datos)
-    assert errores, "debía reportar error por orden incorrecto de elementos"
+    assert not errores, errores
+
+
+def test_orden_elementos_deriva_secuencia_del_xsd():
+    orden = xb._orden_elementos(31)
+    assert orden["Encabezado"][:2] == ("Version", "IdDoc")
+    assert orden["Item"][0] == "NumeroLinea"
+    assert orden["Item"][-1] == "MontoItem"
+
+
+def test_reordenar_datos_preserva_claves_desconocidas_al_final():
+    orden = {"Encabezado": ("Version", "IdDoc")}
+    datos = {"ClaveNoEnXsd": "x", "IdDoc": {}, "Version": "1.0"}
+    resultado = xb._reordenar_datos(datos, "Encabezado", orden)
+    assert list(resultado.keys()) == ["Version", "IdDoc", "ClaveNoEnXsd"]
 
 
 def test_construir_xml_lista_produce_elementos_repetidos():
