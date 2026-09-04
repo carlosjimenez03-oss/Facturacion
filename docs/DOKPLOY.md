@@ -28,7 +28,6 @@ PostgREST + pgAdmin.
 | `POSTGRES_PASSWORD` | Contraseña del usuario de Postgres |
 | `PGADMIN_DEFAULT_EMAIL` | Email de acceso a pgAdmin |
 | `PGADMIN_DEFAULT_PASSWORD` | Contraseña de acceso a pgAdmin |
-| `VITE_API_URL` | URL **pública** (alcanzable desde el navegador del usuario) de `facturas-api`, p. ej. `http://<ip-o-dominio-del-servidor>:8012`. Se hornea en el bundle del frontend en build time — cambiarla exige reconstruir la imagen del `frontend` (redeploy), no basta con reiniciar el contenedor |
 
 Opcionales (con default razonable si se omiten):
 
@@ -40,6 +39,7 @@ Opcionales (con default razonable si se omiten):
 | `ALLOWED_ORIGINS` | `["*"]` | Orígenes CORS permitidos, formato JSON |
 | `LOG_LEVEL` | `INFO` | Nivel de log |
 | `DEBUG` | `false` | Modo debug de FastAPI |
+| `VITE_API_URL` | `/api` | Base URL que el frontend usa para llamar a `facturas-api`. El default `/api` hace que nginx (dentro del propio contenedor `frontend`) reenvíe esas llamadas a `facturas-api` por la red interna `facturacion` -- mismo origen que el frontend, sin CORS ni el problema de "mixed content" de llamar a un backend `http://` desde un frontend `https://`. **No hace falta cambiarlo** salvo que quieras exponer `facturas-api` con su propia URL pública. Se hornea en el bundle del frontend en build time — cambiarlo exige reconstruir la imagen (redeploy), no basta con reiniciar el contenedor |
 
 Nunca se commitean estos valores en el repo — se configuran únicamente en el
 panel de Dokploy.
@@ -125,21 +125,27 @@ la red `facturacion` original en el siguiente redeploy. Por eso el fix manual
 (`docker network connect`) soluciona el síntoma una vez, pero vuelve a pasar
 en el próximo despliegue: la causa (el Domain de Dokploy) sigue ahí.
 
-**Fix de raíz (permanente, sin tocar código ni redeploys):** en el panel de
-Dokploy, quitar/eliminar el Domain asignado a `facturas-api` (y a cualquier
-otro módulo que tenga uno). `facturas-api` ya publica su puerto al host
-(`ports: ["8012:8000"]`, ver sección 5) exactamente igual que `pgadmin`, así
-que sigue siendo alcanzable sin ningún Domain de Dokploy:
+**Fix de raíz (permanente):** en el panel de Dokploy, quitar/eliminar el
+Domain asignado a `facturas-api` (y a cualquier otro módulo que tenga uno).
 
-- Uso directo: `http://<IP-del-servidor>:8012` (esto es lo que debe llevar
-  `VITE_API_URL`, ver sección 2 -- si `VITE_API_URL` apunta hoy al Domain de
-  Dokploy, hay que cambiarlo a esta URL y reconstruir el `frontend`).
-- Para conservar un hostname propio con HTTPS (p. ej. seguir usando
-  `apifa.acentosdeco.lat`), apuntar un Cloudflare Tunnel (u otro reverse
-  proxy externo, fuera de Dokploy) directo a `<IP-del-servidor>:8012`, igual
-  que se documenta arriba para pgAdmin -- así el contenedor nunca vuelve a
-  ser tocado por la lógica de Domains de Dokploy y el problema no puede
-  recurrir.
+`facturas-api` **no necesita ningún Domain ni URL pública propia** -- el
+frontend ya no le habla directo. `frontend/nginx.conf` reenvía todo lo que
+llega a `/api/*` hacia `facturas-api` por la red interna `facturacion`
+(`proxy_pass http://facturas-api:8000/`), y `VITE_API_URL` tiene como
+default `/api` (mismo origen que el frontend, ver sección 2). Esto además
+evita el problema de "mixed content" del navegador (bloquea llamadas
+`http://` desde una página servida por `https://`) que da un
+`TypeError: NetworkError when attempting to fetch resource` si en cambio le
+apuntas `VITE_API_URL` a `http://<IP>:8012` directo desde un frontend con
+Domain HTTPS.
+
+Si en algún caso puntual sí necesitas que `facturas-api` sea alcanzable
+públicamente por su cuenta (p. ej. para depurar con `curl` o integrarlo con
+otro sistema), usa su puerto ya publicado directo
+(`http://<IP-del-servidor>:8012`, ver sección 5) o -- para HTTPS con
+hostname propio -- un Cloudflare Tunnel (u otro reverse proxy externo, fuera
+de Dokploy) apuntando ahí, igual que se documenta arriba para pgAdmin. Pero
+para que el frontend funcione, ninguna de las dos hace falta.
 
 ### Nota de seguridad sobre PostgREST
 
@@ -192,10 +198,14 @@ facturacion.envios_dgii ORDER BY creado_en DESC LIMIT 5;`).
 
 Para el frontend: abrir `http://<dominio-o-ip>:8013`, crear una factura de
 prueba y confirmar que "Generar XML" no reporta errores de validación contra
-el XSD. Si `VITE_API_URL` quedó mal configurado, el formulario cargará pero
-las llamadas a `facturas-api` fallarán en la consola del navegador (CORS o
-conexión rechazada) — corregirlo exige reconstruir la imagen `frontend`
-(ver la nota en la tabla de variables de la sección 2), no solo reiniciarla.
+el XSD. Con el default `VITE_API_URL=/api` (ver sección 2) esto debería
+funcionar sin configuración adicional. Si en la consola del navegador ves
+`TypeError: NetworkError when attempting to fetch resource` (o un error de
+"mixed content"), es casi seguro que `VITE_API_URL` está apuntando a una URL
+`http://` propia en vez de al default `/api` -- ver sección 4 arriba
+("IMPORTANTE: no asignar un 'Domain' de Dokploy a `facturas-api`"). Cambiar
+`VITE_API_URL` exige reconstruir la imagen `frontend` (redeploy), no solo
+reiniciarla.
 
 Si algún módulo (típicamente `facturas-api`) no puede resolver `postgres`
 después de un redeploy, no es un problema del `docker-compose.dokploy.yml`

@@ -187,12 +187,13 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      # VITE_API_URL se hornea en el bundle en build time -- debe ser la URL
-      # PÚBLICA (alcanzable desde el navegador del usuario) de facturas-api,
-      # p. ej. http://<ip-o-dominio-del-servidor>:8012. No usar el nombre
-      # interno del servicio Docker (http://facturas-api:8000) aquí, ese
-      # solo es resoluble dentro de la red `facturacion`.
-      args: {VITE_API_URL: "${VITE_API_URL:?VITE_API_URL es requerido (URL publica de facturas-api)}"}
+      # VITE_API_URL se hornea en el bundle en build time. Default "/api":
+      # nginx (frontend/nginx.conf) reenvía /api/* a facturas-api por la red
+      # interna `facturacion` (mismo origen que el frontend -- evita CORS y
+      # el problema de "mixed content" al llamar un backend http:// desde un
+      # frontend https://). No hace falta exponer facturas-api públicamente
+      # ni asignarle un dominio propio. Ver docs/DOKPLOY.md.
+      args: {VITE_API_URL: "${VITE_API_URL:-/api}"}
     ports: ["8013:80"]
     networks: [facturacion]
 
