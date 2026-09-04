@@ -44,7 +44,7 @@ from reportlab.platypus import (
 )
 
 from libs.ecf_common.environments import DGIIEnvironment
-from services.consulta_timbre.app.dgii_client import ConsultaTimbreDGIIClient
+from libs.ecf_common.timbre_qr import construir_url_timbre_ecf
 
 _DSIG_NS = {"ds": "http://www.w3.org/2000/09/xmldsig#"}
 
@@ -186,7 +186,8 @@ def generar_pdf(factura: dict[str, Any], ambiente: DGIIEnvironment) -> bytes:
     codigo_seguridad = codigo_seguridad_desde_xml_firmado(xml_firmado)
     fecha_firma = fecha_hora_firma_desde_xml(xml_firmado)
 
-    qr_url = ConsultaTimbreDGIIClient(ambiente).construir_url_ecf(
+    qr_url = construir_url_timbre_ecf(
+        ambiente=ambiente,
         rnc_emisor=factura["rnc_emisor"],
         rnc_comprador=_texto(comprador.get("RNCComprador")),
         encf=factura["encf"] or "",
