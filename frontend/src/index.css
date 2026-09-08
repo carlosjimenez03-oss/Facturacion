@@ -646,6 +646,14 @@ button.btn-secundario:disabled {
   color: var(--ink);
 }
 
+/* ---------- inventario (productos, proveedores, compras, movimientos) ---------- */
+.acciones-secundarias {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
 @media (max-width: 640px) {
   .app-bar {
     flex-wrap: wrap;

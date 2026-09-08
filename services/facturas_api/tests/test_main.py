@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import pytest
 import respx
 from fastapi.testclient import TestClient
-from httpx import Response
+from httpx import ConnectError, Response
 
 from services.facturas_api.app import main
 from services.facturas_api.app import repository
@@ -315,6 +315,135 @@ def test_enviar_factura_error_dgii(client, monkeypatch):
     response = client.post(f"/facturas/{factura['id']}/enviar")
 
     assert response.status_code == 502
+
+
+def _items_inventario():
+    return [{"numero_linea": "1", "producto_id": str(uuid.uuid4()), "cantidad": "2.00"}]
+
+
+@respx.mock
+def test_enviar_factura_bloquea_por_stock_insuficiente(client, monkeypatch):
+    factura = _factura(xml_generado="<ECF><Encabezado/></ECF>", items_inventario=_items_inventario())
+
+    async def fake_obtener(pool, fid):
+        return factura
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+
+    respx.post(f"{main.settings.inventario_api_url}/movimientos/validar-disponibilidad").mock(
+        return_value=Response(
+            200,
+            json={
+                "disponible": False,
+                "faltantes": [
+                    {"producto_id": str(uuid.uuid4()), "nombre": "Producto X", "solicitado": "2", "disponible": "0"}
+                ],
+            },
+        )
+    )
+    ruta_recepcion = respx.post(f"{main.settings.recepcion_service_url}/ecf")
+
+    response = client.post(f"/facturas/{factura['id']}/enviar")
+
+    assert response.status_code == 409
+    assert "Producto X" in response.json()["detail"]
+    assert not ruta_recepcion.called  # nunca debe llegar a enviarse a la DGII
+
+
+@respx.mock
+def test_enviar_factura_502_si_inventario_api_no_responde(client, monkeypatch):
+    factura = _factura(xml_generado="<ECF><Encabezado/></ECF>", items_inventario=_items_inventario())
+
+    async def fake_obtener(pool, fid):
+        return factura
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+
+    respx.post(f"{main.settings.inventario_api_url}/movimientos/validar-disponibilidad").mock(
+        side_effect=ConnectError("connection refused")
+    )
+    ruta_recepcion = respx.post(f"{main.settings.recepcion_service_url}/ecf")
+
+    response = client.post(f"/facturas/{factura['id']}/enviar")
+
+    assert response.status_code == 502
+    assert not ruta_recepcion.called
+
+
+@respx.mock
+def test_enviar_factura_ok_registra_salida_de_inventario(client, monkeypatch):
+    factura = _factura(xml_generado="<ECF><Encabezado/></ECF>", items_inventario=_items_inventario())
+    llamadas_sincronizacion = []
+
+    async def fake_obtener(pool, fid):
+        return factura
+
+    async def fake_registrar(pool, fid, **kwargs):
+        return {**factura, **kwargs}
+
+    async def fake_sincronizacion(pool, fid, *, sincronizado, error):
+        llamadas_sincronizacion.append((sincronizado, error))
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+    monkeypatch.setattr(repository, "registrar_resultado_envio", fake_registrar)
+    monkeypatch.setattr(repository, "registrar_sincronizacion_inventario", fake_sincronizacion)
+
+    respx.post(f"{main.settings.inventario_api_url}/movimientos/validar-disponibilidad").mock(
+        return_value=Response(200, json={"disponible": True, "faltantes": []})
+    )
+    ruta_salida = respx.post(f"{main.settings.inventario_api_url}/movimientos/salida-por-factura").mock(
+        return_value=Response(200, json={"ok": True, "movimientos": []})
+    )
+    respx.post(f"{main.settings.recepcion_service_url}/ecf").mock(
+        return_value=Response(200, json={"trackId": "track-abc"})
+    )
+
+    response = client.post(f"/facturas/{factura['id']}/enviar")
+
+    assert response.status_code == 200
+    assert ruta_salida.called
+    assert llamadas_sincronizacion == [(True, None)]
+
+
+@respx.mock
+def test_enviar_factura_ok_no_falla_si_registrar_salida_falla(client, monkeypatch):
+    """El e-CF ya se envió a la DGII (irreversible) -- un fallo al registrar
+    la salida de inventario NO debe hacer fallar esta respuesta, solo se dejar
+    constancia vía registrar_sincronizacion_inventario."""
+    factura = _factura(xml_generado="<ECF><Encabezado/></ECF>", items_inventario=_items_inventario())
+    llamadas_sincronizacion = []
+
+    async def fake_obtener(pool, fid):
+        return factura
+
+    async def fake_registrar(pool, fid, **kwargs):
+        return {**factura, **kwargs}
+
+    async def fake_sincronizacion(pool, fid, *, sincronizado, error):
+        llamadas_sincronizacion.append((sincronizado, error))
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+    monkeypatch.setattr(repository, "registrar_resultado_envio", fake_registrar)
+    monkeypatch.setattr(repository, "registrar_sincronizacion_inventario", fake_sincronizacion)
+
+    respx.post(f"{main.settings.inventario_api_url}/movimientos/validar-disponibilidad").mock(
+        return_value=Response(200, json={"disponible": True, "faltantes": []})
+    )
+    respx.post(f"{main.settings.inventario_api_url}/movimientos/salida-por-factura").mock(
+        return_value=Response(500, text="boom")
+    )
+    respx.post(f"{main.settings.recepcion_service_url}/ecf").mock(
+        return_value=Response(200, json={"trackId": "track-abc"})
+    )
+
+    response = client.post(f"/facturas/{factura['id']}/enviar")
+
+    assert response.status_code == 200
+    assert response.json()["track_id"] == "track-abc"
+    assert len(llamadas_sincronizacion) == 1
+    sincronizado, error = llamadas_sincronizacion[0]
+    assert sincronizado is False
+    assert error
 
 
 def test_crear_factura_serializa_datetime_reales(client, monkeypatch):

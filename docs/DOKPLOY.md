@@ -3,8 +3,8 @@
 Este proyecto se despliega en [Dokploy](https://dokploy.com) como un único
 recurso tipo **Compose**, definido en
 [`docker-compose.dokploy.yml`](../docker-compose.dokploy.yml): los 11 módulos
-del catálogo DGII + `facturas-api` + el `frontend` (React) + Postgres +
-PostgREST + pgAdmin.
+del catálogo DGII + `facturas-api` + `inventario-api` + el `frontend` (React)
++ Postgres + PostgREST + pgAdmin.
 
 > Este archivo es distinto de `docker-compose.yml` (+ overrides
 > `docker-compose.{test,qa,prod}.yml`), que son para **desarrollo local**
@@ -40,6 +40,7 @@ Opcionales (con default razonable si se omiten):
 | `LOG_LEVEL` | `INFO` | Nivel de log |
 | `DEBUG` | `false` | Modo debug de FastAPI |
 | `VITE_API_URL` | `/api` | Base URL que el frontend usa para llamar a `facturas-api`. El default `/api` hace que nginx (dentro del propio contenedor `frontend`) reenvíe esas llamadas a `facturas-api` por la red interna `facturacion` -- mismo origen que el frontend, sin CORS ni el problema de "mixed content" de llamar a un backend `http://` desde un frontend `https://`. **No hace falta cambiarlo** salvo que quieras exponer `facturas-api` con su propia URL pública. Se hornea en el bundle del frontend en build time — cambiarlo exige reconstruir la imagen (redeploy), no basta con reiniciar el contenedor |
+| `VITE_INVENTARIO_API_URL` | `/api-inventario` | Lo mismo que `VITE_API_URL` pero para `inventario-api` (catálogo de productos, proveedores, compras y kardex). Mismo mecanismo de proxy same-origin vía nginx, mismas advertencias |
 
 Nunca se commitean estos valores en el repo — se configuran únicamente en el
 panel de Dokploy.
@@ -60,6 +61,29 @@ a donde Dokploy clona el repo en el servidor). Pasos:
 
 ## 4. Base de datos: Postgres + PostgREST + pgAdmin
 
+#### IMPORTANTE: en un servidor ya desplegado, aplicar `004_inventario.sql` y `005_facturas_items_inventario.sql` a mano
+
+Todo lo que esté en `db/init/*.sql` (incluyendo estos dos archivos nuevos) se
+corre **solo la primera vez** que arranca Postgres con un volumen de datos
+vacío (mecanismo estándar de la imagen oficial de Postgres,
+`docker-entrypoint-initdb.d`). Si ya tenías este proyecto desplegado antes de
+este cambio, el volumen de Postgres YA existe, así que estos dos archivos
+nuevos **no se van a ejecutar solos** en el próximo redeploy -- `inventario-api`
+no va a poder arrancar (le va a faltar el esquema `inventario`) y
+`facturas-api` va a fallar al guardar/enviar facturas con productos
+vinculados (le va a faltar la columna `items_inventario`).
+
+Antes de (o justo después de) desplegar esta versión, correr una sola vez,
+contra la base de datos de producción (vía pgAdmin, o `psql`/`docker exec`
+directo al contenedor `postgres`), el contenido completo de:
+
+1. [`db/init/004_inventario.sql`](../db/init/004_inventario.sql)
+2. [`db/init/005_facturas_items_inventario.sql`](../db/init/005_facturas_items_inventario.sql)
+
+Son idempotentes (`CREATE ... IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`),
+así que correrlos de más no rompe nada -- solo importa correrlos al menos una
+vez antes de usar el módulo de inventario.
+
 - **Postgres** inicializa automáticamente el esquema `facturacion` (tabla
   `envios_dgii`) la primera vez que arranca, vía
   [`db/init/001_schema.sql`](../db/init/001_schema.sql). El servicio `postgres`
@@ -77,6 +101,14 @@ a donde Dokploy clona el repo en el servidor). Pasos:
   desde el frontend viven únicamente en la tabla `facturacion.facturas`
   ([`db/init/002_facturas.sql`](../db/init/002_facturas.sql)) — si
   `DATABASE_URL` no está disponible, `facturas-api` no arranca.
+- `inventario-api` (catálogo de productos, proveedores, compras y kardex de
+  inventario) usa el esquema `inventario`
+  ([`db/init/004_inventario.sql`](../db/init/004_inventario.sql)), también de
+  forma obligatoria -- sin `DATABASE_URL` alcanzable, no arranca. La relación
+  entre una línea de factura y un producto del catálogo vive en
+  `facturacion.facturas.items_inventario`
+  ([`db/init/005_facturas_items_inventario.sql`](../db/init/005_facturas_items_inventario.sql)),
+  ver "Inventario: reglas de negocio" más abajo.
 - **PostgREST** expone ese esquema como API REST de **solo lectura** (rol
   `web_anon`) en el puerto interno `3000`. No requiere autenticación por
   defecto — ver la nota de seguridad abajo.
@@ -100,7 +132,7 @@ en vez de depender de Dokploy.
 **No exponer pgAdmin ni Postgres directamente a Internet** sin al menos
 restringir por IP o poner autenticación adicional delante.
 
-#### IMPORTANTE: no asignar un "Domain" de Dokploy a `facturas-api` (ni a ningún módulo)
+#### IMPORTANTE: no asignar un "Domain" de Dokploy a `facturas-api` ni a `inventario-api` (ni a ningún módulo)
 
 **Síntoma:** después de cada redeploy, `facturas-api` (o cualquier módulo) no
 puede resolver `postgres` y hay que reconectarlo manualmente a la red:
@@ -181,9 +213,45 @@ puedes correr el rango de vuelta a 8000 editando `docker-compose.dokploy.yml`):
 | consulta-directorio | 8010 |
 | consulta-timbre | 8011 |
 | facturas-api | 8012 |
+| inventario-api | 8014 |
 | frontend | 8013 (nginx sirve en el 80 del contenedor) |
 
-## 6. Verificar el despliegue
+## 6. Inventario: reglas de negocio
+
+El módulo de inventario (`inventario-api` + las pantallas "Productos",
+"Proveedores", "Compras" y "Movimientos" del frontend) implementa:
+
+- **Catálogo de productos** (SKU, nombre, precio de venta, costo promedio,
+  stock actual). Cada línea de una factura debe vincularse a un producto del
+  catálogo (el selector de "Producto" en el editor de ítems reemplaza el
+  campo de texto libre que había antes) -- es lo que le permite a
+  `facturas-api` saber qué descontar.
+- **Compras** (entrada de mercancía): se crean en estado `borrador`
+  (editable), y al **confirmarlas** se genera un movimiento de entrada por
+  cada línea, se suma al `stock_actual` del producto y se recalcula su
+  `costo_promedio` (promedio ponderado). Una compra confirmada ya no se
+  edita ni se borra.
+- **Salida de mercancía por venta**: NO ocurre al guardar el borrador de la
+  factura, sino recién cuando esa factura se **envía exitosamente a la
+  DGII** (`POST /facturas/{id}/enviar`, trackId recibido) -- ver
+  `services/facturas_api/app/main.py::enviar_factura`. Antes de enviar,
+  `facturas-api` le pregunta a `inventario-api` si hay stock suficiente
+  (`POST /movimientos/validar-disponibilidad`) y **bloquea el envío con 409**
+  si falta stock de algún producto (no se envía nada a la DGII en ese caso).
+  Si `inventario-api` no responde a esa validación previa, el envío también
+  se bloquea (502) -- no se puede confirmar que hay stock, así que por
+  seguridad no se deja facturar.
+- Una vez que la DGII acepta el envío (documento fiscal, ya irreversible), se
+  llama a `inventario-api` para registrar la salida real
+  (`POST /movimientos/salida-por-factura`, idempotente por factura). Si esa
+  llamada falla (p. ej. `inventario-api` caído en ese momento puntual), la
+  respuesta de `/enviar` **no falla** -- el e-CF ya se envió y eso no se
+  puede deshacer -- pero queda registrado en
+  `facturacion.facturas.inventario_sincronizado = false` (y
+  `inventario_error` con el detalle) para poder detectarlo y correr la
+  sincronización manualmente después.
+
+## 7. Verificar el despliegue
 
 Tras el primer deploy, confirmar que cada módulo responde:
 
@@ -196,19 +264,34 @@ Y que la auditoría funciona: enviar un e-CF de prueba por `recepcion` y
 verificar la fila en Postgres (vía pgAdmin, o `SELECT * FROM
 facturacion.envios_dgii ORDER BY creado_en DESC LIMIT 5;`).
 
-Para el frontend: abrir `http://<dominio-o-ip>:8013`, crear una factura de
-prueba y confirmar que "Generar XML" no reporta errores de validación contra
-el XSD. Con el default `VITE_API_URL=/api` (ver sección 2) esto debería
+`inventario-api` responde igual:
+
+```bash
+curl https://<dominio-o-ip>:8014/health
+# {"status":"ok","app_env":"production"}
+```
+
+Si devuelve error de conexión a la base de datos, revisar primero que se haya
+aplicado la migración manual de la sección 4 ("IMPORTANTE: en un servidor ya
+desplegado, aplicar `004_inventario.sql`...") -- es la causa más probable en
+un servidor que ya tenía el proyecto desplegado antes de este módulo.
+
+Para el frontend: abrir `http://<dominio-o-ip>:8013`, crear al menos un
+producto en Inventario > Productos, luego crear una factura de prueba
+vinculando esa línea al producto y confirmar que "Generar XML" no reporta
+errores de validación contra el XSD. Con los defaults `VITE_API_URL=/api` y
+`VITE_INVENTARIO_API_URL=/api-inventario` (ver sección 2) esto debería
 funcionar sin configuración adicional. Si en la consola del navegador ves
 `TypeError: NetworkError when attempting to fetch resource` (o un error de
-"mixed content"), es casi seguro que `VITE_API_URL` está apuntando a una URL
-`http://` propia en vez de al default `/api` -- ver sección 4 arriba
-("IMPORTANTE: no asignar un 'Domain' de Dokploy a `facturas-api`"). Cambiar
-`VITE_API_URL` exige reconstruir la imagen `frontend` (redeploy), no solo
-reiniciarla.
+"mixed content"), es casi seguro que alguna de esas dos variables está
+apuntando a una URL `http://` propia en vez de a su default `/api*` -- ver
+sección 4 arriba ("IMPORTANTE: no asignar un 'Domain' de Dokploy a
+`facturas-api` ni a `inventario-api`"). Cambiar cualquiera de las dos exige
+reconstruir la imagen `frontend` (redeploy), no solo reiniciarla.
 
-Si algún módulo (típicamente `facturas-api`) no puede resolver `postgres`
-después de un redeploy, no es un problema del `docker-compose.dokploy.yml`
--- es casi seguro un Domain de Dokploy asignado a ese servicio. Ver "IMPORTANTE:
-no asignar un 'Domain' de Dokploy a `facturas-api`" en la sección 4 arriba
-para la causa raíz y el fix permanente (no requiere tocar código).
+Si algún módulo (típicamente `facturas-api` o `inventario-api`) no puede
+resolver `postgres` después de un redeploy, no es un problema del
+`docker-compose.dokploy.yml` -- es casi seguro un Domain de Dokploy asignado a
+ese servicio. Ver "IMPORTANTE: no asignar un 'Domain' de Dokploy a
+`facturas-api` ni a `inventario-api`" en la sección 4 arriba para la causa
+raíz y el fix permanente (no requiere tocar código).

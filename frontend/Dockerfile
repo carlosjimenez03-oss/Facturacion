@@ -15,6 +15,11 @@ COPY . .
 # servicio Docker.
 ARG VITE_API_URL=http://localhost:8011
 ENV VITE_API_URL=${VITE_API_URL}
+
+# Mismo mecanismo que VITE_API_URL, para el módulo de inventario
+# (services/inventario_api).
+ARG VITE_INVENTARIO_API_URL=http://localhost:8012
+ENV VITE_INVENTARIO_API_URL=${VITE_INVENTARIO_API_URL}
 RUN npm run build
 
 FROM nginx:1.27-alpine

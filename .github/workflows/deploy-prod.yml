@@ -33,6 +33,7 @@ jobs:
           - consulta_directorio
           - consulta_timbre
           - facturas_api
+          - inventario_api
     steps:
       - uses: actions/checkout@v4
 

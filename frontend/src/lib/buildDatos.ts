@@ -1,5 +1,5 @@
 import { calcularMontoItem, calcularTotales, decimal2, fechaADgii, fechaDeDgii } from "./format";
-import type { FacturaDatos, FormaPago, ItemFactura } from "./types";
+import type { FacturaDatos, FormaPago, ItemFactura, ItemInventarioLink } from "./types";
 import type { TipoEcfConfig } from "./tipoConfig";
 
 export interface FormState {
@@ -163,14 +163,43 @@ export function construirDatos(form: FormState, config: TipoEcfConfig): FacturaD
   return datos;
 }
 
+/** Arma el payload `items_inventario` (aparte de `datos`, ver el comentario
+ * en ItemFactura.productoId) que le dice a facturas_api qué producto del
+ * catálogo y qué cantidad descontar de inventario por cada línea, al
+ * enviar la factura. Líneas sin producto vinculado se omiten (por ahora
+ * ItemsEditor obliga a elegir producto en toda línea, pero por si acaso). */
+export function construirItemsInventario(items: ItemFactura[]): ItemInventarioLink[] {
+  return items
+    .map((item, idx) => ({ item, numeroLinea: String(idx + 1) }))
+    .filter(({ item }) => Boolean(item.productoId))
+    .map(({ item, numeroLinea }) => ({
+      numero_linea: numeroLinea,
+      producto_id: item.productoId as string,
+      cantidad: decimal2(Number(item.CantidadItem) || 0),
+    }));
+}
+
 /** Inverso de construirDatos: reconstruye el FormState a partir de una
- * factura ya guardada, para poder recuperar/editar un borrador. */
-export function datosAFormState(tipoEcf: string, encf: string, datos: FacturaDatos): FormState {
+ * factura ya guardada, para poder recuperar/editar un borrador.
+ * `itemsInventario` (aparte de `datos`, ver ItemFactura.productoId) se
+ * vuelve a fusionar en cada línea por NumeroLinea, para que el selector de
+ * producto de ItemsEditor recupere lo ya elegido. */
+export function datosAFormState(
+  tipoEcf: string,
+  encf: string,
+  datos: FacturaDatos,
+  itemsInventario?: ItemInventarioLink[] | null,
+): FormState {
   const idDoc = (datos.Encabezado.IdDoc ?? {}) as Record<string, unknown>;
   const emisor = (datos.Encabezado.Emisor ?? {}) as Record<string, unknown>;
   const comprador = (datos.Encabezado.Comprador ?? {}) as Record<string, unknown>;
   const referencia = (datos.InformacionReferencia ?? {}) as Record<string, unknown>;
   const tablaFormasPago = idDoc.TablaFormasPago as { FormaDePago?: FormaPago[] } | undefined;
+  const productoIdPorLinea = new Map((itemsInventario ?? []).map((link) => [link.numero_linea, link.producto_id]));
+  const items = (datos.DetallesItems.Item.length > 0 ? datos.DetallesItems.Item : [nuevoItem(1)]).map((item) => ({
+    ...item,
+    productoId: productoIdPorLinea.get(item.NumeroLinea),
+  }));
 
   return {
     tipoEcf,
@@ -193,7 +222,7 @@ export function datosAFormState(tipoEcf: string, encf: string, datos: FacturaDat
     razonSocialComprador: (comprador.RazonSocialComprador as string) ?? "",
     correoComprador: (comprador.CorreoComprador as string) ?? "",
     direccionComprador: (comprador.DireccionComprador as string) ?? "",
-    items: datos.DetallesItems.Item.length > 0 ? datos.DetallesItems.Item : [nuevoItem(1)],
+    items,
     ncfModificado: (referencia.NCFModificado as string) ?? "",
     fechaNcfModificado: referencia.FechaNCFModificado ? fechaDeDgii(String(referencia.FechaNCFModificado)) : "",
     codigoModificacion: (referencia.CodigoModificacion as string) ?? "1",

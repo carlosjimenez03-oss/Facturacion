@@ -93,6 +93,42 @@ async def test_obtener_factura_no_encontrada():
         await repository.obtener_factura(pool, uuid.uuid4())
 
 
+async def test_crear_factura_serializa_items_inventario():
+    producto_id = uuid.uuid4()
+    conn = FakeConnection(
+        fetchrow_result=_fila_factura(items_inventario='[{"numero_linea": "1", "producto_id": "x", "cantidad": "2"}]')
+    )
+    pool = FakePool(conn)
+
+    resultado = await repository.crear_factura(
+        pool,
+        tipo_ecf=31,
+        ambiente="test",
+        rnc_emisor="131234567",
+        encf="E310000000001",
+        datos={"Encabezado": {}},
+        items_inventario=[{"numero_linea": "1", "producto_id": producto_id, "cantidad": "2"}],
+    )
+
+    assert isinstance(resultado["items_inventario"], list)
+    query, args = conn.queries[0]
+    assert "items_inventario" in query
+    items_json = args[-1]
+    assert str(producto_id) in items_json
+
+
+async def test_crear_factura_sin_items_inventario_guarda_null():
+    conn = FakeConnection(fetchrow_result=_fila_factura())
+    pool = FakePool(conn)
+
+    await repository.crear_factura(
+        pool, tipo_ecf=31, ambiente="test", rnc_emisor="131234567", encf="E310000000001", datos={"Encabezado": {}}
+    )
+
+    _, args = conn.queries[0]
+    assert args[-1] is None
+
+
 async def test_obtener_factura_encontrada():
     fila = _fila_factura()
     conn = FakeConnection(fetchrow_result=fila)
