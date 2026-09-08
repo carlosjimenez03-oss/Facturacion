@@ -4,6 +4,7 @@ import type {
   FacturaDetalle,
   FacturaResumen,
   GenerarXmlResponse,
+  ItemInventarioLink,
 } from "./types";
 
 export const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:8011";
@@ -49,13 +50,21 @@ export const api = {
 
   obtener: (id: string) => request<FacturaDetalle>(`/facturas/${id}`),
 
-  crear: (payload: { tipo_ecf: number; encf: string | null; datos: FacturaDatos }) =>
+  crear: (payload: {
+    tipo_ecf: number;
+    encf: string | null;
+    datos: FacturaDatos;
+    items_inventario?: ItemInventarioLink[];
+  }) =>
     request<FacturaDetalle>("/facturas", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
 
-  actualizar: (id: string, payload: { encf: string | null; datos: FacturaDatos }) =>
+  actualizar: (
+    id: string,
+    payload: { encf: string | null; datos: FacturaDatos; items_inventario?: ItemInventarioLink[] },
+  ) =>
     request<FacturaDetalle>(`/facturas/${id}`, {
       method: "PUT",
       body: JSON.stringify(payload),

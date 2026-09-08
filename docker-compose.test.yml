@@ -117,6 +117,15 @@ services:
     ports:
       - "8011:8000"
 
+  inventario-api:
+    <<: *test-comun
+    volumes:
+      - ./services/inventario_api/app:/app/app:ro
+      - ./libs:/app/libs:ro
+      - ./certs:/app/certs:ro
+    ports:
+      - "8012:8000"
+
   frontend:
     ports:
       - "5173:80"

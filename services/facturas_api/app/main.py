@@ -37,8 +37,9 @@ from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.db import cerrar_pool, crear_pool
 from libs.ecf_common.xml_tools import nombre_archivo_ecf
 
-from . import repository
+from . import inventario_client, repository
 from .config import FacturasApiSettings, get_settings
+from .inventario_client import InventarioApiError, StockInsuficienteError
 from .repository import FacturaNoEncontradaError
 from .representacion_impresa import RepresentacionImpresaError, generar_pdf
 from .schemas import (
@@ -137,6 +138,7 @@ async def crear_factura(payload: FacturaCrear, settings: FacturasApiSettings = D
         rnc_emisor=settings.emisor_rnc,
         encf=payload.encf,
         datos=payload.datos,
+        items_inventario=[item.model_dump() for item in payload.items_inventario or []] or None,
     )
     return factura
 
@@ -170,7 +172,13 @@ async def actualizar_factura(factura_id: str, payload: FacturaActualizar):
             status_code=409,
             detail=f"Solo se pueden editar facturas en estado 'borrador' (estado actual: {actual['estado']})",
         )
-    return await repository.actualizar_datos(_pool(), fid, encf=payload.encf, datos=payload.datos)
+    return await repository.actualizar_datos(
+        _pool(),
+        fid,
+        encf=payload.encf,
+        datos=payload.datos,
+        items_inventario=[item.model_dump() for item in payload.items_inventario or []] or None,
+    )
 
 
 @app.delete("/facturas/{factura_id}", status_code=204)
@@ -260,6 +268,22 @@ async def enviar_factura(factura_id: str, settings: FacturasApiSettings = Depend
     if not encf:
         raise HTTPException(status_code=422, detail="La factura no tiene un eNCF asignado")
 
+    items_inventario = factura.get("items_inventario") or []
+    if items_inventario:
+        try:
+            await inventario_client.validar_disponibilidad(settings.inventario_api_url, items_inventario)
+        except StockInsuficienteError as exc:
+            detalle = "Stock insuficiente: " + "; ".join(
+                f"{f['nombre']} (solicitado {f['solicitado']}, disponible {f['disponible']})"
+                for f in exc.faltantes
+            )
+            raise HTTPException(status_code=409, detail=detalle) from exc
+        except InventarioApiError as exc:
+            logger.error("No se pudo validar disponibilidad de inventario: %s", exc)
+            raise HTTPException(
+                status_code=502, detail=f"No se pudo validar el inventario antes de facturar: {exc}"
+            ) from exc
+
     nombre_archivo = nombre_archivo_ecf(factura["rnc_emisor"], encf)
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
@@ -292,6 +316,27 @@ async def enviar_factura(factura_id: str, settings: FacturasApiSettings = Depend
         dgii_respuesta=cuerpo,
         error=cuerpo.get("error") or cuerpo.get("mensaje"),
     )
+
+    if track_id and items_inventario:
+        # El e-CF ya se envió exitosamente (documento fiscal irreversible) --
+        # un fallo acá NUNCA debe hacer fallar esta respuesta, solo se deja
+        # constancia para poder detectarlo y resolverlo manualmente (ver
+        # repository.registrar_sincronizacion_inventario).
+        try:
+            await inventario_client.registrar_salida_por_factura(
+                settings.inventario_api_url, str(fid), items_inventario
+            )
+            await repository.registrar_sincronizacion_inventario(
+                _pool(), fid, sincronizado=True, error=None
+            )
+        except InventarioApiError as exc:
+            logger.error(
+                "No se pudo registrar la salida de inventario de la factura %s: %s", fid, exc
+            )
+            await repository.registrar_sincronizacion_inventario(
+                _pool(), fid, sincronizado=False, error=str(exc)
+            )
+
     return EnviarResponse(
         id=fid, estado=actualizada["estado"], track_id=track_id, error=actualizada.get("error")
     )

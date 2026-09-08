@@ -48,5 +48,8 @@ services:
   facturas-api:
     <<: *qa-comun
     ports: ["8011:8000"]
+  inventario-api:
+    <<: *qa-comun
+    ports: ["8012:8000"]
   frontend:
     ports: ["5173:80"]

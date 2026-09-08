@@ -121,6 +121,15 @@ services:
         APP_ENV: ${APP_ENV:-test}
     image: facturacion-electronica/facturas-api:${APP_ENV:-test}
 
+  inventario-api:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/inventario_api/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/inventario-api:${APP_ENV:-test}
+
   frontend:
     restart: unless-stopped
     build:
@@ -128,4 +137,5 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8011}
+        VITE_INVENTARIO_API_URL: ${VITE_INVENTARIO_API_URL:-http://localhost:8012}
     image: facturacion-electronica/frontend:${APP_ENV:-test}

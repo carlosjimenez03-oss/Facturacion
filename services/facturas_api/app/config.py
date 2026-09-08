@@ -11,6 +11,12 @@ class FacturasApiSettings(EcfBaseSettings):
     # docker-compose.dokploy.yml resuelve al nombre del servicio Compose.
     recepcion_service_url: str = "http://recepcion:8000"
 
+    # URL interna (red Docker) de `inventario_api`, a la que este servicio le
+    # pide validar disponibilidad de stock antes de enviar un e-CF y
+    # registrar la salida de mercancía después de un envío exitoso. Ver
+    # `app.inventario_client`.
+    inventario_api_url: str = "http://inventario-api:8000"
+
 
 @lru_cache
 def get_settings() -> FacturasApiSettings:

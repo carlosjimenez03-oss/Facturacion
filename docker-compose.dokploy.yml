@@ -1,9 +1,9 @@
 # Despliegue único para Dokploy: los 11 módulos de facturación electrónica +
-# facturas-api + frontend + Postgres + PostgREST + pgAdmin, en un solo
-# archivo (sin encadenar -f -f como en docker-compose.yml + overrides,
-# pensado para desarrollo local).
+# facturas-api + inventario-api + frontend + Postgres + PostgREST + pgAdmin,
+# en un solo archivo (sin encadenar -f -f como en docker-compose.yml +
+# overrides, pensado para desarrollo local).
 #
-# Puertos de host 8001-8013 (no 8000-8012): se corrieron todos +1 porque en
+# Puertos de host 8001-8014 (no 8000-8013): se corrieron todos +1 porque en
 # despliegues reales del servidor Dokploy es común que el puerto 8000 ya
 # esté tomado por otro servicio del mismo host. Ver docs/DOKPLOY.md.
 #
@@ -180,6 +180,22 @@ services:
       args: {APP_ENV: "${APP_ENV:-production}"}
     ports: ["8012:8000"]
 
+  # --- Inventario (catálogo, compras, kardex) ---
+  #
+  # facturas-api le habla por la red interna (http://inventario-api:8000,
+  # ver services/facturas_api/app/config.py) para validar disponibilidad de
+  # stock antes de enviar una factura a la DGII y para registrar la salida
+  # de mercancía después de un envío exitoso -- igual que ya hace con
+  # `recepcion`. No necesita Domain propio en Dokploy por la misma razón
+  # documentada para facturas-api (ver la nota IMPORTANTE más abajo).
+  inventario-api:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/inventario_api/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8014:8000"]
+
   # --- Frontend (React) ---
 
   frontend:
@@ -187,13 +203,17 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      # VITE_API_URL se hornea en el bundle en build time. Default "/api":
-      # nginx (frontend/nginx.conf) reenvía /api/* a facturas-api por la red
-      # interna `facturacion` (mismo origen que el frontend -- evita CORS y
-      # el problema de "mixed content" al llamar un backend http:// desde un
-      # frontend https://). No hace falta exponer facturas-api públicamente
-      # ni asignarle un dominio propio. Ver docs/DOKPLOY.md.
-      args: {VITE_API_URL: "${VITE_API_URL:-/api}"}
+      # VITE_API_URL/VITE_INVENTARIO_API_URL se hornean en el bundle en
+      # build time. Default "/api" y "/api-inventario": nginx
+      # (frontend/nginx.conf) reenvía cada una a facturas-api/inventario-api
+      # por la red interna `facturacion` (mismo origen que el frontend --
+      # evita CORS y el problema de "mixed content" al llamar un backend
+      # http:// desde un frontend https://). No hace falta exponer ninguno
+      # de los dos servicios públicamente ni asignarles un dominio propio.
+      # Ver docs/DOKPLOY.md.
+      args:
+        VITE_API_URL: "${VITE_API_URL:-/api}"
+        VITE_INVENTARIO_API_URL: "${VITE_INVENTARIO_API_URL:-/api-inventario}"
     ports: ["8013:80"]
     networks: [facturacion]
 

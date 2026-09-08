@@ -22,11 +22,22 @@ class FacturaNoEncontradaError(Exception):
 
 def _fila_a_dict(fila: asyncpg.Record) -> dict[str, Any]:
     datos = dict(fila)
-    for campo in ("datos", "dgii_respuesta"):
+    for campo in ("datos", "dgii_respuesta", "items_inventario"):
         if isinstance(datos.get(campo), str):
             datos[campo] = json.loads(datos[campo])
     datos["id"] = str(datos["id"])
     return datos
+
+
+def _items_inventario_json(items_inventario: list[dict[str, Any]] | None) -> str | None:
+    if items_inventario is None:
+        return None
+    return json.dumps(
+        [
+            {**item, "producto_id": str(item["producto_id"]), "cantidad": str(item["cantidad"])}
+            for item in items_inventario
+        ]
+    )
 
 
 async def crear_factura(
@@ -37,12 +48,13 @@ async def crear_factura(
     rnc_emisor: str,
     encf: str | None,
     datos: dict[str, Any],
+    items_inventario: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     async with pool.acquire() as conn:
         fila = await conn.fetchrow(
             """
-            INSERT INTO facturacion.facturas (tipo_ecf, ambiente, rnc_emisor, encf, datos)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO facturacion.facturas (tipo_ecf, ambiente, rnc_emisor, encf, datos, items_inventario)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING *
             """,
             tipo_ecf,
@@ -50,6 +62,7 @@ async def crear_factura(
             rnc_emisor,
             encf,
             json.dumps(datos),
+            _items_inventario_json(items_inventario),
         )
     return _fila_a_dict(fila)
 
@@ -96,20 +109,26 @@ async def obtener_factura(pool: asyncpg.Pool, factura_id: uuid.UUID) -> dict[str
 
 
 async def actualizar_datos(
-    pool: asyncpg.Pool, factura_id: uuid.UUID, *, encf: str | None, datos: dict[str, Any]
+    pool: asyncpg.Pool,
+    factura_id: uuid.UUID,
+    *,
+    encf: str | None,
+    datos: dict[str, Any],
+    items_inventario: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Actualiza los datos editables de una factura en estado 'borrador'."""
     async with pool.acquire() as conn:
         fila = await conn.fetchrow(
             """
             UPDATE facturacion.facturas
-            SET encf = $2, datos = $3, actualizado_en = now()
+            SET encf = $2, datos = $3, items_inventario = $4, actualizado_en = now()
             WHERE id = $1 AND estado = 'borrador'
             RETURNING *
             """,
             factura_id,
             encf,
             json.dumps(datos),
+            _items_inventario_json(items_inventario),
         )
     if fila is None:
         raise FacturaNoEncontradaError(str(factura_id))
@@ -195,3 +214,24 @@ async def registrar_resultado_envio(
     if fila is None:
         raise FacturaNoEncontradaError(str(factura_id))
     return _fila_a_dict(fila)
+
+
+async def registrar_sincronizacion_inventario(
+    pool: asyncpg.Pool, factura_id: uuid.UUID, *, sincronizado: bool, error: str | None
+) -> None:
+    """Deja constancia de si la salida de mercancía (POST a inventario_api
+    tras un envío exitoso a la DGII) se registró o falló -- ver
+    `app.main.enviar_factura`. Un fallo aquí es best-effort: no debe romper
+    la respuesta de /enviar (el e-CF ya se envió, eso ya no se puede
+    deshacer), solo se registra para poder detectarlo y resolverlo."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE facturacion.facturas
+            SET inventario_sincronizado = $2, inventario_error = $3
+            WHERE id = $1
+            """,
+            factura_id,
+            sincronizado,
+            error,
+        )

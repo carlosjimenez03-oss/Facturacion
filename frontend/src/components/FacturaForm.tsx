@@ -4,7 +4,7 @@ import { api, ApiError } from "../lib/api";
 import { CODIGOS_MODIFICACION, TIPOS_ECF, TIPOS_INGRESOS, TIPOS_PAGO } from "../lib/catalogos";
 import { calcularTotales, decimal2 } from "../lib/format";
 import { configParaTipo } from "../lib/tipoConfig";
-import { construirDatos, datosAFormState, estadoInicial } from "../lib/buildDatos";
+import { construirDatos, construirItemsInventario, datosAFormState, estadoInicial } from "../lib/buildDatos";
 import type { FacturaDetalle } from "../lib/types";
 import { FacturaAcciones } from "./FacturaAcciones";
 import { ItemsEditor } from "./ItemsEditor";
@@ -42,7 +42,7 @@ export function FacturaForm() {
         }
         const tipo = String(factura.tipo_ecf);
         setTipoEcf(tipo);
-        setForm(datosAFormState(tipo, factura.encf ?? "", factura.datos));
+        setForm(datosAFormState(tipo, factura.encf ?? "", factura.datos, factura.items_inventario));
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : String(err)))
       .finally(() => setCargando(false));
@@ -67,11 +67,17 @@ export function FacturaForm() {
     setGuardando(true);
     try {
       const datos = construirDatos(form, config);
+      const items_inventario = construirItemsInventario(form.items);
       if (editando && id) {
-        await api.actualizar(id, { encf: form.encf || null, datos });
+        await api.actualizar(id, { encf: form.encf || null, datos, items_inventario });
         navigate(`/facturas/${id}`);
       } else {
-        const creada = await api.crear({ tipo_ecf: Number(tipoEcf), encf: form.encf || null, datos });
+        const creada = await api.crear({
+          tipo_ecf: Number(tipoEcf),
+          encf: form.encf || null,
+          datos,
+          items_inventario,
+        });
         navigate(`/facturas/${creada.id}`);
       }
     } catch (err) {
