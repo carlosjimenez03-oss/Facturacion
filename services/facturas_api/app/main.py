@@ -27,6 +27,7 @@ import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager
+from decimal import Decimal, InvalidOperation
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query
@@ -34,6 +35,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
+from libs.ecf_common.compras606 import fecha_dgii_a_aaaammdd, registrar_compra_606
 from libs.ecf_common.db import cerrar_pool, crear_pool
 from libs.ecf_common.xml_tools import nombre_archivo_ecf
 
@@ -255,6 +257,90 @@ async def obtener_representacion_impresa(
     )
 
 
+# Tipos de e-CF autoemitidos que también forman parte del Formato 606
+# (Compras de Bienes y Servicios) -- ver docs/dgii/FORMATO_606.md.
+_TIPOS_COMPRAS_606 = frozenset({41, 43, 47})
+
+
+def _rnc_cedula_para_606(tipo_ecf: int, datos: dict, settings: FacturasApiSettings) -> str | None:
+    """A quién le compramos, para el campo "RNC o Cédula" del 606 -- distinto
+    según el tipo (ver docs/dgii/FORMATO_606.md, "RNC/Cédula a reportar por
+    tipo"): tipo 41 (Compras) reporta al proveedor informal (campo
+    `Comprador` de la factura, ya que `Emisor` siempre somos nosotros); 43
+    (Gastos Menores) y 47 (Pagos al Exterior) no tienen una contraparte
+    identificada en su XSD y, por regla explícita del PDF oficial, reportan
+    el RNC del propio encabezado."""
+    if tipo_ecf == 41:
+        return (datos.get("Encabezado", {}).get("Comprador") or {}).get("RNCComprador")
+    return settings.emisor_rnc
+
+
+def _separar_bienes_servicios(datos: dict) -> tuple[Decimal, Decimal]:
+    """Suma DetallesItems.Item por IndicadorBienoServicio (1=Bien, 2=Servicio)
+    -- el Formato 606 exige la proporción Bienes/Servicios por separado y
+    ningún e-CF la trae ya calculada."""
+    servicios = Decimal("0")
+    bienes = Decimal("0")
+    items = (datos.get("DetallesItems") or {}).get("Item") or []
+    if isinstance(items, dict):
+        items = [items]
+    for item in items:
+        try:
+            monto = Decimal(str(item.get("MontoItem") or "0"))
+        except InvalidOperation:
+            continue
+        if str(item.get("IndicadorBienoServicio")) == "2":
+            servicios += monto
+        else:
+            bienes += monto
+    return servicios, bienes
+
+
+async def _registrar_compra_606_autoemitida(
+    pool, factura: dict, encf: str, settings: FacturasApiSettings
+) -> None:
+    """Best-effort: la factura ya se envió exitosamente a la DGII (no se
+    puede deshacer); un fallo aquí solo implica que ese renglón habrá que
+    agregarlo a mano en el Formato 606, nunca debe afectar la respuesta."""
+    try:
+        datos = factura["datos"]
+        fecha_emision = (datos.get("Encabezado", {}).get("Emisor") or {}).get("FechaEmision")
+        fecha_comprobante = fecha_dgii_a_aaaammdd(fecha_emision) if fecha_emision else None
+        if not fecha_comprobante:
+            logger.warning(
+                "Factura %s sin FechaEmision válida, no se registra en compras606", factura["id"]
+            )
+            return
+        rnc_cedula = _rnc_cedula_para_606(factura["tipo_ecf"], datos, settings)
+        if not rnc_cedula:
+            logger.warning(
+                "Factura %s sin RNC/Cédula de contraparte, no se registra en compras606",
+                factura["id"],
+            )
+            return
+        ncf_modificado = (datos.get("InformacionReferencia") or {}).get("NCFModificado")
+        try:
+            itbis_facturado = Decimal(str((datos.get("Encabezado", {}).get("Totales") or {}).get("TotalITBIS") or "0"))
+        except InvalidOperation:
+            itbis_facturado = Decimal("0")
+        servicios, bienes = _separar_bienes_servicios(datos)
+        await registrar_compra_606(
+            pool,
+            origen="auto_emitido",
+            referencia_tipo="factura",
+            referencia_id=str(factura["id"]),
+            rnc_cedula=rnc_cedula,
+            ncf=encf,
+            ncf_modificado=ncf_modificado,
+            fecha_comprobante=fecha_comprobante,
+            monto_servicios=servicios,
+            monto_bienes=bienes,
+            itbis_facturado=itbis_facturado,
+        )
+    except Exception:
+        logger.exception("No se pudo registrar la factura %s en compras606", factura.get("id"))
+
+
 @app.post("/facturas/{factura_id}/enviar", response_model=EnviarResponse)
 async def enviar_factura(factura_id: str, settings: FacturasApiSettings = Depends(get_settings)):
     """Envía el e-CF a la DGII delegando la firma real y el envío al módulo `recepcion`."""
@@ -336,6 +422,9 @@ async def enviar_factura(factura_id: str, settings: FacturasApiSettings = Depend
             await repository.registrar_sincronizacion_inventario(
                 _pool(), fid, sincronizado=False, error=str(exc)
             )
+
+    if track_id and factura["tipo_ecf"] in _TIPOS_COMPRAS_606:
+        await _registrar_compra_606_autoemitida(_pool(), factura, encf, settings)
 
     return EnviarResponse(
         id=fid, estado=actualizada["estado"], track_id=track_id, error=actualizada.get("error")

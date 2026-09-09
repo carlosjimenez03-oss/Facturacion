@@ -6,9 +6,15 @@ receptor/comprador) y devuelve un ARECF (acuse de recibo) firmado
 digitalmente con nuestro propio certificado. Cada recepción se audita
 (best-effort) en facturacion.envios_dgii, igual que los módulos que envían
 hacia la DGII -- ver el docstring de `libs.ecf_common.db`.
+
+Además, registra (best-effort) un renglón pendiente de clasificar en
+compras606.registros -- el e-CF recibido es una de las dos fuentes del
+Formato 606 (Compras de Bienes y Servicios), ver docs/dgii/FORMATO_606.md y
+`services/formato_606`.
 """
 import logging
 from contextlib import asynccontextmanager
+from decimal import Decimal, InvalidOperation
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,6 +23,7 @@ from lxml import etree
 
 from libs.ecf_common.auth.jwt_tokens import TokenInvalidoError, validar_token
 from libs.ecf_common.auth.signing import CredencialFirma, cargar_certificado_p12, firmar_xml
+from libs.ecf_common.compras606 import fecha_dgii_a_aaaammdd, registrar_compra_606
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
 
 from .arecf_builder import construir_arecf
@@ -50,17 +57,73 @@ def health(settings: ReceptorRecepcionSettings = Depends(get_settings)) -> dict:
     return {"status": "ok", "app_env": settings.app_env}
 
 
-def _extraer_campos_ecf(xml_bytes: bytes) -> tuple[str, str | None, str]:
+def _parse_ecf(xml_bytes: bytes) -> etree._Element:
     try:
-        root = etree.fromstring(xml_bytes)
+        return etree.fromstring(xml_bytes)
     except etree.XMLSyntaxError as exc:
         raise HTTPException(status_code=422, detail=f"XML mal formado: {exc}") from exc
+
+
+def _extraer_campos_ecf(root: etree._Element) -> tuple[str, str | None, str]:
     rnc_emisor = root.findtext(".//RNCEmisor")
     rnc_comprador = root.findtext(".//RNCComprador")
     encf = root.findtext(".//eNCF")
     if not rnc_emisor or not encf:
         raise HTTPException(status_code=422, detail="El e-CF no incluye RNCEmisor o eNCF")
     return rnc_emisor, rnc_comprador, encf
+
+
+def _separar_bienes_servicios(root: etree._Element) -> tuple[Decimal, Decimal]:
+    """Suma DetallesItems/Item por IndicadorBienoServicio (1=Bien, 2=Servicio)
+    -- el Formato 606 exige la proporción Bienes/Servicios por separado y
+    ningún e-CF la trae ya calculada."""
+    servicios = Decimal("0")
+    bienes = Decimal("0")
+    for item in root.findall(".//DetallesItems/Item"):
+        try:
+            monto = Decimal(item.findtext("MontoItem") or "0")
+        except InvalidOperation:
+            continue
+        if (item.findtext("IndicadorBienoServicio") or "") == "2":
+            servicios += monto
+        else:
+            bienes += monto
+    return servicios, bienes
+
+
+async def _registrar_compra_606_desde_ecf(
+    pool, root: etree._Element, rnc_emisor: str, encf: str
+) -> None:
+    """Best-effort: un e-CF con FechaEmision faltante/inválida simplemente no
+    se registra en compras606 (se puede agregar a mano luego) -- nunca debe
+    impedir que se devuelva el ARECF, que es la parte obligatoria."""
+    try:
+        fecha_emision = root.findtext(".//FechaEmision")
+        fecha_comprobante = fecha_dgii_a_aaaammdd(fecha_emision) if fecha_emision else None
+        if not fecha_comprobante:
+            logger.warning("e-CF %s sin FechaEmision válida, no se registra en compras606", encf)
+            return
+        ncf_modificado = root.findtext(".//InformacionReferencia/NCFModificado")
+        try:
+            itbis_facturado = Decimal(root.findtext(".//TotalITBIS") or "0")
+        except InvalidOperation:
+            itbis_facturado = Decimal("0")
+        servicios, bienes = _separar_bienes_servicios(root)
+        await registrar_compra_606(
+            pool,
+            origen="receptor_recepcion",
+            referencia_tipo="ecf_recibido",
+            referencia_id=None,
+            rnc_cedula=rnc_emisor,
+            ncf=encf,
+            ncf_modificado=ncf_modificado,
+            fecha_comprobante=fecha_comprobante,
+            monto_servicios=servicios,
+            monto_bienes=bienes,
+            itbis_facturado=itbis_facturado,
+        )
+    except Exception:
+        logger.exception("No se pudo registrar el e-CF %s en compras606", encf)
 
 
 def _verificar_bearer(authorization: str | None, credencial: CredencialFirma) -> None:
@@ -89,7 +152,8 @@ async def recibir_ecf(
         _verificar_bearer(authorization, credencial)
 
     xml_bytes = await xml.read()
-    rnc_emisor, rnc_comprador, encf = _extraer_campos_ecf(xml_bytes)
+    root = _parse_ecf(xml_bytes)
+    rnc_emisor, rnc_comprador, encf = _extraer_campos_ecf(root)
 
     if rnc_comprador and settings.emisor_rnc and rnc_comprador != settings.emisor_rnc:
         raise HTTPException(
@@ -110,5 +174,6 @@ async def recibir_ecf(
         encf=encf,
         estado="recibido",
     )
+    await _registrar_compra_606_desde_ecf(app.state.db_pool, root, rnc_emisor, encf)
 
     return Response(content=arecf_firmado, media_type="text/xml")

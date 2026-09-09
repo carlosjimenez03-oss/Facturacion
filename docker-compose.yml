@@ -157,6 +157,15 @@ services:
         APP_ENV: ${APP_ENV:-test}
     image: facturacion-electronica/receptor-aprobacion-comercial:${APP_ENV:-test}
 
+  formato-606:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/formato_606/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/formato-606:${APP_ENV:-test}
+
   frontend:
     restart: unless-stopped
     build:
@@ -165,4 +174,5 @@ services:
       args:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:8011}
         VITE_INVENTARIO_API_URL: ${VITE_INVENTARIO_API_URL:-http://localhost:8012}
+        VITE_FORMATO_606_API_URL: ${VITE_FORMATO_606_API_URL:-http://localhost:8016}
     image: facturacion-electronica/frontend:${APP_ENV:-test}

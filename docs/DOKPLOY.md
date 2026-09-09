@@ -3,8 +3,9 @@
 Este proyecto se despliega en [Dokploy](https://dokploy.com) como un único
 recurso tipo **Compose**, definido en
 [`docker-compose.dokploy.yml`](../docker-compose.dokploy.yml): los 11 módulos
-del catálogo DGII + `facturas-api` + `inventario-api` + el `frontend` (React)
-+ Postgres + PostgREST + pgAdmin.
+del catálogo DGII + `facturas-api` + `inventario-api` + los tres módulos de
+Receptor Electrónico + `formato-606` + el `frontend` (React) + Postgres +
+PostgREST + pgAdmin.
 
 > Este archivo es distinto de `docker-compose.yml` (+ overrides
 > `docker-compose.{test,qa,prod}.yml`), que son para **desarrollo local**
@@ -61,17 +62,18 @@ a donde Dokploy clona el repo en el servidor). Pasos:
 
 ## 4. Base de datos: Postgres + PostgREST + pgAdmin
 
-#### IMPORTANTE: en un servidor ya desplegado, aplicar `004_inventario.sql` y `005_facturas_items_inventario.sql` a mano
+#### IMPORTANTE: en un servidor ya desplegado, aplicar `004_inventario.sql`, `005_facturas_items_inventario.sql` y `006_compras606.sql` a mano
 
-Todo lo que esté en `db/init/*.sql` (incluyendo estos dos archivos nuevos) se
+Todo lo que esté en `db/init/*.sql` (incluyendo estos archivos nuevos) se
 corre **solo la primera vez** que arranca Postgres con un volumen de datos
 vacío (mecanismo estándar de la imagen oficial de Postgres,
 `docker-entrypoint-initdb.d`). Si ya tenías este proyecto desplegado antes de
-este cambio, el volumen de Postgres YA existe, así que estos dos archivos
+estos cambios, el volumen de Postgres YA existe, así que estos archivos
 nuevos **no se van a ejecutar solos** en el próximo redeploy -- `inventario-api`
-no va a poder arrancar (le va a faltar el esquema `inventario`) y
+no va a poder arrancar (le va a faltar el esquema `inventario`),
 `facturas-api` va a fallar al guardar/enviar facturas con productos
-vinculados (le va a faltar la columna `items_inventario`).
+vinculados (le va a faltar la columna `items_inventario`), y `formato-606`
+no va a poder arrancar (le va a faltar el esquema `compras606`).
 
 Antes de (o justo después de) desplegar esta versión, correr una sola vez,
 contra la base de datos de producción (vía pgAdmin, o `psql`/`docker exec`
@@ -79,10 +81,11 @@ directo al contenedor `postgres`), el contenido completo de:
 
 1. [`db/init/004_inventario.sql`](../db/init/004_inventario.sql)
 2. [`db/init/005_facturas_items_inventario.sql`](../db/init/005_facturas_items_inventario.sql)
+3. [`db/init/006_compras606.sql`](../db/init/006_compras606.sql)
 
 Son idempotentes (`CREATE ... IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`),
 así que correrlos de más no rompe nada -- solo importa correrlos al menos una
-vez antes de usar el módulo de inventario.
+vez antes de usar el módulo de inventario o el de Formato 606.
 
 - **Postgres** inicializa automáticamente el esquema `facturacion` (tabla
   `envios_dgii`) la primera vez que arranca, vía
@@ -109,6 +112,14 @@ vez antes de usar el módulo de inventario.
   `facturacion.facturas.items_inventario`
   ([`db/init/005_facturas_items_inventario.sql`](../db/init/005_facturas_items_inventario.sql)),
   ver "Inventario: reglas de negocio" más abajo.
+- `formato-606` (Compras de Bienes y Servicios, Norma General 07-2018/05-2019)
+  usa el esquema `compras606`
+  ([`db/init/006_compras606.sql`](../db/init/006_compras606.sql)), también de
+  forma obligatoria -- sin `DATABASE_URL` alcanzable, no arranca. `receptor-recepcion`
+  y `facturas-api` (para los tipos 41/43/47 autoemitidos) escriben ahí
+  directamente, de forma best-effort, cada e-CF que debe reportarse en el
+  606; `formato-606` solo lee/clasifica esos renglones y genera el TXT — ver
+  "Formato 606" más abajo y [`docs/dgii/FORMATO_606.md`](dgii/FORMATO_606.md).
 - **PostgREST** expone ese esquema como API REST de **solo lectura** (rol
   `web_anon`) en el puerto interno `3000`. No requiere autenticación por
   defecto — ver la nota de seguridad abajo.
@@ -218,6 +229,7 @@ puedes correr el rango de vuelta a 8000 editando `docker-compose.dokploy.yml`):
 | receptor-autenticacion | 8015 |
 | receptor-recepcion | 8016 |
 | receptor-aprobacion-comercial | 8017 |
+| formato-606 | 8018 |
 
 ## 6. Inventario: reglas de negocio
 
@@ -294,7 +306,31 @@ particular mientras el problema de red documentado siga sin resolverse.
 | `SEMILLA_TTL_SEGUNDOS` | `300` | receptor-autenticacion | Segundos que una semilla emitida por `GET /fe/autenticacion/api/semilla` sigue siendo válida antes de expirar si nadie la firma y la devuelve |
 | `REQUIERE_AUTENTICACION` | `true` | receptor-recepcion, receptor-aprobacion-comercial | Si `false`, no exige el header `Authorization: Bearer` (útil si no se despliega `receptor-autenticacion` -- el estándar hace la autenticación opcional en general) |
 
-## 8. Verificar el despliegue
+## 8. Formato 606: Compras de Bienes y Servicios
+
+`formato-606` (ver [`docs/dgii/FORMATO_606.md`](dgii/FORMATO_606.md)) es,
+igual que `facturas-api`/`inventario-api`, un módulo que **solo el propio
+frontend necesita alcanzar** -- no expone nada que otro contribuyente deba
+llamar. `frontend/nginx.conf` reenvía todo lo que llega a `/api-606/*` hacia
+`formato-606` por la red interna `facturacion`
+(`proxy_pass http://formato-606:8000/`), y `VITE_FORMATO_606_API_URL` tiene
+como default `/api-606` (mismo origen que el frontend). Por eso, igual que se
+documenta para `facturas-api`/`inventario-api` en la sección 4, **no le
+asignes un "Domain" de Dokploy** -- no lo necesita, y corre el mismo riesgo
+de perder la red `facturacion` interna en el siguiente redeploy.
+
+Renglones auto-poblados: `receptor-recepcion` escribe un renglón por cada
+e-CF recibido de un proveedor, y `facturas-api` escribe uno por cada
+comprobante autoemitido tipo 41 (Compras Electrónico), 43 (Gastos Menores
+Electrónico) o 47 (Pagos al Exterior Electrónico) que se envía exitosamente.
+Ambas escrituras son best-effort (nunca bloquean la respuesta del módulo de
+origen) e idempotentes (par `rnc_cedula` + `ncf` único). El usuario clasifica
+manualmente, desde la pantalla "Formato 606" del frontend, los campos que
+ningún e-CF trae (Tipo de Bienes y Servicios Comprados, Forma de Pago,
+retenciones) antes de poder generar el archivo `DGII_F_606_<RNC>_<periodo>.TXT`
+que se remite por la Oficina Virtual.
+
+## 9. Verificar el despliegue
 
 Tras el primer deploy, confirmar que cada módulo responde:
 
@@ -318,6 +354,17 @@ Si devuelve error de conexión a la base de datos, revisar primero que se haya
 aplicado la migración manual de la sección 4 ("IMPORTANTE: en un servidor ya
 desplegado, aplicar `004_inventario.sql`...") -- es la causa más probable en
 un servidor que ya tenía el proyecto desplegado antes de este módulo.
+
+`formato-606` responde igual:
+
+```bash
+curl https://<dominio-o-ip>:8018/health
+# {"status":"ok","app_env":"production"}
+```
+
+Mismo caso: si falla la conexión a la base de datos, confirmar que
+`006_compras606.sql` se haya aplicado a mano (sección 4) en un servidor que
+ya tenía el proyecto desplegado antes de este módulo.
 
 Los tres módulos de Receptor Electrónico también:
 

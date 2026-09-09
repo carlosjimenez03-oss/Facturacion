@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import pytest
 from fastapi.testclient import TestClient
 from lxml import etree
@@ -12,6 +14,21 @@ XML_ECF = (
     b"<Comprador><RNCComprador>101672919</RNCComprador></Comprador>"
     b"<IdDoc><eNCF>E310000000001</eNCF></IdDoc>"
     b"</Encabezado></ECF>"
+)
+
+XML_ECF_COMPLETO = (
+    b'<?xml version="1.0" encoding="UTF-8"?>'
+    b"<ECF><Encabezado>"
+    b"<Emisor><RNCEmisor>131234567</RNCEmisor><FechaEmision>15-01-2026</FechaEmision></Emisor>"
+    b"<Comprador><RNCComprador>101672919</RNCComprador></Comprador>"
+    b"<IdDoc><eNCF>E310000000001</eNCF></IdDoc>"
+    b"<Totales><TotalITBIS>180.00</TotalITBIS></Totales>"
+    b"</Encabezado>"
+    b"<DetallesItems>"
+    b"<Item><IndicadorBienoServicio>1</IndicadorBienoServicio><MontoItem>600.00</MontoItem></Item>"
+    b"<Item><IndicadorBienoServicio>2</IndicadorBienoServicio><MontoItem>400.00</MontoItem></Item>"
+    b"</DetallesItems>"
+    b"</ECF>"
 )
 
 
@@ -102,3 +119,65 @@ def test_recibir_ecf_dirigido_a_otro_rnc_falla_422(client, monkeypatch, credenci
     )
 
     assert respuesta.status_code == 422
+
+
+def test_recibir_ecf_registra_compra_606(client, monkeypatch, credencial_prueba):
+    llamadas = []
+
+    async def fake_registrar_compra_606(pool, **kwargs):
+        llamadas.append(kwargs)
+
+    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+    token = _token_valido(credencial_prueba)
+
+    respuesta = client.post(
+        "/fe/recepcion/api/ecf",
+        files={"xml": ("e-cf.xml", XML_ECF_COMPLETO, "text/xml")},
+        headers={"authorization": f"Bearer {token}"},
+    )
+
+    assert respuesta.status_code == 200
+    assert len(llamadas) == 1
+    llamada = llamadas[0]
+    assert llamada["origen"] == "receptor_recepcion"
+    assert llamada["rnc_cedula"] == "131234567"
+    assert llamada["ncf"] == "E310000000001"
+    assert llamada["fecha_comprobante"] == "20260115"
+    assert llamada["monto_bienes"] == Decimal("600.00")
+    assert llamada["monto_servicios"] == Decimal("400.00")
+    assert llamada["itbis_facturado"] == Decimal("180.00")
+
+
+def test_recibir_ecf_sin_fecha_emision_no_registra_compra_606(client, monkeypatch, credencial_prueba):
+    llamadas = []
+
+    async def fake_registrar_compra_606(pool, **kwargs):
+        llamadas.append(kwargs)
+
+    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+    token = _token_valido(credencial_prueba)
+
+    respuesta = client.post(
+        "/fe/recepcion/api/ecf",
+        files={"xml": ("e-cf.xml", XML_ECF, "text/xml")},  # sin FechaEmision
+        headers={"authorization": f"Bearer {token}"},
+    )
+
+    assert respuesta.status_code == 200
+    assert llamadas == []
+
+
+def test_recibir_ecf_ok_aunque_falle_registrar_compra_606(client, monkeypatch, credencial_prueba):
+    async def fake_registrar_compra_606(pool, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+    token = _token_valido(credencial_prueba)
+
+    respuesta = client.post(
+        "/fe/recepcion/api/ecf",
+        files={"xml": ("e-cf.xml", XML_ECF_COMPLETO, "text/xml")},
+        headers={"authorization": f"Bearer {token}"},
+    )
+
+    assert respuesta.status_code == 200

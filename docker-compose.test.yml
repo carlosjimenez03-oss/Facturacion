@@ -153,6 +153,15 @@ services:
     ports:
       - "8015:8000"
 
+  formato-606:
+    <<: *test-comun
+    volumes:
+      - ./services/formato_606/app:/app/app:ro
+      - ./libs:/app/libs:ro
+      - ./certs:/app/certs:ro
+    ports:
+      - "8016:8000"
+
   frontend:
     ports:
       - "5173:80"

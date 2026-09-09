@@ -34,6 +34,7 @@ jobs:
           - receptor_autenticacion
           - receptor_recepcion
           - receptor_aprobacion_comercial
+          - formato_606
     steps:
       - uses: actions/checkout@v4
 
