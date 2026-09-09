@@ -148,3 +148,59 @@ export interface EnviarResponse {
   track_id: string | null;
   error: string | null;
 }
+
+// --- Formato 606 (Compras de Bienes y Servicios) ------------------------
+
+export interface PeriodoResumen606 {
+  periodo: string;
+  total: number;
+  pendientes: number;
+}
+
+export interface Registro606 {
+  id: string;
+  periodo: string;
+  origen: "receptor_recepcion" | "auto_emitido" | "manual";
+  referencia_tipo: string | null;
+  referencia_id: string | null;
+
+  rnc_cedula: string;
+  tipo_id: number;
+  tipo_bienes_servicios: number | null;
+  ncf: string;
+  ncf_modificado: string | null;
+  fecha_comprobante: string;
+  fecha_pago: string | null;
+
+  monto_servicios: string;
+  monto_bienes: string;
+  monto_facturado: string;
+  itbis_facturado: string;
+  itbis_retenido: string;
+  itbis_proporcionalidad: string;
+  itbis_costo: string;
+  itbis_adelantar: string;
+  itbis_percibido: string;
+  tipo_retencion_isr: number | null;
+  monto_retencion_renta: string;
+  isr_percibido: string;
+  impuesto_selectivo_consumo: string;
+  otros_impuestos: string;
+  monto_propina_legal: string;
+  forma_pago: number | null;
+
+  creado_en: string;
+  actualizado_en: string;
+}
+
+export interface ErrorValidacion606 {
+  registro_id: string;
+  ncf: string;
+  mensaje: string;
+}
+
+export interface ValidacionResponse606 {
+  valido: boolean;
+  total_registros: number;
+  errores: ErrorValidacion606[];
+}

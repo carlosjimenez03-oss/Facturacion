@@ -4,6 +4,9 @@ import { CompraList } from "./components/CompraList";
 import { FacturaDetailPage } from "./components/FacturaDetailPage";
 import { FacturaForm } from "./components/FacturaForm";
 import { FacturaList } from "./components/FacturaList";
+import { Formato606Periodos } from "./components/Formato606Periodos";
+import { Formato606RegistroForm } from "./components/Formato606RegistroForm";
+import { Formato606RegistrosList } from "./components/Formato606RegistrosList";
 import { MovimientosList } from "./components/MovimientosList";
 import { ProductoForm } from "./components/ProductoForm";
 import { ProductoList } from "./components/ProductoList";
@@ -29,6 +32,7 @@ export default function App() {
             <Link to="/inventario/compras">Compras</Link>
             <Link to="/inventario/movimientos">Movimientos</Link>
             <Link to="/inventario/proveedores">Proveedores</Link>
+            <Link to="/formato-606">Formato 606</Link>
           </nav>
         </div>
       </header>
@@ -52,6 +56,14 @@ export default function App() {
           <Route path="/inventario/compras/:id" element={<CompraForm />} />
 
           <Route path="/inventario/movimientos" element={<MovimientosList />} />
+
+          <Route path="/formato-606" element={<Formato606Periodos />} />
+          <Route path="/formato-606/periodos/:periodo" element={<Formato606RegistrosList />} />
+          <Route
+            path="/formato-606/periodos/:periodo/registros/nuevo"
+            element={<Formato606RegistroForm />}
+          />
+          <Route path="/formato-606/registros/:id/editar" element={<Formato606RegistroForm />} />
         </Routes>
       </main>
     </div>

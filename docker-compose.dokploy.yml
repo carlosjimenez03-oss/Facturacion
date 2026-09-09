@@ -232,6 +232,19 @@ services:
       args: {APP_ENV: "${APP_ENV:-production}"}
     ports: ["8017:8000"]
 
+  # --- Formato 606 (Compras de Bienes y Servicios) ---
+  #
+  # Igual que facturas-api/inventario-api: solo se consume internamente vía
+  # el frontend (proxy nginx /api-606), no necesita ser alcanzable desde
+  # Internet ni tener un Domain de Dokploy propio.
+  formato-606:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/formato_606/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8018:8000"]
+
   # --- Frontend (React) ---
 
   frontend:
@@ -239,17 +252,18 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      # VITE_API_URL/VITE_INVENTARIO_API_URL se hornean en el bundle en
-      # build time. Default "/api" y "/api-inventario": nginx
-      # (frontend/nginx.conf) reenvía cada una a facturas-api/inventario-api
-      # por la red interna `facturacion` (mismo origen que el frontend --
-      # evita CORS y el problema de "mixed content" al llamar un backend
-      # http:// desde un frontend https://). No hace falta exponer ninguno
-      # de los dos servicios públicamente ni asignarles un dominio propio.
-      # Ver docs/DOKPLOY.md.
+      # VITE_API_URL/VITE_INVENTARIO_API_URL/VITE_FORMATO_606_API_URL se
+      # hornean en el bundle en build time. Default "/api", "/api-inventario"
+      # y "/api-606": nginx (frontend/nginx.conf) reenvía cada una a
+      # facturas-api/inventario-api/formato-606 por la red interna
+      # `facturacion` (mismo origen que el frontend -- evita CORS y el
+      # problema de "mixed content" al llamar un backend http:// desde un
+      # frontend https://). No hace falta exponer ninguno de estos servicios
+      # públicamente ni asignarles un dominio propio. Ver docs/DOKPLOY.md.
       args:
         VITE_API_URL: "${VITE_API_URL:-/api}"
         VITE_INVENTARIO_API_URL: "${VITE_INVENTARIO_API_URL:-/api-inventario}"
+        VITE_FORMATO_606_API_URL: "${VITE_FORMATO_606_API_URL:-/api-606}"
     ports: ["8013:80"]
     networks: [facturacion]
 

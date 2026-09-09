@@ -446,6 +446,132 @@ def test_enviar_factura_ok_no_falla_si_registrar_salida_falla(client, monkeypatc
     assert error
 
 
+@respx.mock
+def test_enviar_factura_tipo_41_registra_compra_606_con_rnc_comprador(client, monkeypatch):
+    """Tipo 41 (Compras Electrónico): en compras606 se reporta el RNC del
+    proveedor informal, que en este sistema queda en el campo `Comprador`
+    de la factura (ver docs/dgii/FORMATO_606.md)."""
+    factura = _factura(tipo_ecf=41, xml_generado="<ECF><Encabezado/></ECF>")
+    llamadas = []
+
+    async def fake_obtener(pool, fid):
+        return factura
+
+    async def fake_registrar(pool, fid, **kwargs):
+        return {**factura, **kwargs}
+
+    async def fake_registrar_compra_606(pool, **kwargs):
+        llamadas.append(kwargs)
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+    monkeypatch.setattr(repository, "registrar_resultado_envio", fake_registrar)
+    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+
+    respx.post(f"{main.settings.recepcion_service_url}/ecf").mock(
+        return_value=Response(200, json={"trackId": "track-abc"})
+    )
+
+    response = client.post(f"/facturas/{factura['id']}/enviar")
+
+    assert response.status_code == 200
+    assert len(llamadas) == 1
+    assert llamadas[0]["origen"] == "auto_emitido"
+    assert llamadas[0]["rnc_cedula"] == "101672919"  # RNCComprador de la factura
+    assert llamadas[0]["referencia_tipo"] == "factura"
+    assert llamadas[0]["referencia_id"] == factura["id"]
+    assert llamadas[0]["monto_bienes"] == 1000  # item con IndicadorBienoServicio="1"
+    assert llamadas[0]["fecha_comprobante"] == "20260902"  # de FechaEmision "02-09-2026"
+
+
+@respx.mock
+def test_enviar_factura_tipo_43_registra_compra_606_con_rnc_propio(client, monkeypatch):
+    """Tipo 43 (Gastos Menores): sin proveedor identificado en el XSD, se
+    reporta el RNC del propio encabezado (regla explícita del PDF oficial)."""
+    datos = _factura()["datos"]
+    del datos["Encabezado"]["Comprador"]  # eCF_43.xsd no tiene sección Comprador
+    factura = _factura(tipo_ecf=43, xml_generado="<ECF><Encabezado/></ECF>", datos=datos)
+    llamadas = []
+
+    async def fake_obtener(pool, fid):
+        return factura
+
+    async def fake_registrar(pool, fid, **kwargs):
+        return {**factura, **kwargs}
+
+    async def fake_registrar_compra_606(pool, **kwargs):
+        llamadas.append(kwargs)
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+    monkeypatch.setattr(repository, "registrar_resultado_envio", fake_registrar)
+    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+
+    respx.post(f"{main.settings.recepcion_service_url}/ecf").mock(
+        return_value=Response(200, json={"trackId": "track-abc"})
+    )
+
+    response = client.post(f"/facturas/{factura['id']}/enviar")
+
+    assert response.status_code == 200
+    assert len(llamadas) == 1
+    assert llamadas[0]["rnc_cedula"] == main.settings.emisor_rnc
+
+
+@respx.mock
+def test_enviar_factura_tipo_31_no_registra_compra_606(client, monkeypatch):
+    """Una venta normal (tipo 31) no forma parte del Formato 606 (que es de
+    COMPRAS, no de ventas)."""
+    factura = _factura(tipo_ecf=31, xml_generado="<ECF><Encabezado/></ECF>")
+    llamadas = []
+
+    async def fake_obtener(pool, fid):
+        return factura
+
+    async def fake_registrar(pool, fid, **kwargs):
+        return {**factura, **kwargs}
+
+    async def fake_registrar_compra_606(pool, **kwargs):
+        llamadas.append(kwargs)
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+    monkeypatch.setattr(repository, "registrar_resultado_envio", fake_registrar)
+    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+
+    respx.post(f"{main.settings.recepcion_service_url}/ecf").mock(
+        return_value=Response(200, json={"trackId": "track-abc"})
+    )
+
+    response = client.post(f"/facturas/{factura['id']}/enviar")
+
+    assert response.status_code == 200
+    assert llamadas == []
+
+
+@respx.mock
+def test_enviar_factura_ok_no_falla_si_registrar_compra_606_falla(client, monkeypatch):
+    factura = _factura(tipo_ecf=41, xml_generado="<ECF><Encabezado/></ECF>")
+
+    async def fake_obtener(pool, fid):
+        return factura
+
+    async def fake_registrar(pool, fid, **kwargs):
+        return {**factura, **kwargs}
+
+    async def fake_registrar_compra_606(pool, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+    monkeypatch.setattr(repository, "registrar_resultado_envio", fake_registrar)
+    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+
+    respx.post(f"{main.settings.recepcion_service_url}/ecf").mock(
+        return_value=Response(200, json={"trackId": "track-abc"})
+    )
+
+    response = client.post(f"/facturas/{factura['id']}/enviar")
+
+    assert response.status_code == 200
+
+
 def test_crear_factura_serializa_datetime_reales(client, monkeypatch):
     """asyncpg devuelve datetime.datetime real (no str) para creado_en/actualizado_en."""
     ahora = datetime.now(timezone.utc)

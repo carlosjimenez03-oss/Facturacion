@@ -60,5 +60,8 @@ services:
   receptor-aprobacion-comercial:
     <<: *qa-comun
     ports: ["8015:8000"]
+  formato-606:
+    <<: *qa-comun
+    ports: ["8016:8000"]
   frontend:
     ports: ["5173:80"]
