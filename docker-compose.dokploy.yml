@@ -1,9 +1,10 @@
 # Despliegue único para Dokploy: los 11 módulos de facturación electrónica +
-# facturas-api + inventario-api + frontend + Postgres + PostgREST + pgAdmin,
-# en un solo archivo (sin encadenar -f -f como en docker-compose.yml +
-# overrides, pensado para desarrollo local).
+# facturas-api + inventario-api + los 3 módulos de Receptor Electrónico +
+# frontend + Postgres + PostgREST + pgAdmin, en un solo archivo (sin
+# encadenar -f -f como en docker-compose.yml + overrides, pensado para
+# desarrollo local).
 #
-# Puertos de host 8001-8014 (no 8000-8013): se corrieron todos +1 porque en
+# Puertos de host 8001-8017 (no 8000-8016): se corrieron todos +1 porque en
 # despliegues reales del servidor Dokploy es común que el puerto 8000 ya
 # esté tomado por otro servicio del mismo host. Ver docs/DOKPLOY.md.
 #
@@ -195,6 +196,41 @@ services:
       dockerfile: services/inventario_api/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
     ports: ["8014:8000"]
+
+  # --- Receptor Electrónico (autenticación, recepción, aprobación comercial) ---
+  #
+  # A diferencia de facturas-api/inventario-api, estos SÍ deben ser
+  # alcanzables por otros contribuyentes desde Internet (así lo exige el
+  # estándar: SSL, "puertos de red tradicionales" -- ver
+  # docs/dgii/EMISORES_ELECTRONICOS.md). Publican su puerto al host
+  # (ports, igual que los demás módulos DGII) para poder alcanzarlos por
+  # IP:puerto directo o vía un reverse proxy externo -- ver la nota
+  # IMPORTANTE sobre exposición pública en docs/DOKPLOY.md antes de
+  # asignarles un Domain de Dokploy (mismo riesgo de red ya documentado
+  # para facturas-api).
+  receptor-autenticacion:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/receptor_autenticacion/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8015:8000"]
+
+  receptor-recepcion:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/receptor_recepcion/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8016:8000"]
+
+  receptor-aprobacion-comercial:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/receptor_aprobacion_comercial/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8017:8000"]
 
   # --- Frontend (React) ---
 

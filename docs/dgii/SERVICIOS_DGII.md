@@ -143,10 +143,13 @@ Igual al anterior pero para Resúmenes de Factura de Consumo (< RD$250,000.00).
 Simula ser otro contribuyente para poder probar la interacción emisor↔receptor
 en Pre-Certificación (autenticarse, recibir y enviar comprobantes/aprobaciones
 como si fuera la contraparte). Documentado parcialmente en este PDF; el
-endpoint completo (`EmisionComprobantes`, `Consulta de acuse de recibo`,
-`RecepcioneCF`) vive en el documento separado **"Descripción Técnica
-Servicios Emisores Electrónicos"** (no disponible aún — solicitar si se
-necesita implementar esta simulación).
+estándar completo de los servicios que ESTE contribuyente debe exponer para
+actuar como Receptor Electrónico (autenticación, recepción, aprobación
+comercial) vive en el documento separado **"Descripción Técnica Servicios
+Emisores Electrónicos"**, implementado en
+[`docs/dgii/EMISORES_ELECTRONICOS.md`](EMISORES_ELECTRONICOS.md) y en los
+módulos `services/receptor_autenticacion`, `services/receptor_recepcion` y
+`services/receptor_aprobacion_comercial`.
 
 - Base: `https://ecf.dgii.gov.do/testecf/emisorreceptor`
 - `GET /fe/autenticacion/api/semilla` → XML semilla (igual formato que #1)

@@ -126,6 +126,33 @@ services:
     ports:
       - "8012:8000"
 
+  receptor-autenticacion:
+    <<: *test-comun
+    volumes:
+      - ./services/receptor_autenticacion/app:/app/app:ro
+      - ./libs:/app/libs:ro
+      - ./certs:/app/certs:ro
+    ports:
+      - "8013:8000"
+
+  receptor-recepcion:
+    <<: *test-comun
+    volumes:
+      - ./services/receptor_recepcion/app:/app/app:ro
+      - ./libs:/app/libs:ro
+      - ./certs:/app/certs:ro
+    ports:
+      - "8014:8000"
+
+  receptor-aprobacion-comercial:
+    <<: *test-comun
+    volumes:
+      - ./services/receptor_aprobacion_comercial/app:/app/app:ro
+      - ./libs:/app/libs:ro
+      - ./certs:/app/certs:ro
+    ports:
+      - "8015:8000"
+
   frontend:
     ports:
       - "5173:80"

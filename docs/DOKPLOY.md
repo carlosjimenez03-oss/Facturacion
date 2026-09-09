@@ -215,6 +215,9 @@ puedes correr el rango de vuelta a 8000 editando `docker-compose.dokploy.yml`):
 | facturas-api | 8012 |
 | inventario-api | 8014 |
 | frontend | 8013 (nginx sirve en el 80 del contenedor) |
+| receptor-autenticacion | 8015 |
+| receptor-recepcion | 8016 |
+| receptor-aprobacion-comercial | 8017 |
 
 ## 6. Inventario: reglas de negocio
 
@@ -251,7 +254,47 @@ El módulo de inventario (`inventario-api` + las pantallas "Productos",
   `inventario_error` con el detalle) para poder detectarlo y correr la
   sincronización manualmente después.
 
-## 7. Verificar el despliegue
+## 7. Receptor Electrónico: exposición pública
+
+`receptor-autenticacion`, `receptor-recepcion` y `receptor-aprobacion-comercial`
+(ver [`docs/dgii/EMISORES_ELECTRONICOS.md`](dgii/EMISORES_ELECTRONICOS.md))
+son los servicios que ESTE contribuyente expone para que **otros**
+contribuyentes le envíen e-CF y aprobaciones comerciales cuando actúa como
+receptor. A diferencia de `facturas-api`/`inventario-api` (que solo el
+propio frontend necesita alcanzar, por eso viven detrás del proxy
+same-origin de nginx sin URL pública propia), estos tres **sí deben ser
+alcanzables desde Internet por terceros** -- el estándar oficial exige SSL y
+"puertos de red tradicionales" (443), no un puerto arbitrario como 8015.
+
+#### IMPORTANTE: no asignarles un "Domain" de Dokploy en este servidor
+
+Por la misma causa raíz ya documentada en la sección 4 ("no asignar un
+'Domain' de Dokploy a `facturas-api` ni a `inventario-api`"): en este
+servidor, la función "Domains" de Dokploy depende de un Traefik que no está
+desplegado de forma confiable (coexiste con otro reverse proxy en 80/443), y
+asignarle un Domain a un servicio del Compose puede dejarlo sin la red
+`facturacion` interna en el siguiente redeploy. Ese riesgo aplica igual aquí.
+
+**Recomendado:** igual que se documenta para pgAdmin en la sección 4, usar
+un Cloudflare Tunnel (u otro reverse proxy externo, fuera de Dokploy)
+apuntando directo a `http://<IP-del-servidor>:8015` (autenticación),
+`:8016` (recepción) y `:8017` (aprobación comercial), cada uno con su propio
+hostname HTTPS en el puerto 443 estándar. Eso satisface el requisito de SSL
++ puerto tradicional sin depender del Traefik de Dokploy.
+
+Si el servidor no tiene el conflicto de puertos que motivó el uso de un
+Traefik externo, asignar un Domain de Dokploy normalmente a estos tres
+servicios es la alternativa más simple -- solo evitarlo en este servidor en
+particular mientras el problema de red documentado siga sin resolverse.
+
+### Variables adicionales de estos tres módulos
+
+| Variable | Default | Aplica a | Descripción |
+|---|---|---|---|
+| `SEMILLA_TTL_SEGUNDOS` | `300` | receptor-autenticacion | Segundos que una semilla emitida por `GET /fe/autenticacion/api/semilla` sigue siendo válida antes de expirar si nadie la firma y la devuelve |
+| `REQUIERE_AUTENTICACION` | `true` | receptor-recepcion, receptor-aprobacion-comercial | Si `false`, no exige el header `Authorization: Bearer` (útil si no se despliega `receptor-autenticacion` -- el estándar hace la autenticación opcional en general) |
+
+## 8. Verificar el despliegue
 
 Tras el primer deploy, confirmar que cada módulo responde:
 
@@ -275,6 +318,35 @@ Si devuelve error de conexión a la base de datos, revisar primero que se haya
 aplicado la migración manual de la sección 4 ("IMPORTANTE: en un servidor ya
 desplegado, aplicar `004_inventario.sql`...") -- es la causa más probable en
 un servidor que ya tenía el proyecto desplegado antes de este módulo.
+
+Los tres módulos de Receptor Electrónico también:
+
+```bash
+curl https://<dominio-o-ip>:8015/health   # receptor-autenticacion
+curl https://<dominio-o-ip>:8016/health   # receptor-recepcion
+curl https://<dominio-o-ip>:8017/health   # receptor-aprobacion-comercial
+```
+
+Para probar el flujo completo de autenticación (opcional, solo si se
+despliega `receptor-autenticacion`):
+
+```bash
+# 1) Pedir una semilla
+curl https://<dominio-o-ip>:8015/fe/autenticacion/api/semilla -o semilla.xml
+
+# 2) Firmarla con CUALQUIER certificado de prueba (el propio, por ejemplo) y
+#    canjearla por un token -- ver libs/ecf_common/auth/signing.py::firmar_xml
+#    para firmar un XML desde Python, o cualquier herramienta de firma XML-DSig.
+curl -X POST https://<dominio-o-ip>:8015/fe/autenticacion/api/validacioncertificado \
+  -H 'accept: application/json' \
+  -F 'xml=@semilla-firmada.xml;type=text/xml'
+# {"token": "...", "expira": "...", "expedido": "..."}
+```
+
+Luego usar ese `token` como `Authorization: Bearer <token>` al enviar un e-CF
+de prueba a `POST https://<dominio-o-ip>:8016/fe/recepcion/api/ecf` (campo
+`xml`) y confirmar que responde con un ARECF firmado (`Content-Type: text/xml`,
+contiene un `<Signature>`).
 
 Para el frontend: abrir `http://<dominio-o-ip>:8013`, crear al menos un
 producto en Inventario > Productos, luego crear una factura de prueba
