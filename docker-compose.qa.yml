@@ -51,5 +51,14 @@ services:
   inventario-api:
     <<: *qa-comun
     ports: ["8012:8000"]
+  receptor-autenticacion:
+    <<: *qa-comun
+    ports: ["8013:8000"]
+  receptor-recepcion:
+    <<: *qa-comun
+    ports: ["8014:8000"]
+  receptor-aprobacion-comercial:
+    <<: *qa-comun
+    ports: ["8015:8000"]
   frontend:
     ports: ["5173:80"]

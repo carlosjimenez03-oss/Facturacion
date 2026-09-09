@@ -130,6 +130,33 @@ services:
         APP_ENV: ${APP_ENV:-test}
     image: facturacion-electronica/inventario-api:${APP_ENV:-test}
 
+  receptor-autenticacion:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/receptor_autenticacion/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/receptor-autenticacion:${APP_ENV:-test}
+
+  receptor-recepcion:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/receptor_recepcion/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/receptor-recepcion:${APP_ENV:-test}
+
+  receptor-aprobacion-comercial:
+    <<: *comun
+    build:
+      context: .
+      dockerfile: services/receptor_aprobacion_comercial/Dockerfile
+      args:
+        APP_ENV: ${APP_ENV:-test}
+    image: facturacion-electronica/receptor-aprobacion-comercial:${APP_ENV:-test}
+
   frontend:
     restart: unless-stopped
     build:

@@ -31,6 +31,9 @@ jobs:
           - consulta_timbre
           - facturas_api
           - inventario_api
+          - receptor_autenticacion
+          - receptor_recepcion
+          - receptor_aprobacion_comercial
     steps:
       - uses: actions/checkout@v4
 

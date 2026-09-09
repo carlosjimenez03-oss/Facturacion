@@ -16,9 +16,16 @@ from cryptography.x509.oid import NameOID
 from libs.ecf_common.auth.signing import CredencialFirma
 
 
-def _generar_par_llave_certificado():
+def _generar_par_llave_certificado(serial_number: str | None = None):
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Emisor de Prueba")])
+    atributos = [x509.NameAttribute(NameOID.COMMON_NAME, "Emisor de Prueba")]
+    if serial_number is not None:
+        # El campo "SN" (serialNumber) del certificado debe corresponder al
+        # RNC/Cédula/Pasaporte del propietario (ver docs/dgii/EMISORES_ELECTRONICOS.md,
+        # "Firmado de XML") -- lo usan los tests de los servicios receptor_*
+        # que extraen el RNC del certificado del llamante.
+        atributos.append(x509.NameAttribute(NameOID.SERIAL_NUMBER, serial_number))
+    name = x509.Name(atributos)
     ahora = datetime.datetime.now(datetime.timezone.utc)
     cert = (
         x509.CertificateBuilder()
@@ -37,6 +44,18 @@ def _generar_par_llave_certificado():
 def credencial_prueba() -> CredencialFirma:
     key, cert = _generar_par_llave_certificado()
     return CredencialFirma(private_key=key, certificate=cert)
+
+
+@pytest.fixture
+def credencial_con_rnc():
+    """Factory: `credencial_con_rnc("131234567")` -> CredencialFirma cuyo
+    certificado lleva ese valor en el campo SN (serialNumber) del Subject."""
+
+    def _crear(rnc: str) -> CredencialFirma:
+        key, cert = _generar_par_llave_certificado(serial_number=rnc)
+        return CredencialFirma(private_key=key, certificate=cert)
+
+    return _crear
 
 
 @pytest.fixture
