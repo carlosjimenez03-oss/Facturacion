@@ -78,6 +78,10 @@ export const api = {
 
   enviar: (id: string) => request<EnviarResponse>(`/facturas/${id}/enviar`, { method: "POST" }),
 
+  /** Consulta a la DGII (por trackId) el resultado de una factura enviada y lo aplica. */
+  actualizarEstado: (id: string) =>
+    request<FacturaDetalle>(`/facturas/${id}/actualizar-estado`, { method: "POST" }),
+
   representacionImpresaUrl: (id: string) => `${API_URL}/facturas/${id}/representacion-impresa`,
 };
 

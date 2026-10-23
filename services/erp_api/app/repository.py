@@ -83,11 +83,11 @@ def _con_id_str(fila: asyncpg.Record) -> dict[str, Any]:
 # --- Expresiones SQL sobre facturacion.facturas ---------------------------------------------------------
 
 def _fecha_dgii(ruta: str) -> str:
-    """Fecha DD-MM-YYYY del e-CF -> date (NULL si falta o no tiene ese formato)."""
-    return (
-        f"CASE WHEN d #>> '{ruta}' ~ '^[0-9]{{2}}-[0-9]{{2}}-[0-9]{{4}}$' "
-        f"THEN to_date(d #>> '{ruta}', 'DD-MM-YYYY') END"
-    )
+    """Fecha DD-MM-YYYY del e-CF -> date (NULL si falta, no tiene ese formato
+    o no existe, p. ej. 31-02-2026). `ventas.fecha_dgii_segura` la crea
+    `app.migraciones` (DDL_FUNCIONES): un `to_date` directo lanzaría un error
+    con una fecha imposible y haría fallar la consulta entera."""
+    return f"ventas.fecha_dgii_segura(d #>> '{ruta}')"
 
 
 def _monto_dgii(ruta: str) -> str:

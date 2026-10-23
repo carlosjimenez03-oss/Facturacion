@@ -239,3 +239,93 @@ async def registrar_sincronizacion_inventario(
             sincronizado,
             error,
         )
+
+
+# Estados desde los que el resultado de la consulta por trackId puede mover
+# la factura: 'enviado' (lo normal), 'error' con trackId (la DGII sí recibió
+# el comprobante) y 'aceptado' condicional (la DGII puede reclasificarlo).
+# Cualquier otro estado ya es definitivo y nunca se pisa. Debe coincidir con
+# `app.estado_dgii.admite_actualizacion`.
+_CONDICION_ACTUALIZABLE = """
+    track_id IS NOT NULL
+    AND (
+        estado IN ('enviado', 'error')
+        OR (estado = 'aceptado' AND dgii_estado = 'Aceptado Condicional')
+    )
+"""
+
+
+async def registrar_resultado_consulta(
+    pool: asyncpg.Pool,
+    factura_id: uuid.UUID,
+    *,
+    track_id: str,
+    estado: str,
+    dgii_estado: str | None,
+    dgii_codigo: str | None,
+    consulta: dict[str, Any],
+    error: str | None,
+) -> dict[str, Any] | None:
+    """Aplica el resultado de la DGII (consulta por trackId) a la factura.
+
+    Solo actualiza si la fila sigue en un estado actualizable y con el mismo
+    trackId consultado -- si otra petición (el botón del frontend, la tarea
+    de fondo o la consulta inmediata tras enviar) ya la movió a un estado
+    definitivo, no se pisa nada y se devuelve None. Repetir la misma consulta
+    deja la factura igual (idempotente).
+
+    `dgii_respuesta` pasa a ser la respuesta de la consulta (es lo que lee el
+    panel de rechazo del frontend: `mensajes`, `secuenciaUtilizada`), y la
+    respuesta original del envío (`recepcion`: trackId/error/mensaje) se
+    conserva bajo la clave `envio` -- también tras consultas sucesivas.
+    """
+    async with pool.acquire() as conn:
+        fila = await conn.fetchrow(
+            f"""
+            UPDATE facturacion.facturas
+            SET estado = $3, dgii_estado = $4, dgii_codigo = $5,
+                dgii_respuesta = $6::jsonb || jsonb_build_object(
+                    'envio',
+                    CASE WHEN jsonb_typeof(dgii_respuesta) = 'object' AND dgii_respuesta ? 'envio'
+                         THEN dgii_respuesta -> 'envio'
+                         ELSE dgii_respuesta
+                    END
+                ),
+                error = $7, actualizado_en = now()
+            WHERE id = $1 AND track_id = $2 AND {_CONDICION_ACTUALIZABLE}
+            RETURNING *
+            """,
+            factura_id,
+            track_id,
+            estado,
+            dgii_estado,
+            dgii_codigo,
+            json.dumps(consulta),
+            error,
+        )
+    return _fila_a_dict(fila) if fila is not None else None
+
+
+async def listar_pendientes_de_resultado(
+    pool: asyncpg.Pool, *, limite: int = 50, dias: int = 30
+) -> list[dict[str, Any]]:
+    """Facturas en 'enviado' con trackId enviadas en los últimos `dias`, las
+    más antiguas primero -- las que la tarea de fondo de `app.estado_dgii`
+    le consulta a la DGII. `actualizado_en` marca el envío: mientras la DGII
+    responde "En Proceso" la factura no se toca."""
+    async with pool.acquire() as conn:
+        filas = await conn.fetch(
+            """
+            SELECT id, tipo_ecf, ambiente, rnc_emisor, encf, estado,
+                   track_id, dgii_estado, dgii_codigo, error, creado_en, actualizado_en
+            FROM facturacion.facturas
+            WHERE estado = 'enviado'
+              AND track_id IS NOT NULL
+              AND actualizado_en >= now() - make_interval(days => $2)
+            ORDER BY actualizado_en ASC
+            LIMIT $1
+            """,
+            limite,
+            dias,
+        )
+    return [dict(fila) | {"id": str(fila["id"])} for fila in filas]

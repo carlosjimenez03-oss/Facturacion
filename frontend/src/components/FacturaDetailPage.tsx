@@ -56,7 +56,7 @@ export function FacturaDetailPage() {
   const [cargando, setCargando] = useState(true);
   const [errorCarga, setErrorCarga] = useState<string | null>(null);
   const [contacto, setContacto] = useState<Cliente | null>(null);
-  const [procesando, setProcesando] = useState<"" | "emitir" | "pdf" | "eliminar">("");
+  const [procesando, setProcesando] = useState<"" | "emitir" | "pdf" | "eliminar" | "estado">("");
   const [confirmar, setConfirmar] = useState<"emitir" | "eliminar" | null>(null);
   const [erroresXml, setErroresXml] = useState<string[]>([]);
   const [errorAccion, setErrorAccion] = useState<string | null>(null);
@@ -182,10 +182,15 @@ export function FacturaDetailPage() {
         return;
       }
       const envio = await api.enviar(f.id);
+      // facturas-api consulta el resultado justo después de enviar: puede volver ya aceptada o rechazada.
       setAviso(
-        envio.track_id
-          ? { texto: "Comprobante enviado a la DGII", detalle: `Track ID ${envio.track_id}` }
-          : { texto: "La DGII no recibió el comprobante", detalle: envio.error ?? undefined, tono: "error" },
+        !envio.track_id
+          ? { texto: "La DGII no recibió el comprobante", detalle: envio.error ?? undefined, tono: "error" }
+          : envio.estado === "aceptado"
+            ? { texto: "Comprobante aceptado por la DGII", detalle: `Track ID ${envio.track_id}` }
+            : envio.estado === "rechazado"
+              ? { texto: "La DGII rechazó el comprobante", detalle: envio.error ?? undefined, tono: "error" }
+              : { texto: "Comprobante enviado a la DGII", detalle: `En proceso de validación · Track ID ${envio.track_id}` },
       );
     } catch (err) {
       setErrorAccion(mensajeError(err));
@@ -193,6 +198,28 @@ export function FacturaDetailPage() {
       setProcesando("");
       recargar();
       cargar();
+    }
+  }
+
+  /** Pregunta a la DGII (por trackId) si ya validó el comprobante. */
+  async function actualizarEstado() {
+    setErrorAccion(null);
+    setProcesando("estado");
+    try {
+      const actualizada = await api.actualizarEstado(f.id);
+      setFactura(actualizada);
+      setAviso(
+        actualizada.estado === "aceptado"
+          ? { texto: "Comprobante aceptado por la DGII", detalle: actualizada.dgii_estado ?? undefined }
+          : actualizada.estado === "rechazado"
+            ? { texto: "La DGII rechazó el comprobante", detalle: actualizada.error ?? undefined, tono: "error" }
+            : { texto: "Sigue en proceso en la DGII", detalle: "Vuelva a consultar en unos minutos; también se actualiza sola.", tono: "aviso" },
+      );
+      if (actualizada.estado !== f.estado) recargar();
+    } catch (err) {
+      setAviso({ texto: "No se pudo consultar el estado en la DGII", detalle: mensajeError(err), tono: "error" });
+    } finally {
+      setProcesando("");
     }
   }
 
@@ -284,6 +311,11 @@ export function FacturaDetailPage() {
             </>
           ) : (
             <>
+              {f.estado === "enviado" && f.track_id && (
+                <button type="button" className="btn btn-o btn-sm" onClick={actualizarEstado} disabled={procesando !== ""}>
+                  {procesando === "estado" ? "Consultando…" : "Actualizar estado DGII"}
+                </button>
+              )}
               <button type="button" className="btn btn-o btn-sm" onClick={verPdf} disabled={procesando !== "" || !f.xml_generado}>
                 {procesando === "pdf" ? "Preparando PDF…" : "PDF"}
               </button>

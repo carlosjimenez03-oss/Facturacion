@@ -79,13 +79,21 @@ async def anular_rango(
         cliente = AnulacionDGIIClient(settings.dgii_environment)
         respuesta = await cliente.anular_rango(xml_firmado, nombre_archivo, token.token)
 
+        # La DGII ya aplicó la anulación: una sorpresa al leer el detalle del
+        # XML nunca debe convertir esto en un 500 sin fila de auditoría.
+        try:
+            detalle = extraer_detalle_anulacion(xml_bytes)
+        except Exception:
+            logger.exception("No se pudo extraer el detalle de la anulación para la auditoría")
+            detalle = {}
+
         await registrar_envio(
             app.state.db_pool,
             modulo="anulacion_encf",
             ambiente=settings.app_env,
             rnc_emisor=settings.emisor_rnc,
             codigo=respuesta.codigo,
-            respuesta=respuesta.model_dump() | extraer_detalle_anulacion(xml_bytes),
+            respuesta=respuesta.model_dump() | detalle,
         )
         return respuesta
     except DGIIServiceError as exc:

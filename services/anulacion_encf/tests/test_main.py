@@ -65,6 +65,34 @@ def test_anular_rango_ok(client, monkeypatch, credencial_prueba):
     assert _fake_registrar_envio.llamadas[0]["respuesta"]["rangos"] == []
 
 
+def test_anular_rango_ok_aunque_falle_el_detalle(client, monkeypatch, credencial_prueba):
+    """La DGII ya aplicó la anulación: un fallo al leer el detalle del XML
+    no debe convertirse en un 500 ni dejar la anulación sin auditar."""
+    monkeypatch.setattr(main, "cargar_certificado_p12", lambda path, password: credencial_prueba)
+    monkeypatch.setattr(main, "firmar_xml", lambda xml_bytes, credencial: b"<ANECF>firmado</ANECF>")
+    monkeypatch.setattr(main, "_token_provider", FakeTokenProvider())
+
+    class FakeDGIIClient:
+        def __init__(self, ambiente):
+            pass
+
+        async def anular_rango(self, xml_firmado, nombre_archivo, token):
+            return AnulacionRangoResponse(rnc="101672919", codigo="1")
+
+    def detalle_que_falla(xml_bytes):
+        raise ValueError("estructura inesperada")
+
+    monkeypatch.setattr(main, "AnulacionDGIIClient", FakeDGIIClient)
+    monkeypatch.setattr(main, "extraer_detalle_anulacion", detalle_que_falla)
+
+    response = client.post("/anulacion", files={"xml": ("anulacion.xml", io.BytesIO(b"<ANECF/>"), "text/xml")})
+
+    assert response.status_code == 200
+    assert len(_fake_registrar_envio.llamadas) == 1
+    assert _fake_registrar_envio.llamadas[0]["codigo"] == "1"
+    assert "rangos" not in _fake_registrar_envio.llamadas[0]["respuesta"]
+
+
 def test_anular_rango_error_dgii(client, monkeypatch, credencial_prueba):
     monkeypatch.setattr(main, "cargar_certificado_p12", lambda path, password: credencial_prueba)
     monkeypatch.setattr(main, "firmar_xml", lambda xml_bytes, credencial: b"<ANECF>firmado</ANECF>")

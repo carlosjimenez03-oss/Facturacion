@@ -17,6 +17,18 @@ class FacturasApiSettings(EcfBaseSettings):
     # `app.inventario_client`.
     inventario_api_url: str = "http://inventario-api:8000"
 
+    # URL interna (red Docker) de `consulta_resultado`, a la que este
+    # servicio le pregunta el resultado de la validación de la DGII de cada
+    # e-CF enviado (por su trackId) para pasarlo de 'enviado' a 'aceptado' o
+    # 'rechazado'. Ver `app.estado_dgii`.
+    consulta_resultado_url: str = "http://consulta-resultado:8000"
+
+    # Cada cuántos segundos la tarea de fondo (iniciada en el lifespan)
+    # consulta el resultado de las facturas que siguen en 'enviado'. 0 la
+    # desactiva (solo queda la consulta inmediata tras enviar y el botón
+    # "Actualizar estado DGII" del frontend).
+    sincronizar_estado_cada_segundos: int = 120
+
 
 @lru_cache
 def get_settings() -> FacturasApiSettings:

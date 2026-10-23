@@ -17,6 +17,11 @@ fechas como `YYYY-MM-DD` y marcas de tiempo en ISO 8601.
   Supabase no hace falta correr nada a mano.
   [`db/init/007_ventas.sql`](../db/init/007_ventas.sql) es el mismo DDL, para
   el Postgres local de desarrollo (un test verifica que no se separen).
+- Las fechas DD-MM-AAAA de los e-CF (FechaEmision, FechaLimitePago) se leen
+  con `ventas.fecha_dgii_segura(text)` (mismas migraciones, `DDL_FUNCIONES`;
+  copia en [`db/init/009_fecha_dgii_segura.sql`](../db/init/009_fecha_dgii_segura.sql)):
+  devuelve NULL para una fecha imposible como `31-02-2026` en vez de hacer
+  fallar la consulta entera como haría `to_date`.
 - **Solo lee** `facturacion.facturas` (de `facturas-api`) -- nunca la
   modifica. De `datos` (columna `json`) toma TipoPago, FechaEmision,
   FechaLimitePago, comprador, MontoTotal e InformacionReferencia.

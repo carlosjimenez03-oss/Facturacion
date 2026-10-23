@@ -56,7 +56,11 @@ function pasos(f: FacturaDetalle): Paso[] {
       clase: "mal",
     });
   } else if (enviada) {
-    lista.push({ titulo: "En proceso", detalle: "La DGII está validando la estructura, la firma y los datos del comprador", clase: "esp" });
+    lista.push({
+      titulo: "En proceso en la DGII",
+      detalle: "La DGII está validando la estructura, la firma y los datos del comprador. El estado se actualiza solo cada pocos minutos.",
+      clase: "esp",
+    });
   } else {
     lista.push({ titulo: "Respuesta de la DGII", clase: "pend" });
   }

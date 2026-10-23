@@ -73,12 +73,20 @@ aparte. Instalación, migración de los datos existentes, configuración de
   `anulacion_encf` registran en `facturacion.envios_dgii`, de forma
   best-effort (nunca bloquean la respuesta si falla), cada envío a la DGII.
 - `facturas-api` usa `facturacion.facturas` de forma **obligatoria**: si
-  `DATABASE_URL` no está disponible, no arranca.
+  `DATABASE_URL` no está disponible, no arranca. También le pregunta a
+  `consulta-resultado` por la red interna (`CONSULTA_RESULTADO_URL`, default
+  `http://consulta-resultado:8000`) el resultado de la DGII de cada e-CF
+  enviado, para pasarlo de `enviado` a `aceptado`/`rechazado`: justo
+  después de enviar, con el botón "Actualizar estado DGII" y en una tarea
+  de fondo cada `SINCRONIZAR_ESTADO_CADA_SEGUNDOS` (default `120`, `0` la
+  desactiva). Cada consulta se audita en `facturacion.envios_dgii` con
+  `modulo = 'consulta_resultado'`. Ver la sección "Facturación" del README.
 - `inventario-api` usa el esquema `inventario` y `formato-606` el esquema
   `compras606`, ambos de forma obligatoria.
 - `erp-api` usa el esquema `ventas` (obligatorio) y **lo crea por sí mismo
-  al arrancar** (`CREATE ... IF NOT EXISTS`): no hace falta correr
-  `db/init/007_ventas.sql` en Studio. Solo lee `facturacion.facturas`. Ver
+  al arrancar** (`CREATE ... IF NOT EXISTS`, más la función
+  `ventas.fecha_dgii_segura`): no hace falta correr `db/init/007_ventas.sql`
+  ni `009_fecha_dgii_segura.sql` en Studio. Solo lee `facturacion.facturas`. Ver
   [`ERP_API.md`](ERP_API.md).
 - Los cambios de esquema futuros se agregan como `db/init/00N_*.sql`
   idempotentes y se ejecutan una vez en Studio → SQL Editor (en una

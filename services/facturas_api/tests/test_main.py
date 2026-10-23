@@ -14,6 +14,15 @@ async def _sin_espera(segundos):
     return None
 
 
+@pytest.fixture(autouse=True)
+def _sin_sincronizacion_de_fondo(monkeypatch):
+    # El lifespan corre con TestClient: sin esto lanzaría la tarea de fondo
+    # de app.estado_dgii contra el pool de mentira (y con asyncio.sleep
+    # parcheado en algunos tests, en un bucle sin pausa).
+    monkeypatch.setattr(main.settings, "sincronizar_estado_cada_segundos", 0)
+    monkeypatch.setattr(main, "_ESPERA_CONSULTA_TRAS_ENVIO_SEGUNDOS", 0)
+
+
 @pytest.fixture
 def client(monkeypatch):
     async def fake_crear_pool(database_url):
