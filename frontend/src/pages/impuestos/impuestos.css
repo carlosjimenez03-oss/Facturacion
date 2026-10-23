@@ -1,0 +1,55 @@
+/* Complementos de las pantallas de Impuestos (el sistema de diseño está en index.css). */
+.imp-acciones{align-items:flex-start}
+.imp-acciones > .btn{margin-top:25px}
+.imp-per-hint{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.imp-stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:16px}
+.imp-pad{padding:16px 20px 0}
+.imp-pie{padding:12px 16px;border-top:1px solid #EEF0F2;font-size:13px;color:var(--mut)}
+.imp-pie .btn{vertical-align:middle;height:26px}
+.imp-lista{margin:6px 0 0;padding-left:18px}
+.imp-error{display:flex;flex-wrap:wrap;gap:10px;align-items:center;background:#fff;border:1px solid #FECACA;border-radius:8px;padding:10px 12px}
+.imp-error-l{font-weight:600;color:#B91C1C}
+.imp-error-m{flex:1 1 300px;color:#374151}
+.tbl tr.imp-fila-error td{background:#FEF2F2}
+.imp-blanco{padding:14px 18px;display:flex;align-items:center;gap:12px}
+.imp-blanco .sw:disabled{opacity:.5;cursor:not-allowed}
+.imp-form{border-bottom:1px solid #EEF0F2}
+
+/* Pre-cálculo: casillas del formulario y columna lateral */
+.pc-layout{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.pc-main{flex:2 1 640px;min-width:0;display:flex;flex-direction:column;gap:16px}
+.pc-side{flex:1 1 320px;min-width:0;display:flex;flex-direction:column;gap:16px}
+.pc-sec-h{background:#FAFBFC;border-radius:12px 12px 0 0}
+.pc-sec-n{color:var(--teal);margin-right:8px}
+.pc-casilla{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid #F0F1F3;font-size:14px;color:#374151}
+.pc-casilla:last-child{border-bottom:0;border-radius:0 0 12px 12px}
+.pc-casilla .pc-c{width:28px;flex:none;color:#9CA3AF;font-size:12px}
+.pc-casilla .pc-l{flex:1;min-width:0}
+.pc-casilla .tip{margin-left:4px;vertical-align:middle}
+.pc-casilla.subtotal{font-weight:650;color:var(--ink)}
+.pc-casilla.total{font-weight:650;color:var(--teal);background:#F0FAF9}
+.pc-casilla.total .num{font-size:16px}
+.pc-res{border-color:#B7E3DD}
+.pc-res .card-b{display:flex;flex-direction:column;gap:8px}
+.pc-res-k{font-size:13px;color:var(--mut);font-weight:500;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pc-res-v{font-size:30px;font-weight:700;color:var(--teal);letter-spacing:-.02em;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.pc-ajuste{display:grid;grid-template-columns:1fr 150px;gap:6px 12px;align-items:center}
+.pc-ajuste .lbl{font-weight:500}
+@media (max-width:640px){
+  .imp-acciones > .btn{margin-top:0}
+  .pc-casilla{padding:11px 14px;gap:10px}
+  .pc-res-v{font-size:26px}
+}
+
+/* Impresión del pre-cálculo (Imprimir / PDF) */
+@media print{
+  .pc-layout{display:block}
+  .pc-side{margin-top:16px}
+  .pc-casilla{padding:6px 12px;font-size:12px}
+  .pc-main .card,.pc-side .card{break-inside:avoid;box-shadow:none}
+  .content{gap:12px!important}
+  .tip:hover::after{display:none}
+  .pc-imp-h{display:flex!important;justify-content:space-between;gap:24px;border-bottom:3px solid #0F766E;padding-bottom:10px;margin-bottom:8px;font-size:12px;color:#374151}
+  .pc-imp-h b{display:block;font-size:15px;color:#111827}
+}
+.pc-imp-h{display:none}
