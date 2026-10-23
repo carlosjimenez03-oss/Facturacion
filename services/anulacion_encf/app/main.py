@@ -5,7 +5,9 @@ no utilizadas a anular, lo firma con el certificado digital y lo envía a la
 DGII.
 
 Cada envío se audita (best-effort) en facturacion.envios_dgii vía
-libs.ecf_common.db — ver el docstring de ese módulo.
+libs.ecf_common.db — ver el docstring de ese módulo. Junto con la respuesta
+de la DGII se guardan los rangos anulados y la fecha de la anulación
+(`detalle.py`), que la DGII no devuelve y erp_api usa para el Formato 608.
 """
 import logging
 from contextlib import asynccontextmanager
@@ -19,6 +21,7 @@ from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
 from libs.ecf_common.http_client import DGIIServiceError
 
 from .config import AnulacionSettings, get_settings
+from .detalle import extraer_detalle_anulacion
 from .dgii_client import AnulacionDGIIClient
 from .schemas import AnulacionRangoResponse
 
@@ -82,7 +85,7 @@ async def anular_rango(
             ambiente=settings.app_env,
             rnc_emisor=settings.emisor_rnc,
             codigo=respuesta.codigo,
-            respuesta=respuesta.model_dump(),
+            respuesta=respuesta.model_dump() | extraer_detalle_anulacion(xml_bytes),
         )
         return respuesta
     except DGIIServiceError as exc:
