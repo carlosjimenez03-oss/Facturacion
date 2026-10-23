@@ -13,6 +13,12 @@ import { ProductoList } from "./components/ProductoList";
 import { ProveedorForm } from "./components/ProveedorForm";
 import { ProveedorList } from "./components/ProveedorList";
 import { AppShell } from "./layout/AppShell";
+import { ContactoForm } from "./pages/contactos/ContactoForm";
+import { ContactoList } from "./pages/contactos/ContactoList";
+import { CobrosPage } from "./pages/ingresos/Cobros";
+import { CotizacionForm } from "./pages/ingresos/CotizacionForm";
+import { CotizacionList } from "./pages/ingresos/CotizacionList";
+import { NotasCreditoPage, NotasDebitoPage } from "./pages/ingresos/Notas";
 import { Inicio } from "./pages/Inicio";
 import { Proximamente } from "./pages/Proximamente";
 
@@ -25,6 +31,17 @@ export default function App() {
         <Route path="/facturas/nueva" element={<FacturaForm />} />
         <Route path="/facturas/:id/editar" element={<FacturaForm />} />
         <Route path="/facturas/:id" element={<FacturaDetailPage />} />
+
+        <Route path="/notas-credito" element={<NotasCreditoPage />} />
+        <Route path="/notas-debito" element={<NotasDebitoPage />} />
+        <Route path="/cotizaciones" element={<CotizacionList />} />
+        <Route path="/cotizaciones/nueva" element={<CotizacionForm />} />
+        <Route path="/cotizaciones/:id" element={<CotizacionForm />} />
+        <Route path="/cobros" element={<CobrosPage />} />
+
+        <Route path="/contactos" element={<ContactoList />} />
+        <Route path="/contactos/nuevo" element={<ContactoForm />} />
+        <Route path="/contactos/:id" element={<ContactoForm />} />
 
         <Route path="/inventario/productos" element={<ProductoList />} />
         <Route path="/inventario/productos/nuevo" element={<ProductoForm />} />
