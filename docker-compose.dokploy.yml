@@ -1,10 +1,10 @@
 # Despliegue único para Dokploy: los 11 módulos de facturación electrónica +
 # facturas-api + inventario-api + los 3 módulos de Receptor Electrónico +
-# frontend, en un solo archivo (sin
+# formato-606 + erp-api + frontend, en un solo archivo (sin
 # encadenar -f -f como en docker-compose.yml + overrides, pensado para
 # desarrollo local).
 #
-# Puertos de host 8001-8017 (no 8000-8016): se corrieron todos +1 porque en
+# Puertos de host 8001-8019 (no 8000-8018): se corrieron todos +1 porque en
 # despliegues reales del servidor Dokploy es común que el puerto 8000 ya
 # esté tomado por otro servicio del mismo host. Ver docs/DOKPLOY.md.
 #
@@ -208,6 +208,20 @@ services:
       args: {APP_ENV: "${APP_ENV:-production}"}
     ports: ["8018:8000"]
 
+  # --- ERP de ventas (contactos, cotizaciones, cobros, cuentas por cobrar) ---
+  #
+  # Igual que facturas-api/inventario-api: solo lo consume el frontend
+  # (proxy nginx /api-erp), sin Domain propio. Crea su esquema `ventas` por
+  # sí mismo al arrancar (en Supabase nadie corre db/init) y solo LEE
+  # facturacion.facturas para las cuentas por cobrar. Ver docs/ERP_API.md.
+  erp-api:
+    <<: *modulo-comun
+    build:
+      context: .
+      dockerfile: services/erp_api/Dockerfile
+      args: {APP_ENV: "${APP_ENV:-production}"}
+    ports: ["8019:8000"]
+
   # --- Frontend (React) ---
 
   frontend:
@@ -215,10 +229,11 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      # VITE_API_URL/VITE_INVENTARIO_API_URL/VITE_FORMATO_606_API_URL se
-      # hornean en el bundle en build time. Default "/api", "/api-inventario"
-      # y "/api-606": nginx (frontend/nginx.conf) reenvía cada una a
-      # facturas-api/inventario-api/formato-606 por la red interna
+      # VITE_API_URL/VITE_INVENTARIO_API_URL/VITE_FORMATO_606_API_URL/
+      # VITE_ERP_API_URL se hornean en el bundle en build time. Default
+      # "/api", "/api-inventario", "/api-606" y "/api-erp": nginx
+      # (frontend/nginx.conf) reenvía cada una a
+      # facturas-api/inventario-api/formato-606/erp-api por la red interna
       # `facturacion` (mismo origen que el frontend -- evita CORS y el
       # problema de "mixed content" al llamar un backend http:// desde un
       # frontend https://). No hace falta exponer ninguno de estos servicios
@@ -227,6 +242,7 @@ services:
         VITE_API_URL: "${VITE_API_URL:-/api}"
         VITE_INVENTARIO_API_URL: "${VITE_INVENTARIO_API_URL:-/api-inventario}"
         VITE_FORMATO_606_API_URL: "${VITE_FORMATO_606_API_URL:-/api-606}"
+        VITE_ERP_API_URL: "${VITE_ERP_API_URL:-/api-erp}"
         # Identidad visual del frontend (opcional, ver docs/DOKPLOY.md).
         VITE_MARCA: "${VITE_MARCA:-}"
         VITE_EMPRESA_NOMBRE: "${VITE_EMPRESA_NOMBRE:-}"

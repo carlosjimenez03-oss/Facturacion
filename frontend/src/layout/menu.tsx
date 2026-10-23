@@ -44,10 +44,10 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
     icon: <IconIngresos />,
     hijos: [
       { label: "Facturas de venta", to: "/facturas" },
-      { label: "Notas de crédito", to: pendiente("notas-credito") },
-      { label: "Notas de débito", to: pendiente("notas-debito") },
-      { label: "Cotizaciones", to: pendiente("cotizaciones") },
-      { label: "Cobros", to: pendiente("cobros") },
+      { label: "Notas de crédito", to: "/notas-credito" },
+      { label: "Notas de débito", to: "/notas-debito" },
+      { label: "Cotizaciones", to: "/cotizaciones" },
+      { label: "Cobros", to: "/cobros" },
     ],
   },
   {
@@ -62,7 +62,7 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
       { label: "Retenciones", to: pendiente("retenciones") },
     ],
   },
-  { id: "contactos", label: "Contactos", icon: <IconContactos />, to: "/inventario/proveedores" },
+  { id: "contactos", label: "Contactos", icon: <IconContactos />, to: "/contactos" },
   {
     id: "inventario",
     label: "Inventario",

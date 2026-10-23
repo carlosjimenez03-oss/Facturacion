@@ -1,5 +1,6 @@
 import { calcularMontoItem, calcularTotales, decimal2, fechaADgii, fechaDeDgii } from "./format";
 import type { FacturaDatos, FormaPago, ItemFactura, ItemInventarioLink } from "./types";
+import type { CotizacionItem, TasaItbis } from "./erpApi";
 import type { TipoEcfConfig } from "./tipoConfig";
 
 export interface FormState {
@@ -235,4 +236,62 @@ export function datosAFormState(
     codigoModificacion: (referencia.CodigoModificacion as string) ?? "1",
     indicadorNotaCredito: (idDoc.IndicadorNotaCredito as string) ?? "0",
   };
+}
+
+/** Totales con el desglose por tasa de ITBIS (formulario y detalle de la factura). */
+export function desglose(items: ItemFactura[]) {
+  const t = { subtotal: 0, descuentos: 0, g18: 0, g16: 0, g0: 0, exento: 0, i18: 0, i16: 0, total: 0 };
+  for (const item of items) {
+    const bruto = (Number(item.CantidadItem) || 0) * (Number(item.PrecioUnitarioItem) || 0);
+    const neto = calcularMontoItem(item);
+    t.subtotal += bruto;
+    t.descuentos += bruto - neto;
+    if (item.IndicadorFacturacion === "1") {
+      t.g18 += neto;
+      t.i18 += neto * 0.18;
+    } else if (item.IndicadorFacturacion === "2") {
+      t.g16 += neto;
+      t.i16 += neto * 0.16;
+    } else if (item.IndicadorFacturacion === "3") {
+      t.g0 += neto;
+    } else if (item.IndicadorFacturacion === "4") {
+      t.exento += neto;
+    }
+  }
+  t.total = t.g18 + t.g16 + t.g0 + t.exento + t.i18 + t.i16;
+  return t;
+}
+
+/** Próximo e-NCF sugerido para un tipo: el mayor ya usado de ese tipo + 1. */
+export function siguienteEncf(facturas: { encf: string | null }[], tipoEcf: string): string {
+  const prefijo = `E${tipoEcf}`;
+  let mayor = 0;
+  for (const f of facturas) {
+    if (f.encf?.startsWith(prefijo)) mayor = Math.max(mayor, Number(f.encf.slice(3)) || 0);
+  }
+  return `${prefijo}${String(mayor + 1).padStart(10, "0")}`;
+}
+
+/** Tasa de ITBIS de una cotización (erp-api) -> IndicadorFacturacion del e-CF. */
+const INDICADOR_POR_TASA: Record<TasaItbis, string> = { "18": "1", "16": "2", "0": "3", exento: "4" };
+
+/** Convierte las líneas de una cotización en líneas de factura. El descuento
+ * de la cotización es un porcentaje; en el e-CF va como monto (DescuentoMonto). */
+export function itemsDesdeCotizacion(items: CotizacionItem[]): ItemFactura[] {
+  return items.map((linea, idx) => {
+    const cantidad = Number(linea.cantidad) || 0;
+    const precio = Number(linea.precio_unitario) || 0;
+    const pct = Number(linea.descuento_pct) || 0;
+    const item: ItemFactura = {
+      ...nuevoItem(idx + 1),
+      IndicadorFacturacion: INDICADOR_POR_TASA[linea.itbis] ?? "1",
+      NombreItem: linea.descripcion,
+      IndicadorBienoServicio: linea.producto_id ? "1" : "2",
+      CantidadItem: linea.cantidad,
+      PrecioUnitarioItem: linea.precio_unitario,
+    };
+    if (pct > 0) item.DescuentoMonto = decimal2((cantidad * precio * pct) / 100);
+    if (linea.producto_id) item.productoId = linea.producto_id;
+    return item;
+  });
 }

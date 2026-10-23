@@ -66,5 +66,8 @@ services:
   formato-606:
     <<: *prod-comun
     ports: ["8016:8000"]
+  erp-api:
+    <<: *prod-comun
+    ports: ["8019:8000"]
   frontend:
     ports: ["5173:80"]

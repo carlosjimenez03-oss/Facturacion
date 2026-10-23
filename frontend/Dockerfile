@@ -26,6 +26,12 @@ ENV VITE_INVENTARIO_API_URL=${VITE_INVENTARIO_API_URL}
 ARG VITE_FORMATO_606_API_URL=http://localhost:8016
 ENV VITE_FORMATO_606_API_URL=${VITE_FORMATO_606_API_URL}
 
+# Mismo mecanismo que VITE_API_URL, para el ERP de ventas
+# (services/erp_api). Default "/api-erp": el proxy de nginx.conf, igual que
+# en docker-compose.dokploy.yml.
+ARG VITE_ERP_API_URL=/api-erp
+ENV VITE_ERP_API_URL=${VITE_ERP_API_URL}
+
 # Identidad visual (opcional): nombre de la marca, de la empresa y RNC que
 # muestran el menú lateral y la barra superior. Vacío = valores por defecto.
 ARG VITE_MARCA=

@@ -171,7 +171,11 @@ async def guardar_xml_firmado(
         fila = await conn.fetchrow(
             """
             UPDATE facturacion.facturas
-            SET xml_firmado = $2, estado = 'firmado', actualizado_en = now()
+            SET xml_firmado = $2,
+                -- Firmar una factura ya enviada (p. ej. para generar su PDF)
+                -- no debe pisar el estado que informó la DGII.
+                estado = CASE WHEN estado IN ('borrador', 'generado', 'firmado') THEN 'firmado' ELSE estado END,
+                actualizado_en = now()
             WHERE id = $1
             RETURNING *
             """,

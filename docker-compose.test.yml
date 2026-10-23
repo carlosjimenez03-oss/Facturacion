@@ -162,6 +162,17 @@ services:
     ports:
       - "8016:8000"
 
+  # 8019 (no 8017): es el default de frontend/src/lib/erpApi.ts y el mismo
+  # puerto de docker-compose.dokploy.yml.
+  erp-api:
+    <<: *test-comun
+    volumes:
+      - ./services/erp_api/app:/app/app:ro
+      - ./libs:/app/libs:ro
+      - ./certs:/app/certs:ro
+    ports:
+      - "8019:8000"
+
   frontend:
     ports:
       - "5173:80"
