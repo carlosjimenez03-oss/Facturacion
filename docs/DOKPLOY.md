@@ -28,6 +28,7 @@ datos es **Supabase** (self-hosted, recurso aparte en Dokploy) — ver
 | `EMISOR_RNC` | RNC del emisor autorizado como electrónico por la DGII |
 | `CERTIFICADO_PASSWORD` | Contraseña del certificado `.p12` (ver paso 3) |
 | `DATABASE_URL` | Cadena de conexión al Postgres de Supabase (pooler Supavisor, puerto 5432). Ver [`SUPABASE.md`](SUPABASE.md), paso 2 |
+| `SUPABASE_NETWORK` | Red de Docker del recurso de Supabase (p. ej. `facturacion-supabase-soscqp_default`), para llegar a `supavisor` por la red interna. Ver [`SUPABASE.md`](SUPABASE.md), paso 2 |
 
 Opcionales (con default razonable si se omiten):
 
