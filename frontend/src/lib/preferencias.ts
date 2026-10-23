@@ -1,9 +1,10 @@
 // Datos que el formulario de factura recuerda entre usos, en el navegador:
-// el emisor (para no escribirlo en cada factura), la fecha de vencimiento de
-// cada secuencia autorizada y los clientes ya facturados (para "Verificar"
-// el RNC). Es solo una comodidad local hasta que existan los servicios de
-// configuración y de clientes; si el navegador no deja guardar, todo sigue
-// funcionando con los valores por defecto.
+// el emisor (para no escribirlo en cada factura) y la fecha de vencimiento de
+// cada secuencia autorizada, hasta que exista el servicio de configuración.
+// Los clientes viven en Contactos (erp-api); la copia local de los clientes
+// ya facturados es solo el respaldo de "Verificar" el RNC cuando erp-api no
+// responde. Si el navegador no deja guardar, todo sigue funcionando con los
+// valores por defecto.
 import { EMPRESA_NOMBRE, EMPRESA_RNC } from "./marca";
 
 function leer<T>(clave: string, porDefecto: T): T {
