@@ -124,6 +124,27 @@ Flujo de una factura: **borrador** (se guarda en Postgres) → **Generar XML**
 envío al módulo `recepcion`, que ya implementa ese flujo). El resultado
 (`trackId`, estado, XML) queda guardado en `facturacion.facturas`.
 
+La DGII valida el e-CF de forma asíncrona: el envío solo devuelve un
+`trackId` y la factura queda en **enviado**. `facturas_api` le consulta el
+resultado a `consulta_resultado` (`GET /resultado/{trackId}`) y la pasa a
+**aceptado** (también "Aceptado Condicional") o **rechazado** (con los
+mensajes de la DGII en `error` y `dgii_respuesta`; la respuesta original del
+envío queda en `dgii_respuesta.envio`). Eso ocurre en tres momentos: una
+vez justo después de enviar (best-effort, nunca hace fallar el envío), con
+el botón **Actualizar estado DGII** del detalle de la factura
+(`POST /facturas/{id}/actualizar-estado`) y en una tarea de fondo que cada
+`SINCRONIZAR_ESTADO_CADA_SEGUNDOS` revisa hasta 50 facturas en `enviado` de
+los últimos 30 días. Cada consulta queda auditada en
+`facturacion.envios_dgii` (`modulo = 'consulta_resultado'`; la tarea de
+fondo solo audita resultados definitivos, no cada "En Proceso").
+
+| Variable de `facturas-api` | Default | Uso |
+|---|---|---|
+| `RECEPCION_SERVICE_URL` | `http://recepcion:8000` | Módulo que firma y envía el e-CF |
+| `INVENTARIO_API_URL` | `http://inventario-api:8000` | Validar stock y registrar la salida de mercancía |
+| `CONSULTA_RESULTADO_URL` | `http://consulta-resultado:8000` | Consultar el resultado de la DGII por `trackId` |
+| `SINCRONIZAR_ESTADO_CADA_SEGUNDOS` | `120` | Intervalo de la tarea de fondo; `0` la desactiva |
+
 Ver [`services/facturas_api/`](services/facturas_api) para el backend y
 [`services/facturas_api/xsd/`](services/facturas_api/xsd) para los XSD
 oficiales bundleados (uno de ellos, `eCF_31.xsd`, corrige un typo del

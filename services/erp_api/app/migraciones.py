@@ -1,15 +1,18 @@
-"""Migraciones del esquema `ventas` (clientes, cotizaciones, cobros).
+"""Migraciones de los esquemas `ventas` (clientes, cotizaciones, cobros) e
+`impuestos` (anulaciones manuales del 608, ajustes de los pre-cálculos y
+declaraciones presentadas).
 
 En producción la base es Supabase y los archivos de `db/init` NO se
 ejecutan solos (ver docs/SUPABASE.md) -- por eso `erp_api` aplica su propio
 DDL al arrancar (lifespan de main.py), justo después de crear el pool. Todo
-es idempotente (`IF NOT EXISTS`), así que correrlo en cada arranque es
-seguro. `db/init/007_ventas.sql` contiene exactamente el mismo DDL para el
+es idempotente (`IF NOT EXISTS` / `CREATE OR REPLACE`), así que correrlo en
+cada arranque es seguro. `db/init/007_ventas.sql`, `008_impuestos.sql` y
+`009_fecha_dgii_segura.sql` contienen exactamente el mismo DDL para el
 Postgres local de desarrollo (lo verifica tests/test_migraciones.py).
 
 Para cambios de esquema futuros: agregar sentencias idempotentes al final
-de `DDL_VENTAS` (p. ej. `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) y
-copiarlas también en un nuevo `db/init/00N_*.sql`.
+de `DDL_VENTAS`/`DDL_IMPUESTOS` (p. ej. `ALTER TABLE ... ADD COLUMN IF NOT
+EXISTS`) y copiarlas también en un nuevo `db/init/00N_*.sql`.
 """
 from __future__ import annotations
 
@@ -108,11 +111,84 @@ CREATE INDEX IF NOT EXISTS cobros_factura_idx ON ventas.cobros (factura_id);
 CREATE INDEX IF NOT EXISTS cobros_fecha_idx ON ventas.cobros (fecha DESC);
 """
 
+DDL_IMPUESTOS = """
+CREATE SCHEMA IF NOT EXISTS impuestos;
+
+-- Comprobantes anulados que se registran a mano para el Formato 608 (NCF
+-- serie B/A/P/Q de 11 o 19 posiciones). Las anulaciones de e-NCF NO se
+-- guardan aquí: se leen de facturacion.envios_dgii (modulo
+-- 'anulacion_encf'). El período del 608 es el mes de `fecha_comprobante`.
+CREATE TABLE IF NOT EXISTS impuestos.anulaciones_608 (
+    id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ncf                text NOT NULL,
+    fecha_comprobante  date NOT NULL,
+    tipo_anulacion     text NOT NULL CHECK (tipo_anulacion ~ '^(0[1-9]|10)$'),
+    creado_en          timestamptz NOT NULL DEFAULT now()
+);
+
+-- Un NCF no puede reportarse anulado dos veces ("NCF repetido" de la
+-- plantilla oficial).
+CREATE UNIQUE INDEX IF NOT EXISTS anulaciones_608_ncf_idx ON impuestos.anulaciones_608 (ncf);
+CREATE INDEX IF NOT EXISTS anulaciones_608_fecha_idx ON impuestos.anulaciones_608 (fecha_comprobante);
+
+-- Valores que el usuario ingresa en un pre-cálculo (saldo a favor
+-- anterior, anticipos, inventario inicial...). `periodo` es AAAAMM para
+-- it1/ir17 y AAAA para ir2.
+CREATE TABLE IF NOT EXISTS impuestos.ajustes_precalculo (
+    formulario      text NOT NULL CHECK (formulario IN ('it1', 'ir17', 'ir2')),
+    periodo         text NOT NULL,
+    clave           text NOT NULL,
+    valor           numeric(18, 2) NOT NULL,
+    actualizado_en  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (formulario, periodo, clave)
+);
+
+-- Marca de "presentada" de cada declaración/formato por período. Sin fila
+-- = no presentada (pendiente o vencida, se calcula al leer).
+CREATE TABLE IF NOT EXISTS impuestos.declaraciones_presentadas (
+    formulario     text NOT NULL CHECK (formulario IN ('606', '607', '608', 'it1', 'ir17', 'ir2')),
+    periodo        text NOT NULL,
+    presentada_en  date NOT NULL,
+    monto          numeric(18, 2),
+    referencia     text,
+    creado_en      timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (formulario, periodo)
+);
+"""
+
+DDL_FUNCIONES = """
+-- Fecha DD-MM-AAAA de un e-CF (texto del JSON de la factura) -> date, o
+-- NULL si falta, no tiene ese formato o no existe (31-02-2026, 00-13-2026):
+-- `to_date` lanzaría un error y haría fallar la consulta entera (cuentas
+-- por cobrar, formatos 607/608...) por una sola factura con una fecha
+-- imposible. Ver `_fecha_dgii` en services/erp_api/app/repository.py.
+CREATE OR REPLACE FUNCTION ventas.fecha_dgii_segura(valor text)
+RETURNS date
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+BEGIN
+    IF valor IS NULL OR valor !~ '^[0-9]{2}-[0-9]{2}-[0-9]{4}$' THEN
+        RETURN NULL;
+    END IF;
+    RETURN make_date(substr(valor, 7, 4)::int, substr(valor, 4, 2)::int, substr(valor, 1, 2)::int);
+EXCEPTION
+    -- make_date: "date field value out of range" (día/mes/año imposibles).
+    WHEN datetime_field_overflow OR invalid_datetime_format OR numeric_value_out_of_range THEN
+        RETURN NULL;
+END;
+$$;
+"""
+
 
 async def aplicar_migraciones(pool: asyncpg.Pool) -> None:
-    """Crea (si no existen) el esquema `ventas` y sus tablas/índices."""
+    """Crea (si no existen) los esquemas `ventas` e `impuestos`, sus
+    tablas/índices y las funciones auxiliares de las consultas."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
             await conn.execute(DDL_VENTAS)
-    logger.info("Esquema 'ventas' verificado/creado")
+            await conn.execute(DDL_IMPUESTOS)
+            await conn.execute(DDL_FUNCIONES)
+    logger.info("Esquemas 'ventas' e 'impuestos' verificados/creados")

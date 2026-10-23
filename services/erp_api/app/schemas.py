@@ -193,3 +193,163 @@ class DocumentoVenta(BaseModel):
     dgii_codigo: str | None = None
     error: str | None = None
     creado_en: datetime
+
+
+# --- Impuestos (contrato: frontend/src/lib/impuestosApi.ts) ---------------------------------------------------------
+
+FormularioPreCalculo = Literal["it1", "ir17", "ir2"]
+FormularioDeclaracion = Literal["606", "607", "608", "it1", "ir17", "ir2"]
+# "no_aplica": 607/608 del emisor 100 % electrónico (EMISOR_100_ELECTRONICO).
+EstadoDeclaracion = Literal["pendiente", "presentada", "vencida", "no_aplica"]
+
+
+class Fila607(BaseModel):
+    factura_id: str | None = None
+    rnc_cedula: str
+    # El contrato lo declara `number`; sin identificación (notas de crédito
+    # de consumo) sale 3, como hace la plantilla oficial con una celda vacía
+    # que no se valida -- en el TXT ese campo queda vacío.
+    tipo_id: int
+    ncf: str
+    ncf_modificado: str | None = None
+    tipo_ingreso: str
+    fecha_comprobante: date
+    fecha_retencion: date | None = None
+    monto_facturado: Monto
+    itbis_facturado: Monto
+    itbis_retenido_terceros: Monto
+    itbis_percibido: Monto
+    retencion_renta_terceros: Monto
+    isr_percibido: Monto
+    impuesto_selectivo_consumo: Monto
+    otros_impuestos: Monto
+    monto_propina_legal: Monto
+    efectivo: Monto
+    cheque_transferencia: Monto
+    tarjeta: Monto
+    venta_credito: Monto
+    bonos_certificados: Monto
+    permuta: Monto
+    otras_formas: Monto
+    cliente_nombre: str | None = None
+    tipo_ecf: int | None = None
+
+
+class Totales607(BaseModel):
+    cantidad: int
+    monto_facturado: Monto
+    itbis_facturado: Monto
+    itbis_retenido_terceros: Monto
+    retencion_renta_terceros: Monto
+
+
+class Formato607(BaseModel):
+    periodo: str
+    rnc_emisor: str
+    filas: list[Fila607]
+    totales: Totales607
+    advertencias: list[str]
+
+
+class Fila608(BaseModel):
+    id: str | None = None
+    origen: Literal["anulacion_encf", "manual"]
+    ncf: str
+    fecha_comprobante: date
+    tipo_anulacion: str
+    tipo_anulacion_label: str
+
+
+class Formato608(BaseModel):
+    periodo: str
+    rnc_emisor: str
+    filas: list[Fila608]
+    advertencias: list[str]
+
+
+class Anulacion608Payload(_Entrada):
+    ncf: str = Field(..., min_length=1)
+    fecha_comprobante: date
+    tipo_anulacion: str
+
+
+class TipoAnulacion(BaseModel):
+    codigo: str
+    descripcion: str
+
+
+class Casilla(BaseModel):
+    # Número de LÍNEA del pre-cálculo ("1", "2", ...), no la casilla del
+    # formulario oficial de la DGII (ver precalculos.py).
+    codigo: str
+    etiqueta: str
+    valor: Monto
+    tipo: Literal["normal", "subtotal", "total"]
+    ayuda: str | None = None
+
+
+class SeccionPreCalculo(BaseModel):
+    numero: str
+    titulo: str
+    casillas: list[Casilla]
+
+
+class AjusteEditable(BaseModel):
+    clave: str
+    etiqueta: str
+    # Valor usado en el cálculo: el manual guardado o, si no hay, el sugerido
+    # por el sistema (o 0).
+    valor: Monto
+    # True si `valor` es un valor manual guardado; False si es el sugerido.
+    manual: bool
+    # Valor calculado por el sistema (saldo a favor del mes anterior,
+    # valuación del Kardex); null si el sistema no sugiere ninguno.
+    sugerido: Monto | None = None
+    ayuda: str | None = None
+
+
+class ResultadoPreCalculo(BaseModel):
+    etiqueta: str
+    valor: Monto
+
+
+class ResumenPreCalculo(BaseModel):
+    etiqueta: str
+    # Decimal plano ("1234.56") si es un monto; cualquier otro texto se
+    # muestra tal cual ("35.2%").
+    valor: str
+
+
+class PreCalculo(BaseModel):
+    formulario: FormularioPreCalculo
+    periodo: str
+    titulo: str
+    subtitulo: str
+    nota: str
+    vence: date
+    secciones: list[SeccionPreCalculo]
+    resultado: ResultadoPreCalculo
+    resumen: list[ResumenPreCalculo]
+    ajustes: list[AjusteEditable]
+    advertencias: list[str]
+
+
+class AjustesPayload(BaseModel):
+    # Valor vacío (o null) = quitar el valor manual y volver al calculado.
+    valores: dict[str, str | None]
+
+
+class Declaracion(BaseModel):
+    formulario: FormularioDeclaracion
+    periodo: str
+    vence: date
+    estado: EstadoDeclaracion
+    presentada_en: date | None = None
+    monto: Monto | None = None
+    referencia: str | None = None
+
+
+class MarcarPresentadaPayload(_Entrada):
+    monto: Decimal | None = None
+    referencia: str | None = None
+    presentada_en: date | None = None

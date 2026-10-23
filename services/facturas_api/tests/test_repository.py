@@ -198,3 +198,50 @@ async def test_listar_facturas_aplica_filtros():
     assert "tipo_ecf = $1" in query
     assert "estado = $2" in query
     assert params[:2] == (31, "borrador")
+
+
+async def test_registrar_resultado_consulta_solo_desde_estados_actualizables():
+    fila = _fila_factura(
+        estado="aceptado", track_id="track-123", dgii_estado="Aceptado", dgii_codigo="1",
+        dgii_respuesta='{"codigo": 1, "envio": {"trackId": "track-123"}}',
+    )
+    conn = FakeConnection(fetchrow_result=fila)
+    pool = FakePool(conn)
+
+    resultado = await repository.registrar_resultado_consulta(
+        pool, fila["id"], track_id="track-123", estado="aceptado", dgii_estado="Aceptado",
+        dgii_codigo="1", consulta={"codigo": 1}, error=None,
+    )
+
+    assert resultado["dgii_respuesta"]["envio"] == {"trackId": "track-123"}
+    query, params = conn.queries[0]
+    assert "track_id = $2" in query
+    assert "estado IN ('enviado', 'error')" in query
+    assert "dgii_estado = 'Aceptado Condicional'" in query
+    assert params[1:5] == ("track-123", "aceptado", "Aceptado", "1")
+
+
+async def test_registrar_resultado_consulta_devuelve_none_si_no_aplica():
+    conn = FakeConnection(fetchrow_result=None)
+    pool = FakePool(conn)
+
+    resultado = await repository.registrar_resultado_consulta(
+        pool, uuid.uuid4(), track_id="track-123", estado="rechazado", dgii_estado="Rechazado",
+        dgii_codigo="2", consulta={"codigo": 2}, error="x",
+    )
+
+    assert resultado is None
+
+
+async def test_listar_pendientes_de_resultado():
+    conn = FakeConnection(fetch_result=[_fila_factura(estado="enviado", track_id="t-1")])
+    pool = FakePool(conn)
+
+    resultado = await repository.listar_pendientes_de_resultado(pool, limite=10, dias=7)
+
+    assert resultado[0]["track_id"] == "t-1"
+    assert isinstance(resultado[0]["id"], str)
+    query, params = conn.queries[0]
+    assert "estado = 'enviado'" in query
+    assert "ORDER BY actualizado_en ASC" in query
+    assert params == (10, 7)

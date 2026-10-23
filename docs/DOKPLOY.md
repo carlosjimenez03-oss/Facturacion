@@ -29,6 +29,7 @@ datos es **Supabase** (self-hosted, recurso aparte en Dokploy) — ver
 | `CERTIFICADO_PASSWORD` | Contraseña del certificado `.p12` (ver paso 3) |
 | `DATABASE_URL` | Cadena de conexión al Postgres de Supabase (pooler Supavisor, puerto 5432). Ver [`SUPABASE.md`](SUPABASE.md), paso 2 |
 | `SUPABASE_NETWORK` | Red de Docker del recurso de Supabase (p. ej. `facturacion-supabase-soscqp_default`), para llegar a `supavisor` por la red interna. Ver [`SUPABASE.md`](SUPABASE.md), paso 2 |
+| `EMISOR_100_ELECTRONICO` | Opcional, por defecto `true`: la empresa emite solo e-CF, así que el 607 y el 608 aparecen como "No aplica". Póngalo en `false` si todavía emite NCF serie B. Ver [`ERP_API.md`](ERP_API.md) |
 
 Opcionales (con default razonable si se omiten):
 
@@ -73,12 +74,20 @@ aparte. Instalación, migración de los datos existentes, configuración de
   `anulacion_encf` registran en `facturacion.envios_dgii`, de forma
   best-effort (nunca bloquean la respuesta si falla), cada envío a la DGII.
 - `facturas-api` usa `facturacion.facturas` de forma **obligatoria**: si
-  `DATABASE_URL` no está disponible, no arranca.
+  `DATABASE_URL` no está disponible, no arranca. También le pregunta a
+  `consulta-resultado` por la red interna (`CONSULTA_RESULTADO_URL`, default
+  `http://consulta-resultado:8000`) el resultado de la DGII de cada e-CF
+  enviado, para pasarlo de `enviado` a `aceptado`/`rechazado`: justo
+  después de enviar, con el botón "Actualizar estado DGII" y en una tarea
+  de fondo cada `SINCRONIZAR_ESTADO_CADA_SEGUNDOS` (default `120`, `0` la
+  desactiva). Cada consulta se audita en `facturacion.envios_dgii` con
+  `modulo = 'consulta_resultado'`. Ver la sección "Facturación" del README.
 - `inventario-api` usa el esquema `inventario` y `formato-606` el esquema
   `compras606`, ambos de forma obligatoria.
 - `erp-api` usa el esquema `ventas` (obligatorio) y **lo crea por sí mismo
-  al arrancar** (`CREATE ... IF NOT EXISTS`): no hace falta correr
-  `db/init/007_ventas.sql` en Studio. Solo lee `facturacion.facturas`. Ver
+  al arrancar** (`CREATE ... IF NOT EXISTS`, más la función
+  `ventas.fecha_dgii_segura`): no hace falta correr `db/init/007_ventas.sql`
+  ni `009_fecha_dgii_segura.sql` en Studio. Solo lee `facturacion.facturas`. Ver
   [`ERP_API.md`](ERP_API.md).
 - Los cambios de esquema futuros se agregan como `db/init/00N_*.sql`
   idempotentes y se ejecutan una vez en Studio → SQL Editor (en una

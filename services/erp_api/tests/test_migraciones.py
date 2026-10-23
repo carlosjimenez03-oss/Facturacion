@@ -1,5 +1,6 @@
-"""El DDL que erp_api aplica al arrancar (Supabase) y db/init/007_ventas.sql
-(Postgres local) deben ser el mismo."""
+"""El DDL que erp_api aplica al arrancar (Supabase) y db/init/007_ventas.sql,
+008_impuestos.sql y 009_fecha_dgii_segura.sql (Postgres local) deben ser el
+mismo."""
 from pathlib import Path
 
 from services.erp_api.app import migraciones
@@ -12,10 +13,21 @@ def test_007_ventas_tiene_el_mismo_ddl_que_migraciones():
     assert migraciones.DDL_VENTAS.strip() in archivo
 
 
+def test_008_impuestos_tiene_el_mismo_ddl_que_migraciones():
+    archivo = (REPO_ROOT / "db" / "init" / "008_impuestos.sql").read_text(encoding="utf-8")
+    assert migraciones.DDL_IMPUESTOS.strip() in archivo
+
+
+def test_009_fecha_dgii_segura_tiene_el_mismo_ddl_que_migraciones():
+    archivo = (REPO_ROOT / "db" / "init" / "009_fecha_dgii_segura.sql").read_text(encoding="utf-8")
+    assert migraciones.DDL_FUNCIONES.strip() in archivo
+
+
 def test_ddl_es_idempotente():
-    for linea in migraciones.DDL_VENTAS.splitlines():
-        if linea.startswith("CREATE "):
-            assert "IF NOT EXISTS" in linea, linea
+    for ddl in (migraciones.DDL_VENTAS, migraciones.DDL_IMPUESTOS, migraciones.DDL_FUNCIONES):
+        for linea in ddl.splitlines():
+            if linea.startswith("CREATE "):
+                assert "IF NOT EXISTS" in linea or linea.startswith("CREATE OR REPLACE "), linea
 
 
 class _NullTransaction:
@@ -63,3 +75,5 @@ async def test_aplicar_migraciones_toma_el_lock_antes_del_ddl():
 
     assert "pg_advisory_xact_lock" in conn.execute_calls[0][0]
     assert conn.execute_calls[1][0] == migraciones.DDL_VENTAS
+    assert conn.execute_calls[2][0] == migraciones.DDL_IMPUESTOS
+    assert conn.execute_calls[3][0] == migraciones.DDL_FUNCIONES

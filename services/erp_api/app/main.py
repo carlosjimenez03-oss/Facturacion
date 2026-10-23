@@ -1,12 +1,15 @@
 """Servicio ERP de ventas: contactos (clientes/proveedores), cotizaciones,
-cobros y cuentas por cobrar, y un resumen de los documentos de venta.
+cobros y cuentas por cobrar, y un resumen de los documentos de venta; y el
+módulo de impuestos (formatos 607/608, pre-cálculos IT-1/IR-17/IR-2 y
+declaraciones), con sus rutas en `impuestos.py`.
 
-Vive en su propio esquema `ventas`, que este servicio crea por sí mismo al
-arrancar (ver `migraciones.py`). Las cuentas por cobrar, el saldo de cada
+Vive en sus propios esquemas `ventas` e `impuestos`, que este servicio crea
+por sí mismo al arrancar (ver `migraciones.py`). Las cuentas por cobrar, el saldo de cada
 cliente y `/documentos-venta` se calculan LEYENDO `facturacion.facturas`
 (de `facturas_api`) -- este servicio nunca la modifica.
 
-El contrato con el frontend es `frontend/src/lib/erpApi.ts`.
+El contrato con el frontend es `frontend/src/lib/erpApi.ts` (y
+`frontend/src/lib/impuestosApi.ts` para impuestos).
 """
 import asyncio
 import logging
@@ -19,7 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from libs.ecf_common.db import cerrar_pool, crear_pool
 
-from . import repository
+from . import impuestos, repository
 from .config import ErpApiSettings, get_settings
 from .migraciones import aplicar_migraciones
 from .repository import (
@@ -94,7 +97,12 @@ app.add_middleware(
     allow_origins=settings.allowed_origins,
     allow_methods=["*"],
     allow_headers=["*"],
+    # El frontend lee el nombre de los TXT del 607/608 (fetch + blob) de
+    # este header -- igual que formato_606.
+    expose_headers=["Content-Disposition"],
 )
+
+app.include_router(impuestos.router)
 
 
 def _pool():

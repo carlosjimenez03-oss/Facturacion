@@ -15,6 +15,11 @@ Backend del frontend React de facturación. Persiste cada factura en
   ese flujo (firmar + token + envío + auditoría). Este servicio solo arma el
   XML sin firmar y registra el resultado (trackId / error) que `recepcion`
   devuelve.
+- POST /facturas/{id}/actualizar-estado consulta por trackId el resultado de
+  la validación de la DGII (vía `consulta_resultado`) y pasa la factura de
+  'enviado' a 'aceptado' o 'rechazado'. Lo mismo ocurre una vez, best-effort,
+  justo después de enviar, y periódicamente en una tarea de fondo (ver
+  `app.estado_dgii`).
 
 Nota: los e-CF tipo 32 (Factura de Consumo Electrónica) con monto por debajo
 del umbral que exige la DGII para RFCE normalmente se envían como un RESUMEN
@@ -26,7 +31,7 @@ fuera del alcance de este módulo.
 import asyncio
 import logging
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from decimal import Decimal, InvalidOperation
 
 import httpx
@@ -36,11 +41,12 @@ from fastapi.responses import Response
 
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.compras606 import fecha_dgii_a_aaaammdd, registrar_compra_606
-from libs.ecf_common.db import cerrar_pool, crear_pool
+from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
 from libs.ecf_common.xml_tools import nombre_archivo_ecf
 
-from . import inventario_client, repository
+from . import estado_dgii, inventario_client, repository
 from .config import FacturasApiSettings, get_settings
+from .consulta_resultado_client import ConsultaResultadoError
 from .inventario_client import InventarioApiError, StockInsuficienteError
 from .repository import FacturaNoEncontradaError
 from .representacion_impresa import RepresentacionImpresaError, generar_pdf
@@ -91,7 +97,18 @@ async def lifespan(app: FastAPI):
             "aquí Postgres no es opcional (es donde viven las facturas)."
         )
     app.state.db_pool = pool
+
+    # Tarea de fondo que lleva a 'aceptado'/'rechazado' las facturas que
+    # siguen en 'enviado' (ver app.estado_dgii). Con 0 queda desactivada --
+    # así la corren los tests, para no lanzarla con el pool de mentira.
+    sincronizacion = None
+    if settings.sincronizar_estado_cada_segundos > 0:
+        sincronizacion = asyncio.create_task(estado_dgii.bucle_sincronizacion(pool, settings))
     yield
+    if sincronizacion is not None:
+        sincronizacion.cancel()
+        with suppress(asyncio.CancelledError):
+            await sincronizacion
     await cerrar_pool(app.state.db_pool)
 
 
@@ -438,6 +455,66 @@ async def enviar_factura(factura_id: str, settings: FacturasApiSettings = Depend
     if track_id and factura["tipo_ecf"] in _TIPOS_COMPRAS_606:
         await _registrar_compra_606_autoemitida(_pool(), factura, encf, settings)
 
+    if track_id:
+        actualizada = await _consultar_resultado_tras_envio(actualizada, settings)
+
     return EnviarResponse(
         id=fid, estado=actualizada["estado"], track_id=track_id, error=actualizada.get("error")
     )
+
+
+# Pausa antes de la consulta inmediata del resultado: la DGII valida en
+# ~200 ms en promedio, consultar al instante casi siempre daría "En Proceso".
+_ESPERA_CONSULTA_TRAS_ENVIO_SEGUNDOS = 1.0
+
+
+async def _consultar_resultado_tras_envio(factura: dict, settings: FacturasApiSettings) -> dict:
+    """Best-effort: el e-CF ya se envió (trackId en mano). Si la consulta
+    falla o la DGII sigue "En Proceso", la factura queda en 'enviado' y la
+    resuelven la tarea de fondo o el botón "Actualizar estado DGII" -- nunca
+    debe hacer fallar la respuesta de /enviar."""
+    try:
+        await asyncio.sleep(_ESPERA_CONSULTA_TRAS_ENVIO_SEGUNDOS)
+        return await estado_dgii.actualizar_estado_factura(_pool(), factura, settings)
+    except Exception as exc:
+        logger.warning(
+            "No se pudo consultar el resultado de la factura %s tras enviarla: %s",
+            factura.get("id"),
+            exc,
+        )
+        return factura
+
+
+@app.post("/facturas/{factura_id}/actualizar-estado", response_model=FacturaDetalle)
+async def actualizar_estado_dgii(factura_id: str, settings: FacturasApiSettings = Depends(get_settings)):
+    """Consulta a la DGII (por trackId) el resultado de la validación del e-CF
+    y lo aplica: 'aceptado' (también condicional), 'rechazado', o sin cambios
+    mientras siga "En Proceso". Para una factura en estado definitivo
+    devuelve la factura tal cual, sin consultar."""
+    fid = _parse_id(factura_id)
+    factura = await _obtener_o_404(fid)
+    if not factura.get("track_id"):
+        raise HTTPException(
+            status_code=409,
+            detail="La factura no tiene trackId: todavía no se ha enviado a la DGII (o el envío no llegó a la DGII).",
+        )
+    if not estado_dgii.admite_actualizacion(factura):
+        return factura
+
+    try:
+        return await estado_dgii.actualizar_estado_factura(_pool(), factura, settings)
+    except ConsultaResultadoError as exc:
+        logger.error("No se pudo consultar el resultado de la factura %s: %s", fid, exc)
+        await registrar_envio(
+            _pool(),
+            modulo=estado_dgii.MODULO_AUDITORIA,
+            ambiente=settings.app_env,
+            rnc_emisor=factura["rnc_emisor"],
+            encf=factura.get("encf"),
+            track_id=factura["track_id"],
+            error=str(exc),
+        )
+        raise HTTPException(
+            status_code=502,
+            detail=f"No se pudo consultar el estado del comprobante en la DGII; intente de nuevo en unos minutos. ({exc})",
+        ) from exc

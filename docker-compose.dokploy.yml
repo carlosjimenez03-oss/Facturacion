@@ -221,6 +221,12 @@ services:
       dockerfile: services/erp_api/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
     ports: ["8019:8000"]
+    # El <<: de arriba no fusiona `environment` en profundidad: se repite el
+    # ancla y se agrega EMISOR_100_ELECTRONICO (true = no presenta 607/608
+    # por emitir solo e-CF; ponga false si todavía emite NCF serie B).
+    environment:
+      <<: *modulo-env
+      EMISOR_100_ELECTRONICO: ${EMISOR_100_ELECTRONICO:-true}
 
   # --- Frontend (React) ---
 
