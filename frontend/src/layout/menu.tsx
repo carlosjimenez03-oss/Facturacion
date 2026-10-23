@@ -36,7 +36,7 @@ const pendiente = (slug: string) => `/modulo/${slug}`;
 
 export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
   { id: "inicio", label: "Inicio", icon: <IconInicio />, to: "/" },
-  { id: "bandeja", label: "Bandeja de entrada", icon: <IconBandeja />, to: pendiente("bandeja") },
+  { id: "bandeja", label: "Bandeja de entrada", icon: <IconBandeja />, to: "/bandeja" },
   "separador",
   {
     id: "ingresos",
@@ -55,11 +55,11 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
     label: "Compras",
     icon: <IconCompras />,
     hijos: [
-      { label: "Facturas de compra", to: "/inventario/compras" },
-      { label: "Comprobantes de compras E41", to: pendiente("compras-e41") },
-      { label: "Gastos menores E43", to: pendiente("gastos-e43") },
-      { label: "Pagos a proveedores", to: pendiente("pagos-proveedores") },
-      { label: "Retenciones", to: pendiente("retenciones") },
+      { label: "Facturas de compra", to: "/compras/facturas" },
+      { label: "Comprobantes de compras E41", to: "/compras/e41" },
+      { label: "Gastos menores E43", to: "/compras/e43" },
+      { label: "Pagos a proveedores", to: "/compras/pagos" },
+      { label: "Retenciones", to: "/compras/retenciones" },
     ],
   },
   { id: "contactos", label: "Contactos", icon: <IconContactos />, to: "/contactos" },
@@ -69,6 +69,7 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
     icon: <IconInventario />,
     hijos: [
       { label: "Productos", to: "/inventario/productos" },
+      { label: "Entradas de mercancía", to: "/inventario/compras" },
       { label: "Kardex / movimientos", to: "/inventario/movimientos" },
       { label: "Lotes", to: pendiente("lotes") },
       { label: "Ajustes", to: pendiente("ajustes") },

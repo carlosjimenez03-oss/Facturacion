@@ -231,7 +231,7 @@ services:
       <<: *modulo-env
       EMISOR_100_ELECTRONICO: ${EMISOR_100_ELECTRONICO:-true}
       APROBACION_COMERCIAL_URL: ${APROBACION_COMERCIAL_URL:-http://aprobacion-comercial:8000}
-      EMISOR_RAZON_SOCIAL: ${EMISOR_RAZON_SOCIAL:-}
+      EMISOR_RAZON_SOCIAL: ${EMISOR_RAZON_SOCIAL:-${VITE_EMPRESA_NOMBRE:-}}
 
   # --- Frontend (React) ---
 
