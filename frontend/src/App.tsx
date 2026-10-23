@@ -19,6 +19,8 @@ import { CobrosPage } from "./pages/ingresos/Cobros";
 import { CotizacionForm } from "./pages/ingresos/CotizacionForm";
 import { CotizacionList } from "./pages/ingresos/CotizacionList";
 import { NotasCreditoPage, NotasDebitoPage } from "./pages/ingresos/Notas";
+import { FormatosPage } from "./pages/impuestos/Formatos";
+import { PreCalculoPage } from "./pages/impuestos/PreCalculo";
 import { Inicio } from "./pages/Inicio";
 import { Proximamente } from "./pages/Proximamente";
 
@@ -63,6 +65,9 @@ export default function App() {
         <Route path="/inventario/compras/:id" element={<CompraForm />} />
 
         <Route path="/inventario/movimientos" element={<MovimientosList />} />
+
+        <Route path="/impuestos/formatos/:formato" element={<FormatosPage />} />
+        <Route path="/impuestos/precalculo/:formulario" element={<PreCalculoPage />} />
 
         <Route path="/formato-606" element={<Formato606Periodos />} />
         <Route path="/formato-606/periodos/:periodo" element={<Formato606RegistrosList />} />
