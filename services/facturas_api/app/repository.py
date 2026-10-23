@@ -34,7 +34,16 @@ def _items_inventario_json(items_inventario: list[dict[str, Any]] | None) -> str
         return None
     return json.dumps(
         [
-            {**item, "producto_id": str(item["producto_id"]), "cantidad": str(item["cantidad"])}
+            {
+                **item,
+                "producto_id": str(item["producto_id"]),
+                "cantidad": str(item["cantidad"]),
+                **{
+                    campo: str(item[campo])
+                    for campo in ("almacen_id", "lote_id")
+                    if item.get(campo) is not None
+                },
+            }
             for item in items_inventario
         ]
     )
