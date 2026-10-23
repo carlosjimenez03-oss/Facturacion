@@ -1,328 +1,1075 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
-import { CODIGOS_MODIFICACION, TIPOS_ECF, TIPOS_INGRESOS, TIPOS_PAGO } from "../lib/catalogos";
-import { calcularTotales, decimal2 } from "../lib/format";
+import { CODIGOS_MODIFICACION, TIPOS_INGRESOS } from "../lib/catalogos";
+import { calcularMontoItem, decimal2 } from "../lib/format";
 import { configParaTipo } from "../lib/tipoConfig";
-import { construirDatos, construirItemsInventario, datosAFormState, estadoInicial } from "../lib/buildDatos";
-import type { FacturaDetalle } from "../lib/types";
+import { construirDatos, construirItemsInventario, datosAFormState, estadoInicial, nuevoItem } from "../lib/buildDatos";
+import type { FormState } from "../lib/buildDatos";
+import { inventarioApi } from "../lib/inventarioApi";
+import { formatoMonto, formatoRnc } from "../lib/marca";
+import {
+  buscarCliente,
+  guardarCliente,
+  guardarEmisor,
+  guardarVencimientoSecuencia,
+  leerEmisor,
+  leerVencimientoSecuencia,
+} from "../lib/preferencias";
+import type { DatosEmisor } from "../lib/preferencias";
+import { useFacturas } from "../lib/useFacturas";
+import type { FacturaDetalle, ItemFactura, Producto } from "../lib/types";
 import { FacturaAcciones } from "./FacturaAcciones";
-import { ItemsEditor } from "./ItemsEditor";
+
+/** Tipos de e-CF de venta (los que muestra el diseño) y los de compra/pago, que se eligen aparte. */
+const TIPOS_VENTA = [
+  { code: "31", label: "Crédito fiscal", desc: "Ventas a empresas con derecho a crédito de ITBIS" },
+  { code: "32", label: "Consumo", desc: "Consumidor final; permite cliente genérico" },
+  { code: "33", label: "Nota de débito", desc: "Aumenta el monto de un e-CF emitido" },
+  { code: "34", label: "Nota de crédito", desc: "Anula o reduce un e-CF emitido" },
+  { code: "44", label: "Regímenes especiales", desc: "Zonas francas y otros regímenes" },
+  { code: "45", label: "Gubernamental", desc: "Ventas a entidades del Estado" },
+  { code: "46", label: "Exportaciones", desc: "Ventas de bienes al exterior" },
+];
+const TIPOS_OTROS = [
+  { code: "41", label: "Compras", desc: "Compras a proveedores no inscritos" },
+  { code: "43", label: "Gastos menores", desc: "Gastos menores sin comprobante" },
+  { code: "47", label: "Pagos al exterior", desc: "Pagos a proveedores del exterior" },
+];
+
+/** Forma de pago del diseño -> código FormaPago de la DGII. Crédito implica TipoPago 2. */
+const PAGOS = [
+  { value: "1", label: "Efectivo" },
+  { value: "3", label: "Tarjeta" },
+  { value: "2", label: "Transferencia" },
+  { value: "4", label: "Crédito" },
+];
+
+const TASAS = [
+  { value: "1", label: "18%", tasa: 0.18 },
+  { value: "2", label: "16%", tasa: 0.16 },
+  { value: "3", label: "0%", tasa: 0 },
+  { value: "4", label: "Exento", tasa: 0 },
+];
+
+/** Monto a partir del cual una factura de consumo debe identificar al comprador. */
+const TOPE_CONSUMO_ANONIMO = 250000;
+
+function sumarDias(fechaIso: string, dias: number): string {
+  const d = new Date(`${fechaIso}T12:00:00`);
+  d.setDate(d.getDate() + dias);
+  return d.toISOString().slice(0, 10);
+}
+
+function fechaLegible(fechaIso: string): string {
+  if (!fechaIso) return "";
+  const [a, m, d] = fechaIso.split("-");
+  return `${d}/${m}/${a}`;
+}
+
+function porcentajeDescuento(item: ItemFactura): string {
+  const bruto = (Number(item.CantidadItem) || 0) * (Number(item.PrecioUnitarioItem) || 0);
+  const desc = Number(item.DescuentoMonto) || 0;
+  if (!bruto || !desc) return "";
+  return String(Math.round((desc / bruto) * 10000) / 100);
+}
+
+/** Totales con el desglose por tasa que muestra el diseño. */
+function desglose(items: ItemFactura[]) {
+  const t = { subtotal: 0, descuentos: 0, g18: 0, g16: 0, g0: 0, exento: 0, i18: 0, i16: 0, total: 0 };
+  for (const item of items) {
+    const bruto = (Number(item.CantidadItem) || 0) * (Number(item.PrecioUnitarioItem) || 0);
+    const neto = calcularMontoItem(item);
+    t.subtotal += bruto;
+    t.descuentos += bruto - neto;
+    if (item.IndicadorFacturacion === "1") {
+      t.g18 += neto;
+      t.i18 += neto * 0.18;
+    } else if (item.IndicadorFacturacion === "2") {
+      t.g16 += neto;
+      t.i16 += neto * 0.16;
+    } else if (item.IndicadorFacturacion === "3") {
+      t.g0 += neto;
+    } else if (item.IndicadorFacturacion === "4") {
+      t.exento += neto;
+    }
+  }
+  t.total = t.g18 + t.g16 + t.g0 + t.exento + t.i18 + t.i16;
+  return t;
+}
+
+function IconoInfo() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 11v5M12 8h.01" />
+    </svg>
+  );
+}
+
+function IconoAlerta() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+      <path d="M12 9v4M12 17h.01" />
+    </svg>
+  );
+}
 
 export function FacturaForm() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const editando = Boolean(id);
+  const { facturas, recargar } = useFacturas();
 
+  const [idGuardado, setIdGuardado] = useState<string | null>(id ?? null);
   const [tipoEcf, setTipoEcf] = useState("31");
-  const [form, setForm] = useState(estadoInicial("31"));
+  const [form, setForm] = useState<FormState>(() => ({
+    ...estadoInicial("31"),
+    fechaVencimientoSecuencia: leerVencimientoSecuencia("31"),
+  }));
+  const [encfManual, setEncfManual] = useState(false);
+  const [formaPago, setFormaPago] = useState("1");
+  const [emisor, setEmisor] = useState<DatosEmisor>(leerEmisor);
+  const [editandoEmisor, setEditandoEmisor] = useState(() => !leerEmisor().direccion);
+  const [consumidorFinal, setConsumidorFinal] = useState(true);
+  const [clienteEstado, setClienteEstado] = useState<"" | "encontrado" | "nuevo">("");
+  const [productos, setProductos] = useState<Producto[]>([]);
   const [facturaCompleta, setFacturaCompleta] = useState<FacturaDetalle | null>(null);
   const [cargando, setCargando] = useState(editando);
-  const [guardando, setGuardando] = useState(false);
+  const [procesando, setProcesando] = useState<"" | "borrador" | "emitir">("");
+  const [confirmar, setConfirmar] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [erroresXml, setErroresXml] = useState<string[]>([]);
 
-  function cargarFacturaCompleta() {
-    if (!id) return;
-    api.obtener(id).then(setFacturaCompleta).catch(() => {});
-  }
+  const config = useMemo(() => configParaTipo(tipoEcf), [tipoEcf]);
+  const totales = useMemo(() => desglose(form.items), [form.items]);
+  const tipoActual = [...TIPOS_VENTA, ...TIPOS_OTROS].find((t) => t.code === tipoEcf);
+  const esNota = tipoEcf === "33" || tipoEcf === "34";
+  const esConsumo = tipoEcf === "32";
+  const exigeIdentificar = esConsumo && totales.total >= TOPE_CONSUMO_ANONIMO;
+  const pideComprador = config.compradorVisible && (!esConsumo || !consumidorFinal || exigeIdentificar);
+
+  useEffect(() => {
+    inventarioApi
+      .listarProductos({ activo: true })
+      .then(setProductos)
+      .catch(() => setProductos([]));
+  }, []);
 
   useEffect(() => {
     if (!id) return;
     setCargando(true);
-    setError(null);
     api
       .obtener(id)
       .then((factura) => {
         setFacturaCompleta(factura);
         if (factura.estado !== "borrador") {
-          setError(
-            `Solo se pueden editar facturas en estado "borrador" (esta está en "${factura.estado}").`,
-          );
+          setError(`Solo se pueden editar facturas en borrador (esta está "${factura.estado}").`);
           return;
         }
         const tipo = String(factura.tipo_ecf);
+        const estado = datosAFormState(tipo, factura.encf ?? "", factura.datos, factura.items_inventario);
         setTipoEcf(tipo);
-        setForm(datosAFormState(tipo, factura.encf ?? "", factura.datos, factura.items_inventario));
+        setForm(estado);
+        setEncfManual(true);
+        setFormaPago(estado.formasPago[0]?.FormaPago ?? (estado.tipoPago === "2" ? "4" : "1"));
+        setConsumidorFinal(!estado.compradorRnc && !estado.razonSocialComprador);
+        if (estado.rncEmisor) {
+          setEmisor({
+            rnc: estado.rncEmisor,
+            razonSocial: estado.razonSocialEmisor,
+            direccion: estado.direccionEmisor,
+            correo: estado.correoEmisor,
+          });
+          setEditandoEmisor(false);
+        }
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : String(err)))
       .finally(() => setCargando(false));
   }, [id]);
 
-  const config = useMemo(() => configParaTipo(tipoEcf), [tipoEcf]);
-  const totales = useMemo(() => calcularTotales(form.items), [form.items]);
+  /** Próximo e-NCF sugerido: el mayor ya usado de este tipo + 1. */
+  const proximoEncf = useMemo(() => {
+    const prefijo = `E${tipoEcf}`;
+    let mayor = 0;
+    for (const f of facturas) {
+      if (f.encf?.startsWith(prefijo)) mayor = Math.max(mayor, Number(f.encf.slice(3)) || 0);
+    }
+    return `${prefijo}${String(mayor + 1).padStart(10, "0")}`;
+  }, [facturas, tipoEcf]);
 
-  function cambiarTipo(nuevoTipo: string) {
-    if (editando) return; // el tipo no se puede cambiar después de creada
-    setTipoEcf(nuevoTipo);
-    setForm((prev) => ({ ...prev, tipoEcf: nuevoTipo }));
-  }
+  useEffect(() => {
+    if (!encfManual) setForm((prev) => ({ ...prev, encf: proximoEncf }));
+  }, [proximoEncf, encfManual]);
 
-  function set<K extends keyof typeof form>(campo: K, valor: (typeof form)[K]) {
+  const facturasReferenciables = useMemo(
+    () => facturas.filter((f) => f.encf && (f.estado === "aceptado" || f.estado === "enviado")),
+    [facturas],
+  );
+
+  function set<K extends keyof FormState>(campo: K, valor: FormState[K]) {
     setForm((prev) => ({ ...prev, [campo]: valor }));
   }
 
-  async function guardar(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setGuardando(true);
-    try {
-      const datos = construirDatos(form, config);
-      const items_inventario = construirItemsInventario(form.items);
-      if (editando && id) {
-        await api.actualizar(id, { encf: form.encf || null, datos, items_inventario });
-        navigate(`/facturas/${id}`);
-      } else {
-        const creada = await api.crear({
-          tipo_ecf: Number(tipoEcf),
-          encf: form.encf || null,
-          datos,
-          items_inventario,
-        });
-        navigate(`/facturas/${creada.id}`);
-      }
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err));
-    } finally {
-      setGuardando(false);
+  function cambiarTipo(nuevo: string) {
+    if (editando || nuevo === tipoEcf) return;
+    setTipoEcf(nuevo);
+    setEncfManual(false);
+    setForm((prev) => ({ ...prev, tipoEcf: nuevo, fechaVencimientoSecuencia: leerVencimientoSecuencia(nuevo) }));
+  }
+
+  function verificarCliente() {
+    const encontrado = buscarCliente(form.compradorRnc);
+    if (encontrado) {
+      setForm((prev) => ({
+        ...prev,
+        razonSocialComprador: encontrado.razonSocial,
+        correoComprador: encontrado.correo,
+        direccionComprador: encontrado.direccion,
+      }));
+      setClienteEstado("encontrado");
+    } else {
+      setClienteEstado("nuevo");
     }
   }
 
-  if (cargando) return <p>Cargando…</p>;
+  function actualizarItem(index: number, cambios: Partial<ItemFactura>) {
+    setForm((prev) => {
+      const items = prev.items.slice();
+      items[index] = { ...items[index], ...cambios };
+      return { ...prev, items };
+    });
+  }
+
+  function elegirProducto(index: number, productoId: string) {
+    const producto = productos.find((p) => p.id === productoId);
+    if (!producto) {
+      actualizarItem(index, { productoId: undefined, NombreItem: "", IndicadorBienoServicio: "2" });
+      return;
+    }
+    actualizarItem(index, {
+      productoId: producto.id,
+      NombreItem: producto.nombre,
+      PrecioUnitarioItem: producto.precio_venta,
+      IndicadorBienoServicio: "1",
+    });
+  }
+
+  function cambiarDescuento(index: number, porcentaje: string) {
+    const item = form.items[index];
+    const bruto = (Number(item.CantidadItem) || 0) * (Number(item.PrecioUnitarioItem) || 0);
+    const pct = Number(porcentaje) || 0;
+    actualizarItem(index, { DescuentoMonto: pct > 0 ? decimal2((bruto * pct) / 100) : undefined });
+  }
+
+  function cambiarCantidadOPrecio(index: number, cambios: Partial<ItemFactura>) {
+    // el descuento se guarda como monto: se recalcula para mantener el mismo porcentaje
+    const item = form.items[index];
+    const pct = Number(porcentajeDescuento(item)) || 0;
+    const nuevo = { ...item, ...cambios };
+    const bruto = (Number(nuevo.CantidadItem) || 0) * (Number(nuevo.PrecioUnitarioItem) || 0);
+    actualizarItem(index, { ...cambios, DescuentoMonto: pct > 0 ? decimal2((bruto * pct) / 100) : nuevo.DescuentoMonto });
+  }
+
+  function agregarLinea() {
+    setForm((prev) => ({ ...prev, items: [...prev.items, nuevoItem(prev.items.length + 1)] }));
+  }
+
+  function quitarLinea(index: number) {
+    setForm((prev) => (prev.items.length <= 1 ? prev : { ...prev, items: prev.items.filter((_, i) => i !== index) }));
+  }
+
+  function validar(): string | null {
+    if (!emisor.rnc || !emisor.razonSocial || !emisor.direccion) return "Complete los datos del emisor (RNC, razón social y dirección).";
+    if (!form.encf || form.encf.length !== 13) return "El e-NCF debe tener 13 caracteres (por ejemplo E310000000001).";
+    if (config.requiereFechaVencimientoSecuencia && !form.fechaVencimientoSecuencia)
+      return "Indique hasta cuándo está autorizada la secuencia de este tipo de comprobante.";
+    if (pideComprador && config.compradorRncRequerido && !form.compradorRnc) return "El RNC o cédula del cliente es obligatorio para este tipo de comprobante.";
+    if (pideComprador && (form.compradorRnc || config.compradorRncRequerido) && !form.razonSocialComprador)
+      return "Escriba la razón social del cliente.";
+    if (exigeIdentificar && !form.compradorRnc) return "El total supera RD$ 250,000.00: identifique al comprador con RNC o cédula.";
+    if (config.informacionReferenciaRequerida && (!form.ncfModificado || !form.fechaNcfModificado))
+      return "Indique el e-NCF original que modifica y su fecha.";
+    if (form.items.some((i) => !i.NombreItem)) return "Cada línea debe tener un producto o una descripción.";
+    if (form.items.some((i) => !(Number(i.CantidadItem) > 0))) return "Las cantidades deben ser mayores que cero.";
+    if (formaPago === "4" && !form.fechaLimitePago) return "Indique el vencimiento del pago para la venta a crédito.";
+    return null;
+  }
+
+  /** Guarda (crea o actualiza) la factura y devuelve su id. */
+  async function guardar(): Promise<string> {
+    const tipoPago = formaPago === "4" ? "2" : "1";
+    const estado: FormState = {
+      ...form,
+      tipoEcf,
+      tipoPago,
+      formasPago: [{ FormaPago: formaPago, MontoPago: decimal2(totales.total) }],
+      rncEmisor: emisor.rnc.replace(/\D/g, ""),
+      razonSocialEmisor: emisor.razonSocial,
+      direccionEmisor: emisor.direccion,
+      correoEmisor: emisor.correo,
+      ...(pideComprador
+        ? {}
+        : { compradorRnc: "", compradorIdentificadorExtranjero: "", razonSocialComprador: "", correoComprador: "", direccionComprador: "" }),
+    };
+    const datos = construirDatos(estado, config);
+    const items_inventario = construirItemsInventario(estado.items);
+    guardarEmisor(emisor);
+    guardarVencimientoSecuencia(tipoEcf, form.fechaVencimientoSecuencia);
+    if (pideComprador) {
+      guardarCliente(form.compradorRnc, {
+        razonSocial: form.razonSocialComprador,
+        correo: form.correoComprador,
+        direccion: form.direccionComprador,
+      });
+    }
+    if (idGuardado) {
+      await api.actualizar(idGuardado, { encf: form.encf || null, datos, items_inventario });
+      return idGuardado;
+    }
+    const creada = await api.crear({ tipo_ecf: Number(tipoEcf), encf: form.encf || null, datos, items_inventario });
+    setIdGuardado(creada.id);
+    return creada.id;
+  }
+
+  async function guardarBorrador() {
+    setError(null);
+    setErroresXml([]);
+    const problema = validar();
+    if (problema) return setError(problema);
+    setProcesando("borrador");
+    try {
+      const fid = await guardar();
+      recargar();
+      navigate(`/facturas/${fid}`);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setProcesando("");
+    }
+  }
+
+  function pedirConfirmacion() {
+    setError(null);
+    setErroresXml([]);
+    const problema = validar();
+    if (problema) return setError(problema);
+    setConfirmar(true);
+  }
+
+  async function emitir() {
+    setConfirmar(false);
+    setProcesando("emitir");
+    try {
+      const fid = await guardar();
+      const xml = await api.generarXml(fid);
+      if (xml.errores.length > 0) {
+        setErroresXml(xml.errores);
+        setError("La DGII no aceptaría este comprobante. Corrija lo siguiente y vuelva a emitir (el borrador quedó guardado).");
+        return;
+      }
+      await api.enviar(fid);
+      recargar();
+      navigate(`/facturas/${fid}`);
+    } catch (err) {
+      recargar();
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setProcesando("");
+    }
+  }
+
+  if (cargando) return <div className="content"><p className="mut">Cargando…</p></div>;
+
+  const faltaStock = form.items.some((item) => {
+    const p = productos.find((x) => x.id === item.productoId);
+    return p != null && Number(p.stock_actual) < (Number(item.CantidadItem) || 0);
+  });
 
   return (
-    <form className="factura-form" onSubmit={guardar}>
-      <section>
-        <h2>Tipo de comprobante</h2>
-        <div className="tipo-picker">
-          {TIPOS_ECF.map((t) => (
-            <button
-              key={t.value}
-              type="button"
-              className={`tipo-pill${t.value === tipoEcf ? " active" : ""}`}
-              onClick={() => cambiarTipo(t.value)}
-              disabled={editando}
-              title={editando ? "El tipo no se puede cambiar después de creada la factura" : undefined}
-            >
-              {t.label}
-            </button>
-          ))}
+    <div className="content">
+      <div className="ph">
+        <div>
+          <div className="crumb">
+            <Link to="/facturas">Facturas de venta</Link>
+            <span>/</span>
+            <span>{editando ? "Editar borrador" : "Nueva"}</span>
+          </div>
+          <h1>{editando ? "Editar factura" : "Nueva factura electrónica"}</h1>
+          <p>
+            Próximo e-NCF:{" "}
+            <span className="mono" style={{ color: "#111827", fontWeight: 600 }}>
+              {form.encf || proximoEncf}
+            </span>
+            {form.fechaVencimientoSecuencia && ` · Secuencia autorizada hasta ${fechaLegible(form.fechaVencimientoSecuencia)}`}
+          </p>
         </div>
-        <label>
-          e-NCF
-          <input
-            value={form.encf}
-            onChange={(e) => set("encf", e.target.value)}
-            placeholder="Ej. E310000000001"
-            maxLength={13}
-            required
-          />
-        </label>
-        {config.requiereFechaVencimientoSecuencia && (
-          <label>
-            Fecha vencimiento de secuencia
-            <input
-              type="date"
-              value={form.fechaVencimientoSecuencia}
-              onChange={(e) => set("fechaVencimientoSecuencia", e.target.value)}
-              required
-            />
-          </label>
-        )}
-        {config.requiereTipoIngresos && (
-          <label>
-            Tipo de ingresos
-            <select value={form.tipoIngresos} onChange={(e) => set("tipoIngresos", e.target.value)}>
-              {TIPOS_INGRESOS.map((t) => (
-                <option key={t.value} value={t.value}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-        <label>
-          Tipo de pago
-          <select value={form.tipoPago} onChange={(e) => set("tipoPago", e.target.value)}>
-            {TIPOS_PAGO.map((t) => (
-              <option key={t.value} value={t.value}>
-                {t.label}
-              </option>
+      </div>
+
+      <section className="card">
+        <div className="card-h">
+          <h2>Emisor</h2>
+          {!editandoEmisor && (
+            <button type="button" className="btn btn-g btn-sm" onClick={() => setEditandoEmisor(true)}>
+              Cambiar
+            </button>
+          )}
+        </div>
+        <div className="card-b">
+          {editandoEmisor ? (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 16 }}>
+              <div className="fld">
+                <label className="lbl" htmlFor="em-rnc">RNC emisor <span className="req">*</span></label>
+                <input id="em-rnc" className="inp mono" value={emisor.rnc} onChange={(e) => setEmisor({ ...emisor, rnc: e.target.value })} placeholder="131897542" />
+              </div>
+              <div className="fld">
+                <label className="lbl" htmlFor="em-rs">Razón social <span className="req">*</span></label>
+                <input id="em-rs" className="inp" value={emisor.razonSocial} onChange={(e) => setEmisor({ ...emisor, razonSocial: e.target.value })} />
+              </div>
+              <div className="fld">
+                <label className="lbl" htmlFor="em-dir">Dirección <span className="req">*</span></label>
+                <input id="em-dir" className="inp" value={emisor.direccion} onChange={(e) => setEmisor({ ...emisor, direccion: e.target.value })} placeholder="Calle, número, sector, ciudad" />
+              </div>
+              <div className="fld">
+                <label className="lbl" htmlFor="em-mail">Correo</label>
+                <input id="em-mail" type="email" className="inp" value={emisor.correo} onChange={(e) => setEmisor({ ...emisor, correo: e.target.value })} />
+              </div>
+              <span className="hint" style={{ gridColumn: "1 / -1" }}>
+                Se recuerdan en este navegador para las próximas facturas.
+              </span>
+            </div>
+          ) : (
+            <div className="row" style={{ gap: 16 }}>
+              <b style={{ color: "#111827" }}>{emisor.razonSocial}</b>
+              <span className="mono mut">RNC {formatoRnc(emisor.rnc)}</span>
+              <span className="mut">{emisor.direccion}</span>
+            </div>
+          )}
+        </div>
+      </section>
+
+      <section className="card">
+        <div className="card-h">
+          <h2>Tipo de comprobante</h2>
+          <span className="hint">El formulario se adapta a los requisitos de cada tipo de e-CF</span>
+        </div>
+        <div className="card-b stack-sm">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 10 }}>
+            {TIPOS_VENTA.map((t) => (
+              <TarjetaTipo key={t.code} tipo={t} activo={t.code === tipoEcf} deshabilitado={editando} onElegir={cambiarTipo} />
             ))}
-          </select>
-        </label>
-      </section>
-
-      <section>
-        <h2>Emisor</h2>
-        <label>
-          RNC emisor
-          <input
-            value={form.rncEmisor}
-            onChange={(e) => set("rncEmisor", e.target.value)}
-            placeholder="9 u 11 dígitos"
-            required
-          />
-        </label>
-        <label>
-          Razón social
-          <input
-            value={form.razonSocialEmisor}
-            onChange={(e) => set("razonSocialEmisor", e.target.value)}
-            required
-          />
-        </label>
-        <label>
-          Dirección
-          <input
-            value={form.direccionEmisor}
-            onChange={(e) => set("direccionEmisor", e.target.value)}
-            required
-          />
-        </label>
-        <label>
-          Fecha de emisión
-          <input
-            type="date"
-            value={form.fechaEmision}
-            onChange={(e) => set("fechaEmision", e.target.value)}
-            required
-          />
-        </label>
-        <label>
-          Correo (opcional)
-          <input
-            type="email"
-            value={form.correoEmisor}
-            onChange={(e) => set("correoEmisor", e.target.value)}
-          />
-        </label>
-      </section>
-
-      {config.compradorVisible && (
-        <section>
-          <h2>Comprador{config.compradorRncRequerido ? "" : " (opcional)"}</h2>
-          <label>
-            RNC comprador{config.compradorRncRequerido ? "" : " / cédula"}
-            <input
-              value={form.compradorRnc}
-              onChange={(e) => set("compradorRnc", e.target.value)}
-              required={config.compradorRncRequerido}
-            />
-          </label>
-          {!config.compradorRncRequerido && (
-            <label>
-              Identificador extranjero (si no tiene RNC)
-              <input
-                value={form.compradorIdentificadorExtranjero}
-                onChange={(e) => set("compradorIdentificadorExtranjero", e.target.value)}
-              />
-            </label>
-          )}
-          <label>
-            Razón social / nombre
-            <input
-              value={form.razonSocialComprador}
-              onChange={(e) => set("razonSocialComprador", e.target.value)}
-              required={config.compradorRncRequerido}
-            />
-          </label>
-          <label>
-            Correo (opcional)
-            <input
-              type="email"
-              value={form.correoComprador}
-              onChange={(e) => set("correoComprador", e.target.value)}
-            />
-          </label>
-          <label>
-            Dirección (opcional)
-            <input
-              value={form.direccionComprador}
-              onChange={(e) => set("direccionComprador", e.target.value)}
-            />
-          </label>
-        </section>
-      )}
-
-      {(config.informacionReferenciaRequerida || form.ncfModificado) && (
-        <section>
-          <h2>Comprobante que modifica{config.informacionReferenciaRequerida ? "" : " (opcional)"}</h2>
-          <label>
-            NCF modificado
-            <input
-              value={form.ncfModificado}
-              onChange={(e) => set("ncfModificado", e.target.value)}
-              required={config.informacionReferenciaRequerida}
-            />
-          </label>
-          <label>
-            Fecha del NCF modificado
-            <input
-              type="date"
-              value={form.fechaNcfModificado}
-              onChange={(e) => set("fechaNcfModificado", e.target.value)}
-              required={config.informacionReferenciaRequerida}
-            />
-          </label>
-          <label>
-            Motivo de la modificación
-            <select value={form.codigoModificacion} onChange={(e) => set("codigoModificacion", e.target.value)}>
-              {CODIGOS_MODIFICACION.map((c) => (
-                <option key={c.value} value={c.value}>
-                  {c.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          {config.requiereIndicadorNotaCredito && (
-            <label>
-              ¿Emitida más de 30 días después de la factura original?
-              <select
-                value={form.indicadorNotaCredito}
-                onChange={(e) => set("indicadorNotaCredito", e.target.value)}
+          </div>
+          <div className="row" style={{ gap: 6 }}>
+            <span className="hint">Otros comprobantes:</span>
+            {TIPOS_OTROS.map((t) => (
+              <button
+                key={t.code}
+                type="button"
+                className={`btn btn-sm ${t.code === tipoEcf ? "btn-p" : "btn-g"}`}
+                onClick={() => cambiarTipo(t.code)}
+                disabled={editando}
+                title={t.desc}
               >
-                <option value="0">No (≤ 30 días)</option>
-                <option value="1">Sí (&gt; 30 días)</option>
-              </select>
-            </label>
+                E{t.code} · {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "flex-start" }}>
+        <div style={{ flex: "2 1 620px", minWidth: 0, display: "flex", flexDirection: "column", gap: 16 }}>
+          <section className="card">
+            <div className="card-h">
+              <h2>{tipoEcf === "41" || tipoEcf === "47" ? "Proveedor" : "Cliente"}</h2>
+              <span className="chip">
+                {!config.compradorVisible ? "No lleva comprador" : config.compradorRncRequerido ? "RNC obligatorio" : "Cliente opcional"}
+              </span>
+            </div>
+            <div className="card-b" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {esConsumo && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    <button
+                      type="button"
+                      className={consumidorFinal ? "sw on" : "sw"}
+                      onClick={() => setConsumidorFinal(!consumidorFinal)}
+                      aria-pressed={consumidorFinal}
+                      aria-label="Usar cliente genérico"
+                    />
+                    <div>
+                      <div style={{ fontWeight: 600, color: "#111827" }}>Consumidor final (cliente genérico)</div>
+                      <div className="hint">No requiere RNC ni cédula para montos menores de RD$ 250,000.00</div>
+                    </div>
+                  </div>
+                  {exigeIdentificar && (
+                    <div className="al al-w">
+                      <IconoAlerta />
+                      <span>
+                        <b>El total supera RD$ 250,000.00.</b> Identifique al comprador con RNC o cédula para poder emitir el e-CF de Consumo.
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {pideComprador && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16 }}>
+                  <div className="fld">
+                    <label className="lbl" htmlFor="rnc">
+                      RNC o cédula {tipoEcf === "41" || tipoEcf === "47" ? "del proveedor" : "del cliente"}
+                      {config.compradorRncRequerido && <span className="req">*</span>}
+                      <span className="tip" data-tip="Registro Nacional del Contribuyente (9 dígitos) o cédula (11 dígitos).">
+                        <button type="button" className="info" aria-label="Qué es el RNC">
+                          <IconoInfo />
+                        </button>
+                      </span>
+                    </label>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input
+                        id="rnc"
+                        className="inp mono"
+                        value={form.compradorRnc}
+                        onChange={(e) => {
+                          set("compradorRnc", e.target.value.replace(/[^\d-]/g, ""));
+                          setClienteEstado("");
+                        }}
+                        onBlur={() => form.compradorRnc && !form.razonSocialComprador && verificarCliente()}
+                        placeholder="130452187"
+                        inputMode="numeric"
+                      />
+                      <button type="button" className="btn btn-o" onClick={verificarCliente} disabled={!form.compradorRnc}>
+                        Verificar
+                      </button>
+                    </div>
+                  </div>
+                  <div className="fld">
+                    <label className="lbl" htmlFor="rs">Razón social</label>
+                    {clienteEstado === "encontrado" && form.razonSocialComprador ? (
+                      <div
+                        style={{
+                          minHeight: 40,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 10,
+                          padding: "0 12px",
+                          borderRadius: 8,
+                          background: "#F0FDF4",
+                          border: "1px solid #BBF7D0",
+                        }}
+                      >
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#15803D" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M20 6 9 17l-5-5" />
+                        </svg>
+                        <span style={{ fontWeight: 600, color: "#14532D", fontSize: 13.5 }}>{form.razonSocialComprador}</span>
+                        <button type="button" className="bd b-acep" style={{ marginLeft: "auto", height: 22, border: 0, cursor: "pointer" }} onClick={() => setClienteEstado("nuevo")} title="Editar">
+                          Activo
+                        </button>
+                      </div>
+                    ) : (
+                      <input id="rs" className="inp" value={form.razonSocialComprador} onChange={(e) => set("razonSocialComprador", e.target.value)} placeholder="Nombre o razón social" />
+                    )}
+                    {clienteEstado === "nuevo" && <span className="hint">Cliente nuevo: se guardará para la próxima vez.</span>}
+                  </div>
+                  <div className="fld">
+                    <label className="lbl" htmlFor="cmail">Correo del cliente</label>
+                    <input id="cmail" type="email" className="inp" value={form.correoComprador} onChange={(e) => set("correoComprador", e.target.value)} placeholder="opcional" />
+                  </div>
+                  <div className="fld">
+                    <label className="lbl" htmlFor="cdir">Dirección del cliente</label>
+                    <input id="cdir" className="inp" value={form.direccionComprador} onChange={(e) => set("direccionComprador", e.target.value)} placeholder="opcional" />
+                  </div>
+                </div>
+              )}
+
+              {esNota && (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
+                    gap: 16,
+                    padding: 16,
+                    borderRadius: 10,
+                    background: "#F8FAFC",
+                    border: "1px dashed #CBD5E1",
+                  }}
+                >
+                  <div className="fld">
+                    <label className="lbl" htmlFor="afec">
+                      e-NCF original afectado <span className="req">*</span>
+                    </label>
+                    <input
+                      id="afec"
+                      className="inp mono"
+                      list="encf-referenciables"
+                      value={form.ncfModificado}
+                      onChange={(e) => set("ncfModificado", e.target.value.toUpperCase())}
+                      placeholder="E310000000001"
+                      maxLength={13}
+                    />
+                    <datalist id="encf-referenciables">
+                      {facturasReferenciables.map((f) => (
+                        <option key={f.id} value={f.encf ?? ""}>
+                          {new Date(f.creado_en).toLocaleDateString("es-DO")}
+                        </option>
+                      ))}
+                    </datalist>
+                  </div>
+                  <div className="fld">
+                    <label className="lbl" htmlFor="afec-f">
+                      Fecha del e-NCF original <span className="req">*</span>
+                    </label>
+                    <input id="afec-f" type="date" className="inp" value={form.fechaNcfModificado} onChange={(e) => set("fechaNcfModificado", e.target.value)} />
+                  </div>
+                  <div className="fld">
+                    <label className="lbl" htmlFor="cod">
+                      Código de modificación <span className="req">*</span>
+                    </label>
+                    <select id="cod" className="inp" value={form.codigoModificacion} onChange={(e) => set("codigoModificacion", e.target.value)}>
+                      {CODIGOS_MODIFICACION.map((c) => (
+                        <option key={c.value} value={c.value}>
+                          {c.value} · {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  {config.requiereIndicadorNotaCredito && (
+                    <div className="fld">
+                      <label className="lbl" htmlFor="ind-nc">¿Más de 30 días desde la factura original?</label>
+                      <select id="ind-nc" className="inp" value={form.indicadorNotaCredito} onChange={(e) => set("indicadorNotaCredito", e.target.value)}>
+                        <option value="0">No (30 días o menos)</option>
+                        <option value="1">Sí (más de 30 días)</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 16 }}>
+                <div className="fld">
+                  <label className="lbl" htmlFor="femi">Fecha de emisión</label>
+                  <input id="femi" type="date" className="inp" value={form.fechaEmision} onChange={(e) => set("fechaEmision", e.target.value)} />
+                </div>
+                <div className="fld">
+                  <label className="lbl" htmlFor="fven">
+                    Vencimiento del pago {formaPago === "4" && <span className="req">*</span>}
+                  </label>
+                  <input
+                    id="fven"
+                    type="date"
+                    className="inp"
+                    value={form.fechaLimitePago}
+                    onChange={(e) => set("fechaLimitePago", e.target.value)}
+                    disabled={formaPago !== "4"}
+                    title={formaPago !== "4" ? "Solo aplica a ventas a crédito" : undefined}
+                  />
+                </div>
+                <div className="fld">
+                  <label className="lbl" htmlFor="encf">
+                    e-NCF <span className="req">*</span>
+                  </label>
+                  <input
+                    id="encf"
+                    className="inp mono"
+                    value={form.encf}
+                    onChange={(e) => {
+                      setEncfManual(true);
+                      set("encf", e.target.value.toUpperCase());
+                    }}
+                    maxLength={13}
+                  />
+                </div>
+                {config.requiereFechaVencimientoSecuencia && (
+                  <div className="fld">
+                    <label className="lbl" htmlFor="fsec">
+                      Secuencia vence <span className="req">*</span>
+                    </label>
+                    <input id="fsec" type="date" className="inp" value={form.fechaVencimientoSecuencia} onChange={(e) => set("fechaVencimientoSecuencia", e.target.value)} />
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="card">
+            <div className="card-h">
+              <h2>Productos y servicios</h2>
+              <button type="button" className="btn btn-o btn-sm" onClick={agregarLinea}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden="true">
+                  <path d="M12 5v14M5 12h14" />
+                </svg>
+                Agregar línea
+              </button>
+            </div>
+            <div className="tw">
+              <table className="tbl" style={{ minWidth: 900 }}>
+                <thead>
+                  <tr>
+                    <th style={{ width: "30%" }}>Producto</th>
+                    <th>Existencia</th>
+                    <th style={{ width: 96 }}>Cantidad</th>
+                    <th className="num" style={{ width: 120 }}>Precio</th>
+                    <th className="num" style={{ width: 80 }}>Desc. %</th>
+                    <th style={{ width: 110 }}>
+                      <span className="tip" data-tip="18% tasa general · 16% tasa reducida (café, yogur, mantequilla, azúcar, entre otros) · Exento según el Código Tributario.">
+                        ITBIS ⓘ
+                      </span>
+                    </th>
+                    <th className="num">Importe (RD$)</th>
+                    <th style={{ width: 40 }} aria-label="Quitar" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {form.items.map((item, idx) => {
+                    const producto = productos.find((p) => p.id === item.productoId);
+                    const stock = producto ? Number(producto.stock_actual) : null;
+                    const cantidad = Number(item.CantidadItem) || 0;
+                    const falta = stock != null && stock < cantidad ? cantidad - stock : 0;
+                    return (
+                      <tr key={idx}>
+                        <td>
+                          <select
+                            className="inp inp-sm"
+                            value={item.productoId ?? ""}
+                            onChange={(e) => elegirProducto(idx, e.target.value)}
+                            aria-label={`Producto de la línea ${idx + 1}`}
+                            style={{ fontWeight: 500 }}
+                          >
+                            <option value="">Servicio u otro (sin inventario)</option>
+                            {productos.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                {p.nombre}
+                              </option>
+                            ))}
+                          </select>
+                          {producto ? (
+                            <div className="hint mono" style={{ marginTop: 4 }}>{producto.sku}</div>
+                          ) : (
+                            <input
+                              className="inp inp-sm"
+                              style={{ marginTop: 6 }}
+                              value={item.NombreItem}
+                              onChange={(e) => actualizarItem(idx, { NombreItem: e.target.value })}
+                              placeholder="Descripción del servicio"
+                              aria-label={`Descripción de la línea ${idx + 1}`}
+                            />
+                          )}
+                        </td>
+                        <td>
+                          {stock == null ? (
+                            <span className="mut">—</span>
+                          ) : (
+                            <>
+                              <span style={{ fontVariantNumeric: "tabular-nums", color: falta ? "#B91C1C" : "#111827", fontWeight: 600 }}>
+                                {formatoMonto(stock).replace(/\.00$/, "")} uds
+                              </span>
+                              {falta > 0 && (
+                                <div className="err-t" style={{ fontSize: 12, marginTop: 2 }}>
+                                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                    <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+                                    <path d="M12 9v4M12 17h.01" />
+                                  </svg>
+                                  Faltan {formatoMonto(falta).replace(/\.00$/, "")}
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </td>
+                        <td>
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            className="inp inp-sm"
+                            style={{ borderColor: falta ? "#DC2626" : undefined }}
+                            value={item.CantidadItem}
+                            onChange={(e) => cambiarCantidadOPrecio(idx, { CantidadItem: e.target.value })}
+                            aria-label={`Cantidad de la línea ${idx + 1}`}
+                          />
+                        </td>
+                        <td className="num">
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            className="inp inp-sm"
+                            style={{ textAlign: "right" }}
+                            value={item.PrecioUnitarioItem}
+                            onChange={(e) => cambiarCantidadOPrecio(idx, { PrecioUnitarioItem: e.target.value })}
+                            aria-label={`Precio de la línea ${idx + 1}`}
+                          />
+                        </td>
+                        <td className="num">
+                          <input
+                            type="number"
+                            min="0"
+                            max="100"
+                            step="any"
+                            className="inp inp-sm"
+                            style={{ textAlign: "right" }}
+                            value={porcentajeDescuento(item)}
+                            onChange={(e) => cambiarDescuento(idx, e.target.value)}
+                            placeholder="—"
+                            aria-label={`Descuento de la línea ${idx + 1}`}
+                          />
+                        </td>
+                        <td>
+                          <select
+                            className="inp inp-sm"
+                            value={item.IndicadorFacturacion}
+                            onChange={(e) => actualizarItem(idx, { IndicadorFacturacion: e.target.value })}
+                            aria-label={`ITBIS de la línea ${idx + 1}`}
+                          >
+                            {TASAS.map((t) => (
+                              <option key={t.value} value={t.value}>
+                                {t.label}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
+                        <td className="num" style={{ fontWeight: 600, color: "#111827" }}>
+                          {formatoMonto(calcularMontoItem(item))}
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="ib"
+                            style={{ width: 30, height: 30 }}
+                            onClick={() => quitarLinea(idx)}
+                            disabled={form.items.length <= 1}
+                            aria-label={`Quitar línea ${idx + 1}`}
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden="true">
+                              <path d="M18 6 6 18M6 6l12 12" />
+                            </svg>
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            {faltaStock && (
+              <div style={{ padding: "0 20px 16px" }}>
+                <div className="al al-w">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M21 8 12 3 3 8v8l9 5 9-5z" />
+                    <path d="M3 8l9 5 9-5" />
+                  </svg>
+                  <span>
+                    <b>Existencia insuficiente.</b> Hay líneas con cantidad mayor a la disponible. Puede guardar el borrador, pero para
+                    emitir debe ajustar la cantidad o registrar la compra de la mercancía.
+                  </span>
+                </div>
+              </div>
+            )}
+            {productos.length === 0 && (
+              <div style={{ padding: "0 20px 16px" }}>
+                <span className="hint">
+                  No hay productos en el catálogo. Puede facturar servicios o <Link to="/inventario/productos/nuevo">crear un producto</Link>.
+                </span>
+              </div>
+            )}
+          </section>
+        </div>
+
+        <div style={{ flex: "1 1 320px", minWidth: 0, display: "flex", flexDirection: "column", gap: 16 }}>
+          <section className="card">
+            <div className="card-h">
+              <h2>Totales</h2>
+              <span className="chip mono">{form.encf || proximoEncf}</span>
+            </div>
+            <dl className="kv card-b" style={{ gridTemplateColumns: "1fr auto" }}>
+              <dt>Subtotal</dt>
+              <dd className="num">{formatoMonto(totales.subtotal)}</dd>
+              <dt>Descuentos</dt>
+              <dd className="num">-{formatoMonto(totales.descuentos)}</dd>
+              <dt>Gravado 18%</dt>
+              <dd className="num">{formatoMonto(totales.g18)}</dd>
+              <dt>Gravado 16%</dt>
+              <dd className="num">{formatoMonto(totales.g16)}</dd>
+              {totales.g0 > 0 && (
+                <>
+                  <dt>Gravado 0%</dt>
+                  <dd className="num">{formatoMonto(totales.g0)}</dd>
+                </>
+              )}
+              <dt>Exento</dt>
+              <dd className="num">{formatoMonto(totales.exento)}</dd>
+              <dt>ITBIS 18%</dt>
+              <dd className="num">{formatoMonto(totales.i18)}</dd>
+              <dt>ITBIS 16%</dt>
+              <dd className="num">{formatoMonto(totales.i16)}</dd>
+              <dt style={{ fontSize: 15, fontWeight: 650, color: "#111827", borderTop: "1px solid #E5E7EB", paddingTop: 12 }}>Total a pagar</dt>
+              <dd className="num" style={{ fontSize: 20, fontWeight: 700, borderTop: "1px solid #E5E7EB", paddingTop: 10 }}>
+                RD$ {formatoMonto(totales.total)}
+              </dd>
+            </dl>
+          </section>
+
+          <section className="card">
+            <div className="card-h">
+              <h2>Forma de pago</h2>
+            </div>
+            <div className="card-b" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+              <div className="seg" role="group" aria-label="Forma de pago" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))" }}>
+                {PAGOS.map((p) => (
+                  <button
+                    key={p.value}
+                    type="button"
+                    className={formaPago === p.value ? "on" : ""}
+                    onClick={() => {
+                      setFormaPago(p.value);
+                      if (p.value === "4" && !form.fechaLimitePago) set("fechaLimitePago", sumarDias(form.fechaEmision, 30));
+                    }}
+                    aria-pressed={formaPago === p.value}
+                    style={{ justifyContent: "center" }}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+              <span className="hint">
+                {formaPago === "4"
+                  ? `Condición: vence el ${fechaLegible(form.fechaLimitePago)}. Quedará como cuenta por cobrar al cliente.`
+                  : "Pago de contado: la factura queda saldada al emitirse."}
+              </span>
+              {config.requiereTipoIngresos && (
+                <div className="fld">
+                  <label className="lbl" htmlFor="ting">Tipo de ingresos</label>
+                  <select id="ting" className="inp" value={form.tipoIngresos} onChange={(e) => set("tipoIngresos", e.target.value)}>
+                    {TIPOS_INGRESOS.map((t) => (
+                      <option key={t.value} value={t.value}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+            </div>
+          </section>
+
+          {error && (
+            <div className="al al-d" role="alert">
+              <IconoAlerta />
+              <span>
+                <b>{error}</b>
+                {erroresXml.length > 0 && (
+                  <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>
+                    {erroresXml.map((e, i) => (
+                      <li key={i}>{e}</li>
+                    ))}
+                  </ul>
+                )}
+              </span>
+            </div>
           )}
-        </section>
-      )}
 
-      <section>
-        <h2>Detalle</h2>
-        <ItemsEditor items={form.items} onChange={(items) => set("items", items)} />
-      </section>
-
-      <section className="totales-preview">
-        <h2>Totales (calculados)</h2>
-        <dl>
-          <dt>Monto gravado</dt>
-          <dd>{decimal2(totales.montoGravadoTotal)}</dd>
-          <dt>ITBIS</dt>
-          <dd>{decimal2(totales.totalITBIS)}</dd>
-          <dt>Exento</dt>
-          <dd>{decimal2(totales.montoExento)}</dd>
-          <dt>
-            <strong>Total</strong>
-          </dt>
-          <dd>
-            <strong>{decimal2(totales.montoTotal)}</strong>
-          </dd>
-        </dl>
-      </section>
-
-      {error && <p className="error">{error}</p>}
-
-      <div className="acciones">
-        <button type="submit" className="btn-primario" disabled={guardando}>
-          {guardando ? "Guardando…" : editando ? "Guardar cambios" : "Guardar borrador"}
-        </button>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <button type="button" className="btn btn-p" onClick={pedirConfirmacion} disabled={procesando !== "" || Boolean(facturaCompleta && facturaCompleta.estado !== "borrador")} style={{ height: 46 }}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="m22 2-7 20-4-9-9-4z" />
+                <path d="M22 2 11 13" />
+              </svg>
+              {procesando === "emitir" ? "Emitiendo…" : "Emitir y enviar a DGII"}
+            </button>
+            <button type="button" className="btn btn-o" onClick={guardarBorrador} disabled={procesando !== "" || Boolean(facturaCompleta && facturaCompleta.estado !== "borrador")}>
+              {procesando === "borrador" ? "Guardando…" : editando ? "Guardar cambios" : "Guardar borrador"}
+            </button>
+            <span className="hint" style={{ textAlign: "center" }}>
+              El borrador no se envía a la DGII.
+            </span>
+          </div>
+        </div>
       </div>
 
       {editando && facturaCompleta && (
-        <FacturaAcciones factura={facturaCompleta} onRecargar={cargarFacturaCompleta} />
+        <section className="card">
+          <div className="card-h">
+            <h2>Acciones avanzadas</h2>
+          </div>
+          <div className="card-b">
+            <FacturaAcciones factura={facturaCompleta} onRecargar={() => id && api.obtener(id).then(setFacturaCompleta)} />
+          </div>
+        </section>
       )}
-    </form>
+
+      {confirmar && (
+        <div className="scrim">
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="emitir-t">
+            <div className="modal-h">
+              <h3 id="emitir-t">¿Emitir y enviar a la DGII?</h3>
+            </div>
+            <div className="modal-b">
+              <span>
+                Se firmará digitalmente el comprobante{" "}
+                <b className="mono" style={{ color: "#111827" }}>
+                  {form.encf}
+                </b>{" "}
+                ({tipoActual?.label}) por <b style={{ color: "#111827" }}>RD$ {formatoMonto(totales.total)}</b> y se enviará a la DGII.
+              </span>
+              <div className="al al-w">
+                <IconoAlerta />
+                <span>
+                  Una vez enviado, el e-NCF queda utilizado y el comprobante no puede editarse. Para corregirlo deberá emitir una nota de
+                  crédito o débito.
+                </span>
+              </div>
+            </div>
+            <div className="modal-f">
+              <button type="button" className="btn btn-o" onClick={() => setConfirmar(false)}>
+                Revisar
+              </button>
+              <button type="button" className="btn btn-p" onClick={emitir}>
+                Sí, emitir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TarjetaTipo({
+  tipo,
+  activo,
+  deshabilitado,
+  onElegir,
+}: {
+  tipo: { code: string; label: string; desc: string };
+  activo: boolean;
+  deshabilitado: boolean;
+  onElegir: (code: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onElegir(tipo.code)}
+      aria-pressed={activo}
+      disabled={deshabilitado && !activo}
+      style={{
+        textAlign: "left",
+        padding: "12px 14px",
+        borderRadius: 10,
+        cursor: deshabilitado ? "default" : "pointer",
+        font: "inherit",
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        border: activo ? "1.5px solid #0F766E" : "1px solid #E5E7EB",
+        background: activo ? "#F0FAF9" : "#fff",
+        boxShadow: activo ? "0 0 0 3px rgba(15,118,110,.12)" : "none",
+        opacity: deshabilitado && !activo ? 0.55 : 1,
+      }}
+    >
+      <span className="mono" style={{ fontSize: 13, fontWeight: 600, color: activo ? "#0F766E" : "#6B7280" }}>
+        E{tipo.code}
+      </span>
+      <span style={{ fontSize: 13.5, fontWeight: 600, color: "#111827" }}>{tipo.label}</span>
+      <span style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.35 }}>{tipo.desc}</span>
+    </button>
   );
 }
