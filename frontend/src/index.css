@@ -844,3 +844,22 @@ a{text-decoration-thickness:1px}
 /* Las pantallas existentes (formularios y listas) heredan el nuevo tema */
 main.page > .factura-form, main.page > .factura-detalle, main.page > table.lista-facturas { max-width: 1120px; }
 table.lista-facturas { width: 100%; }
+
+.sec-title{margin:0;font-size:18px;font-weight:650;color:var(--ink)}
+.sec-sub{margin:4px 0 0;font-size:14px}
+.onb{display:flex;flex-wrap:wrap;overflow:hidden}
+.onb-steps{flex:0 1 280px;min-width:240px;padding:14px;border-right:1px solid var(--bd);display:flex;flex-direction:column;gap:4px}
+.onb-step{display:flex;align-items:center;gap:12px;padding:11px 12px;border:0;border-radius:8px;background:transparent;font:inherit;font-size:14px;font-weight:500;color:#374151;text-align:left;cursor:pointer}
+.onb-step svg{width:18px;height:18px;flex:none;color:var(--mut)}
+.onb-step:hover{background:#f5f6f7}
+.onb-step.on{background:var(--teal-bg);color:var(--teal)}
+.onb-step.on svg{color:var(--teal)}
+.onb-step.done span{color:var(--mut);text-decoration:line-through}
+.onb-count{padding:8px 12px 2px}.onb-count b{color:var(--teal)}
+.onb-panel{flex:1 1 420px;padding:28px 32px;position:relative;display:flex;flex-direction:column;justify-content:center;gap:10px;min-height:230px}
+.onb-panel h3{margin:0;font-size:19px;font-weight:650;color:var(--ink)}
+.onb-panel p{margin:0;color:#374151;font-size:14px}
+.onb-ic{width:28px;height:28px;color:var(--teal)}
+.onb-hide{position:absolute;top:12px;right:16px;border:0;background:none;color:var(--mut);font:inherit;font-size:12.5px;text-decoration:underline;cursor:pointer}
+.onb-cta{background:#2ba89d;color:#fff;height:44px;padding:0 22px;margin-top:8px}.onb-cta:hover{background:var(--teal);color:#fff}
+@media (max-width:700px){.onb-steps{border-right:0;border-bottom:1px solid var(--bd);flex-basis:100%}}

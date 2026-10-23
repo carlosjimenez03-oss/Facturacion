@@ -3,7 +3,9 @@ import { Link } from "react-router-dom";
 import { IconAlerta, IconMas, IconRechazo } from "../layout/icons";
 import { proximosVencimientos } from "../lib/calendarioFiscal";
 import { ESTADO_BADGE, ESTADO_LABEL, ESTADOS_PENDIENTES, TIPO_ECF_LABEL } from "../lib/estados";
+import { EMPRESA_NOMBRE } from "../lib/marca";
 import { motivoRechazo, useFacturas } from "../lib/useFacturas";
+import { FuncionesSugeridas } from "./FuncionesSugeridas";
 
 const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
 
@@ -29,13 +31,15 @@ export function Inicio() {
   }, [facturas, hoy]);
 
   const vencimientos = proximosVencimientos(hoy);
+  const h = hoy.getHours();
+  const saludo = h < 12 ? "Buenos días" : h < 19 ? "Buenas tardes" : "Buenas noches";
 
   return (
     <div className="content">
       <div className="ph">
         <div>
-          <h1>Inicio</h1>
-          <p>Resumen de facturación electrónica · {hoy.toLocaleDateString("es-DO", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
+          <h1>{saludo}</h1>
+          <p>Resumen de {EMPRESA_NOMBRE} · {hoy.toLocaleDateString("es-DO", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
         </div>
         <div className="row">
           <Link to="/inventario/compras/nueva" className="btn btn-o">
@@ -77,6 +81,10 @@ export function Inicio() {
           </div>
         </section>
       )}
+
+      <FuncionesSugeridas />
+
+      <h2 className="sec-title">Resumen del negocio</h2>
 
       <div className="grid-stats">
         <div className="card stat">
