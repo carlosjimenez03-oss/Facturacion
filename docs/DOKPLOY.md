@@ -4,7 +4,7 @@ Este proyecto se despliega en [Dokploy](https://dokploy.com) como un único
 recurso tipo **Compose**, definido en
 [`docker-compose.dokploy.yml`](../docker-compose.dokploy.yml): los 11 módulos
 del catálogo DGII + `facturas-api` + `inventario-api` + los tres módulos de
-Receptor Electrónico + `formato-606` + el `frontend` (React). La base de
+Receptor Electrónico + `formato-606` + `erp-api` + el `frontend` (React). La base de
 datos es **Supabase** (self-hosted, recurso aparte en Dokploy) — ver
 [`SUPABASE.md`](SUPABASE.md).
 
@@ -40,6 +40,7 @@ Opcionales (con default razonable si se omiten):
 | `DEBUG` | `false` | Modo debug de FastAPI |
 | `VITE_API_URL` | `/api` | Base URL que el frontend usa para llamar a `facturas-api`. El default `/api` hace que nginx (dentro del propio contenedor `frontend`) reenvíe esas llamadas a `facturas-api` por la red interna `facturacion` -- mismo origen que el frontend, sin CORS ni el problema de "mixed content" de llamar a un backend `http://` desde un frontend `https://`. **No hace falta cambiarlo** salvo que quieras exponer `facturas-api` con su propia URL pública. Se hornea en el bundle del frontend en build time — cambiarlo exige reconstruir la imagen (redeploy), no basta con reiniciar el contenedor |
 | `VITE_INVENTARIO_API_URL` | `/api-inventario` | Lo mismo que `VITE_API_URL` pero para `inventario-api` (catálogo de productos, proveedores, compras y kardex). Mismo mecanismo de proxy same-origin vía nginx, mismas advertencias |
+| `VITE_ERP_API_URL` | `/api-erp` | Lo mismo que `VITE_API_URL` pero para `erp-api` (contactos, cotizaciones, cobros y cuentas por cobrar, ver [`ERP_API.md`](ERP_API.md)). Mismo mecanismo de proxy same-origin vía nginx, mismas advertencias |
 | `VITE_MARCA` | `Kontara` | Nombre de la marca en el menú lateral y la barra superior. Se hornea en build time: cambiarlo exige redeploy |
 | `VITE_EMPRESA_NOMBRE` | `Mi empresa` | Nombre de la empresa emisora en el selector de empresa de la barra superior. Build time |
 | `VITE_EMPRESA_RNC` | RNC de la primera factura | RNC que se muestra junto al nombre de la empresa. Build time |
@@ -75,6 +76,10 @@ aparte. Instalación, migración de los datos existentes, configuración de
   `DATABASE_URL` no está disponible, no arranca.
 - `inventario-api` usa el esquema `inventario` y `formato-606` el esquema
   `compras606`, ambos de forma obligatoria.
+- `erp-api` usa el esquema `ventas` (obligatorio) y **lo crea por sí mismo
+  al arrancar** (`CREATE ... IF NOT EXISTS`): no hace falta correr
+  `db/init/007_ventas.sql` en Studio. Solo lee `facturacion.facturas`. Ver
+  [`ERP_API.md`](ERP_API.md).
 - Los cambios de esquema futuros se agregan como `db/init/00N_*.sql`
   idempotentes y se ejecutan una vez en Studio → SQL Editor (en una
   instalación nueva, en orden desde `001`).
@@ -160,6 +165,7 @@ puedes correr el rango de vuelta a 8000 editando `docker-compose.dokploy.yml`):
 | receptor-recepcion | 8016 |
 | receptor-aprobacion-comercial | 8017 |
 | formato-606 | 8018 |
+| erp-api | 8019 |
 
 ## 6. Inventario: reglas de negocio
 
