@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Módulos de Ingresos, Compras e Inventario</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="{{tab}}" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,56px"></dc-import>
+    <div class="content">
+      <div class="ph">
+        <div>
+          <div class="crumb"><span>{{cur.group}}</span><span>/</span><span>{{cur.title}}</span></div>
+          <h1>{{cur.title}}</h1>
+          <p>{{cur.sub}}</p>
+        </div>
+        <div class="row">
+          <button type="button" class="btn btn-o" onClick="{{exportar}}">Exportar</button>
+          <button type="button" class="btn btn-p" onClick="{{toggleNew}}">{{newLabel}}</button>
+        </div>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="{{cur.group}}">
+        <sc-for list="{{tabs}}" as="t" hint-placeholder-count="4"><button type="button" role="tab" class="{{t.cls}}" aria-selected="{{t.on}}" onClick="{{t.pick}}">{{t.label}}</button></sc-for>
+      </div>
+
+      <sc-if value="{{creating}}" hint-placeholder-val="{{false}}">
+        <section class="card">
+          <div class="card-h"><h2>{{cur.newLabel}}</h2><span class="hint">{{cur.formHint}}</span></div>
+          <div class="card-b" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; align-items: end">
+            <sc-for list="{{fields}}" as="f" hint-placeholder-count="4">
+              <div class="fld">
+                <label class="lbl">{{f.label}}</label>
+                <sc-if value="{{f.isSel}}" hint-placeholder-val="{{true}}"><select class="inp" value="{{f.val}}" onChange="{{f.set}}" aria-label="{{f.label}}"><sc-for list="{{f.opts}}" as="o" hint-placeholder-count="3"><option>{{o}}</option></sc-for></select></sc-if>
+                <sc-if value="{{f.isInp}}" hint-placeholder-val="{{false}}"><input class="inp" type="{{f.type}}" value="{{f.val}}" onChange="{{f.set}}" aria-label="{{f.label}}"></sc-if>
+              </div>
+            </sc-for>
+            <div class="row" style="grid-column: 1 / -1; justify-content: flex-end">
+              <button type="button" class="btn btn-o" onClick="{{toggleNew}}">Cancelar</button>
+              <button type="button" class="btn btn-p" onClick="{{save}}">{{cur.saveLabel}}</button>
+            </div>
+          </div>
+        </section>
+      </sc-if>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px">
+        <sc-for list="{{stats}}" as="s" hint-placeholder-count="3"><div class="card stat"><span class="k">{{s.k}}</span><span class="v" style="font-size: 21px">{{s.v}}</span></div></sc-for>
+      </div>
+
+      <section class="card">
+        <div style="padding: 14px 16px; border-bottom: 1px solid #EEF0F2">
+          <label class="tb-search" style="max-width: 380px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg><input class="inp" placeholder="Buscar en {{cur.title}}" value="{{q}}" onChange="{{setQ}}" style="padding-right: 12px"></label>
+        </div>
+        <sc-if value="{{has}}" hint-placeholder-val="{{true}}">
+          <div class="tw"><table class="tbl" style="min-width: 960px">
+            <thead><tr><sc-for list="{{cols}}" as="c" hint-placeholder-count="6"><th class="{{c.cls}}">{{c.t}}</th></sc-for><th style="text-align: right">Acciones</th></tr></thead>
+            <tbody>
+              <sc-for list="{{rows}}" as="r" hint-placeholder-count="5">
+                <tr>
+                  <sc-for list="{{r.cells}}" as="c" hint-placeholder-count="6"><td class="{{c.cls}}"><span class="{{c.badge}}">{{c.t}}</span></td></sc-for>
+                  <td><div style="display: flex; justify-content: flex-end; gap: 2px; flex-wrap: wrap">
+                    <sc-for list="{{r.links}}" as="a" hint-placeholder-count="1"><a href="{{a.href}}" class="btn btn-g btn-sm">{{a.label}}</a></sc-for>
+                    <sc-for list="{{r.btns}}" as="b" hint-placeholder-count="1"><button type="button" class="btn btn-g btn-sm" onClick="{{b.run}}" style="color: {{b.color}}">{{b.label}}</button></sc-for>
+                  </div></td>
+                </tr>
+              </sc-for>
+            </tbody>
+          </table></div>
+        </sc-if>
+        <sc-if value="{{empty}}" hint-placeholder-val="{{false}}">
+          <div class="empty"><span class="ei"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg></span><h3>Sin resultados</h3><p>No hay registros que coincidan con «{{q}}».</p><button type="button" class="btn btn-o btn-sm" onClick="{{clearQ}}">Limpiar búsqueda</button></div>
+        </sc-if>
+      </section>
+    </div>
+  </main>
+  <sc-if value="{{flash}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite"><div class="toast">
+      <span class="ti" style="background: #DCFCE7; color: #166534"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+      <div style="flex: 1; min-width: 0"><b>{{flash}}</b></div>
+      <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{closeFlash}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div></div>
+  </sc-if>
+  <sc-if value="{{dlOn}}" hint-placeholder-val="{{false}}">
+    <div class="scrim" style="z-index: 140">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dl-t" style="max-width: 640px">
+        <div class="modal-h"><h3 id="dl-t">{{dlTitle}}</h3></div>
+        <div class="modal-b">
+          <span>{{dlMsg}}</span>
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}">
+            <textarea class="inp mono" readonly rows="10" style="font-size: 12px; white-space: pre" aria-label="Contenido del archivo" value="{{dlText}}"></textarea>
+            <span class="hint">Seleccione el texto (Ctrl+A) y cópielo (Ctrl+C). Para Excel, péguelo en un archivo de texto y guárdelo con la extensión indicada.</span>
+          </sc-if>
+        </div>
+        <div class="modal-f">
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}"><button type="button" class="btn btn-o" onClick="{{dlCopy}}">Copiar contenido</button></sc-if>
+          <button type="button" class="btn btn-p" onClick="{{dlClose}}">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"tab":{"editor":"enum","options":["nc","nd","cot","cobros","e41","e43","pagos","ret","productos","lotes","ajustes","almacenes"],"default":"nc"},"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  ecfNote(msg) {
+    this.setState({ fx: msg, flash: msg });
+  }
+  ecfWins() {
+    const out = [];
+    try { let w = window; for (let i = 0; i < 5 && w; i++) { out.push(w); if (w === w.parent) break; w = w.parent; } } catch (e) {}
+    return out;
+  }
+  async ecfCap(name) {
+    for (const w of this.ecfWins()) {
+      try {
+        if (w.claude && typeof w.claude.use === 'function') {
+          const cap = await Promise.race([w.claude.use(name), new Promise(r => setTimeout(() => r(null), 4000))]);
+          if (cap) return cap;
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+  async ecfSave(filename, data) {
+    this.ecfNote('Preparando ' + filename + '…');
+    const cap = await this.ecfCap('downloads');
+    if (cap) {
+      try {
+        await cap.save({ filename, data: typeof data === 'string' ? data : data });
+        this.ecfNote('Archivo guardado: ' + filename);
+        return true;
+      } catch (e) {
+        const code = e && e.code;
+        if (code === 'declined') { this.ecfNote('Descarga cancelada'); return false; }
+        if (code === 'rate_limited') { this.ecfNote('Ya hay una descarga esperando confirmación'); return false; }
+        if (code === 'rejected_extension' && !/\.txt$/.test(filename)) return this.ecfSave(filename + '.txt', data);
+      }
+    }
+    // Sin capacidad de descarga en este visor: intento directo en la ventana accesible más alta
+    let tried = false;
+    const wins = this.ecfWins().reverse();
+    for (const w of wins) {
+      try {
+        const doc = w.document;
+        const blob = new w.Blob([data], { type: /\.pdf$/.test(filename) ? 'application/pdf' : 'text/plain;charset=utf-8' });
+        const url = w.URL.createObjectURL(blob);
+        const a = doc.createElement('a');
+        a.href = url; a.download = filename; a.style.display = 'none';
+        doc.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => { try { w.URL.revokeObjectURL(url); } catch (e) {} }, 8000);
+        tried = true; break;
+      } catch (e) {}
+    }
+    this.setState({ dl: { name: filename, text: typeof data === 'string' && !/\.pdf$/.test(filename) ? data.replace(/^﻿/, '') : '', tried }, fx: '', flash: '' });
+    return false;
+  }
+  async ecfCopy(text, label) {
+    let ok = false;
+    for (const w of this.ecfWins()) {
+      try { await w.navigator.clipboard.writeText(text); ok = true; break; } catch (e) {}
+    }
+    if (!ok) {
+      for (const w of this.ecfWins()) {
+        try {
+          const d = w.document; const t = d.createElement('textarea');
+          t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.top = '-1000px';
+          d.body.appendChild(t); t.select(); ok = d.execCommand('copy'); t.remove();
+          if (ok) break;
+        } catch (e) {}
+      }
+    }
+    if (ok) this.ecfNote(label || 'Copiado al portapapeles');
+    else this.setState({ dl: { name: 'Copiar manualmente', text, tried: false, copy: true }, fx: '', flash: '' });
+    return ok;
+  }
+  ecfCsv(rows) {
+    const q = v => { const s = v == null ? '' : String(v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    return '﻿' + rows.map(r => r.map(q).join(',')).join('\r\n');
+  }
+  ecfNum(v) {
+    const n = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? String(v) : n.toFixed(2);
+  }
+  ecfPad(cols, widths) {
+    return cols.map((c, i) => { const w = widths[i] || 12; let s = String(c == null ? '' : c); if (s.length > w) s = s.slice(0, w - 1) + '.'; return w < 0 ? s : (i > 0 && /^[-(]?[\d,]+\.\d\d\)?$/.test(s) ? s.padStart(w) : s.padEnd(w)); }).join(' ');
+  }
+  ecfPdf(title, lines, subtitle) {
+    const map = { '−': '-', '–': '-', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'", '…': '...', '→': '->', '›': '>', '≥': '>=', '✓': 'v', '★': '*' };
+    const esc = s => String(s).replace(/[−–—“”‘’…→›≥✓★]/g, ch => map[ch]).replace(/[\\()]/g, m => '\\' + m)
+      .replace(/[^\x20-\x7e]/g, ch => { const c = ch.charCodeAt(0); return c < 256 ? '\\' + c.toString(8).padStart(3, '0') : '?'; });
+    const per = 50, pages = [];
+    for (let i = 0; i < Math.max(lines.length, 1); i += per) pages.push(lines.slice(i, i + per));
+    const objs = [];
+    objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+    objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>';
+    objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+    objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>';
+    objs[6] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+    const kids = [];
+    pages.forEach((pl, p) => {
+      const po = 7 + p * 2, co = po + 1;
+      kids.push(po + ' 0 R');
+      let s = '0.06 0.46 0.43 rg 40 806 515 3 re f\n';
+      s += 'BT /F2 15 Tf 40 784 Td (' + esc(title) + ') Tj ET\n';
+      s += 'BT /F4 8.5 Tf 40 770 Td (' + esc((subtitle ? subtitle + '  |  ' : '') + 'Distribuidora Caribe Verde, SRL  |  RNC 1-31-89754-2  |  Pag. ' + (p + 1) + '/' + pages.length) + ') Tj ET\n';
+      s += '0.8 0.8 0.8 RG 0.5 w 40 762 m 555 762 l S\n';
+      s += 'BT /F1 8.5 Tf 40 746 Td 13.5 TL\n';
+      pl.forEach(l => {
+        const o = typeof l === 'object' && l !== null ? l : { t: l };
+        s += (o.b ? '/F3 8.5 Tf (' + esc(o.t) + ") ' /F1 8.5 Tf\n" : '(' + esc(o.t) + ") '\n");
+      });
+      s += 'ET\nBT /F4 7 Tf 40 30 Td (' + esc('Generado por Kontara el 23/10/2026 - Documento de referencia') + ') Tj ET';
+      objs[co] = '<< /Length ' + s.length + ' >>\nstream\n' + s + '\nendstream';
+      objs[po] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents ' + co + ' 0 R >>';
+    });
+    objs[2] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>';
+    let out = '%PDF-1.4\n';
+    const off = [];
+    for (let i = 1; i < objs.length; i++) { off[i] = out.length; out += i + ' 0 obj\n' + objs[i] + '\nendobj\n'; }
+    const x = out.length;
+    out += 'xref\n0 ' + objs.length + '\n0000000000 65535 f \n';
+    for (let i = 1; i < objs.length; i++) out += String(off[i]).padStart(10, '0') + ' 00000 n \n';
+    out += 'trailer\n<< /Size ' + objs.length + ' /Root 1 0 R >>\nstartxref\n' + x + '\n%%EOF\n';
+    return out;
+  }
+  ecfXml(tipo, encf, fecha, rncComprador, comprador, total, itbis) {
+    const e = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<?xml version="1.0" encoding="UTF-8"?>\n<ECF>\n  <Encabezado>\n    <Version>1.0</Version>\n    <IdDoc>\n      <TipoeCF>' + tipo + '</TipoeCF>\n      <eNCF>' + e(encf) + '</eNCF>\n      <FechaVencimientoSecuencia>31-12-2027</FechaVencimientoSecuencia>\n      <TipoIngresos>01</TipoIngresos>\n    </IdDoc>\n    <Emisor>\n      <RNCEmisor>131897542</RNCEmisor>\n      <RazonSocialEmisor>Distribuidora Caribe Verde, SRL</RazonSocialEmisor>\n      <DireccionEmisor>Av. 27 de Febrero 415, Piantini, Santo Domingo</DireccionEmisor>\n      <FechaEmision>' + e(fecha) + '</FechaEmision>\n    </Emisor>\n    <Comprador>\n      <RNCComprador>' + e(String(rncComprador).replace(/\D/g, '')) + '</RNCComprador>\n      <RazonSocialComprador>' + e(comprador) + '</RazonSocialComprador>\n    </Comprador>\n    <Totales>\n      <MontoTotal>' + this.ecfNum(total) + '</MontoTotal>\n      <TotalITBIS>' + this.ecfNum(itbis) + '</TotalITBIS>\n    </Totales>\n  </Encabezado>\n  <FechaHoraFirma>' + e(fecha) + ' 10:42:18</FechaHoraFirma>\n  <!-- Firma digital XAdES omitida en el prototipo -->\n</ECF>\n';
+  }
+  renderVals() {
+    const st = this.state || {};
+    const fmt = n => Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const CLI = ['Constructora Hispaniola, SRL', 'Supermercado La Cosecha, SRL', 'Hotel Brisas de Bávaro, SA', 'Ayuntamiento Municipal de Moca'];
+    const PROD = ['Cemento gris Portland 42.5 kg', 'Varilla corrugada 3/8"', 'Pintura acrílica blanca (galón)', 'Café molido 1 lb', 'Arroz selecto 10 lb', 'Block de hormigón 6"'];
+    // c: columnas (# = numérica, ! = estado), rows, f: campos [etiqueta, tipo|opciones, valor], make: fila nueva, links/btns por fila
+    const D = {
+      nc: { group: 'Ingresos', label: 'Notas de crédito', sub: 'e-CF tipo 34 que anulan o reducen un comprobante emitido', newLabel: 'Nueva nota de crédito', saveLabel: 'Emitir y enviar a DGII', formHint: 'Se asignará el e-NCF E340000000028',
+        c: ['e-NCF', 'Cliente', 'e-NCF afectado', 'Fecha', 'Motivo', '#Total (RD$)', '!Estado DGII'],
+        rows: [['E340000000027', CLI[2], 'E310000000112', '21/10/2026', 'Devolución de mercancía', 45200, 'Aceptada'], ['E340000000026', CLI[1], 'E310000000109', '15/10/2026', 'Descuento por volumen', 12400, 'Aceptada'], ['E340000000025', CLI[0], 'E310000000105', '18/10/2026', 'Devolución de 10 sacos', 4304.53, 'Aceptada']],
+        f: [['Cliente', CLI, CLI[0]], ['e-NCF afectado', ['E310000000131', 'E310000000124', 'E310000000117'], 'E310000000131'], ['Código de modificación', ['3 · Corrige montos', '1 · Anula el e-NCF referenciado', '2 · Corrige texto'], '3 · Corrige montos'], ['Monto (RD$)', 'number', 25000]],
+        make: (v, n) => ['E3400000000' + (28 + n), v[0], v[1], '23/10/2026', v[2], v[3], 'Aceptada'],
+        btns: [['PDF', 'pdf'], ['Enviar', 'flash', 'Nota de crédito enviada al cliente por correo']] },
+      nd: { group: 'Ingresos', label: 'Notas de débito', sub: 'e-CF tipo 33 que aumentan el monto de un comprobante emitido', newLabel: 'Nueva nota de débito', saveLabel: 'Emitir y enviar a DGII', formHint: 'Se asignará el e-NCF E330000000007',
+        c: ['e-NCF', 'Cliente', 'e-NCF afectado', 'Fecha', 'Concepto', '#Total (RD$)', '!Estado DGII'],
+        rows: [['E330000000006', CLI[1], 'E310000000110', '19/10/2026', 'Flete no facturado', 12980, 'Aceptada'], ['E330000000005', CLI[0], 'E310000000098', '02/10/2026', 'Intereses por mora', 8450, 'Aceptada']],
+        f: [['Cliente', CLI, CLI[0]], ['e-NCF afectado', ['E310000000131', 'E310000000124'], 'E310000000131'], ['Concepto', 'text', 'Cargo por flete'], ['Monto (RD$)', 'number', 6500]],
+        make: (v, n) => ['E33000000000' + (7 + n), v[0], v[1], '23/10/2026', v[2], v[3], 'Aceptada'],
+        btns: [['PDF', 'pdf'], ['Enviar', 'flash', 'Nota de débito enviada al cliente por correo']] },
+      cot: { group: 'Ingresos', label: 'Cotizaciones', sub: 'Propuestas comerciales sin valor fiscal; conviértelas en factura con un clic', newLabel: 'Nueva cotización', saveLabel: 'Guardar cotización', formHint: 'Válida por 15 días',
+        c: ['N.º', 'Cliente', 'Fecha', 'Vence', '#Total (RD$)', '!Estado'],
+        rows: [['COT-0158', CLI[0], '22/10/2026', '06/11/2026', 845300, 'Abierta'], ['COT-0157', CLI[2], '20/10/2026', '04/11/2026', 312600, 'Abierta'], ['COT-0156', CLI[1], '10/10/2026', '25/10/2026', 96200, 'Aceptada'], ['COT-0150', 'Juan Pablo Méndez Rosario', '01/10/2026', '16/10/2026', 18900, 'Vencida']],
+        f: [['Cliente', CLI, CLI[1]], ['Producto', PROD, PROD[0]], ['Cantidad', 'number', 100], ['Precio unitario (RD$)', 'number', 545]],
+        make: (v, n) => ['COT-0' + (159 + n), v[0], '23/10/2026', '07/11/2026', v[2] * v[3] * 1.18, 'Abierta'],
+        links: [['Facturar', 'NuevaFactura.dc.html']], btns: [['Marcar aceptada', 'status', 'Aceptada'], ['Enviar', 'flash', 'Cotización enviada por WhatsApp y correo']] },
+      cobros: { group: 'Ingresos', label: 'Cobros', sub: 'Cuentas por cobrar y pagos recibidos de clientes', newLabel: 'Registrar cobro', saveLabel: 'Registrar cobro', formHint: 'Se aplicará a la factura seleccionada',
+        c: ['e-NCF', 'Cliente', 'Vence', '#Total (RD$)', '#Pendiente (RD$)', '!Estado'],
+        rows: [['E310000000131', CLI[0], '22/11/2026', 1284560, 1284560, 'Pendiente'], ['E310000000130', CLI[1], '21/11/2026', 356920.4, 356920.4, 'Pendiente'], ['E450000000018', CLI[3], '21/11/2026', 812300, 812300, 'Pendiente'], ['E310000000117', CLI[0], '05/10/2026', 95300, 95300, 'Vencida']],
+        f: [['Factura', ['E310000000131', 'E310000000130', 'E450000000018', 'E310000000117'], 'E310000000130'], ['Monto recibido (RD$)', 'number', 356920.4], ['Método', ['Transferencia', 'Efectivo', 'Tarjeta', 'Cheque'], 'Transferencia'], ['Cuenta de destino', ['Banco Popular ****4471', 'Banreservas ****0932', 'Caja chica'], 'Banco Popular ****4471']],
+        apply: v => ({ match: v[0], set: 'Cobrada', zero: 4 }),
+        btns: [['Registrar cobro', 'status', 'Cobrada', 4], ['Recordatorio', 'flash', 'Recordatorio de pago enviado por WhatsApp']] },
+      e41: { group: 'Compras', label: 'Comprobantes de compras E41', sub: 'Emitidos por usted al comprar a proveedores informales (personas físicas no emisoras)', newLabel: 'Nuevo comprobante E41', saveLabel: 'Emitir E41', formHint: 'Se asignará el e-NCF E410000000058',
+        c: ['e-NCF', 'Proveedor', 'Cédula', 'Fecha', '#Monto (RD$)', '#ITBIS retenido', '#ISR retenido', '!Estado DGII'],
+        rows: [['E410000000057', 'Ing. Rafael Antonio Cruz Peña', '001-0987654-3', '18/10/2026', 85000, 15300, 8500, 'Aceptada'], ['E410000000056', 'Pedro Almonte Vargas', '402-1234567-8', '12/10/2026', 24000, 4320, 480, 'Aceptada']],
+        f: [['Proveedor', 'text', 'Rosa Elena Tejada'], ['Cédula', 'text', '031-2233445-6'], ['Monto antes de ITBIS (RD$)', 'number', 18000], ['Tipo', ['02 · Servicios', '09 · Compras de bienes'], '02 · Servicios']],
+        make: (v, n) => ['E41000000005' + (8 + n), v[0], v[1], '23/10/2026', v[2], v[2] * 0.18, v[2] * (v[3].startsWith('02') ? 0.10 : 0.02), 'Aceptada'],
+        links: [['Ver detalle', 'Compra.dc.html']], btns: [['XML', 'flash', 'XML del comprobante E41 descargado']] },
+      e43: { group: 'Compras', label: 'Gastos menores E43', sub: 'Gastos pequeños sin comprobante del proveedor: peajes, parqueos, transporte', newLabel: 'Nuevo gasto menor', saveLabel: 'Emitir E43', formHint: 'Se asignará el e-NCF E430000000413',
+        c: ['e-NCF', 'Concepto', 'Fecha', 'Responsable', '#Monto (RD$)', '!Estado DGII'],
+        rows: [['E430000000412', 'Peajes ruta Santo Domingo – Santiago', '21/10/2026', 'José M. Taveras', 1200, 'Aceptada'], ['E430000000411', 'Parqueo diligencia DGII', '20/10/2026', 'Carmen J. Batista', 350, 'Aceptada'], ['E430000000410', 'Combustible mensajería', '18/10/2026', 'Luis A. Féliz', 2800, 'Aceptada']],
+        f: [['Concepto', 'text', 'Taxi a reunión con cliente'], ['Responsable', ['José M. Taveras', 'Carmen J. Batista', 'Luis A. Féliz'], 'Carmen J. Batista'], ['Monto (RD$)', 'number', 650]],
+        make: (v, n) => ['E43000000041' + (3 + n), v[0], '23/10/2026', v[1], v[2], 'Aceptada'],
+        btns: [['XML', 'flash', 'XML del gasto menor descargado'], ['Anular', 'status', 'Anulada']] },
+      pagos: { group: 'Compras', label: 'Pagos a proveedores', sub: 'Facturas de compra por pagar con sus retenciones aplicadas', newLabel: 'Registrar pago', saveLabel: 'Registrar pago', formHint: 'Las retenciones se reportan en el mes del pago',
+        c: ['Proveedor', 'Factura', 'Vence', '#Monto (RD$)', '#Retenciones', '#Neto a pagar', '!Estado'],
+        rows: [['Cementos del Atlántico, SA', 'E310000045821', '21/11/2026', 1845600, 0, 1845600, 'Pendiente'], ['Transporte Cibao Express, SRL', 'E310000008734', '20/11/2026', 96760, 4428, 92332, 'Pagada'], ['Seguridad Integral Dominicana, SRL', 'E310000006652', '04/11/2026', 113870, 5211, 108659, 'Pendiente']],
+        f: [['Factura', ['E310000045821', 'E310000006652'], 'E310000006652'], ['Método', ['Transferencia', 'Cheque', 'Efectivo'], 'Transferencia'], ['Cuenta de origen', ['Banco Popular ****4471', 'Banreservas ****0932'], 'Banco Popular ****4471']],
+        apply: v => ({ match: v[0], set: 'Pagada', col: 1 }),
+        btns: [['Pagar', 'status', 'Pagada'], ['Comprobante', 'flash', 'Comprobante de pago descargado']] },
+      ret: { group: 'Compras', label: 'Retenciones', sub: 'ISR e ITBIS retenidos a proveedores; se declaran en el IR-17 y el IT-1 del mes del pago', newLabel: 'Certificados del mes', saveLabel: 'Generar certificados', formHint: 'Certificados de retención para enviar a los proveedores',
+        c: ['Proveedor', 'Comprobante', 'Fecha de pago', '#ISR retenido', '#ITBIS retenido', 'Declaración', '!Estado'],
+        rows: [['Ing. Rafael Antonio Cruz Peña', 'E410000000057', '15/10/2026', 8500, 15300, 'IR-17 / IT-1 oct.', 'Por declarar'], ['Transporte Cibao Express, SRL', 'E310000008734', '23/10/2026', 0, 4428, 'IT-1 oct.', 'Por declarar'], ['Seguridad Integral Dominicana, SRL', 'E310000006652', '10/10/2026', 0, 5211, 'IT-1 oct.', 'Por declarar'], ['Pedro Almonte Vargas', 'E410000000049', '28/09/2026', 480, 4320, 'IR-17 / IT-1 sep.', 'Declarada']],
+        f: [['Período', ['Octubre 2026', 'Septiembre 2026'], 'Octubre 2026'], ['Enviar por', ['Correo', 'WhatsApp', 'Correo y WhatsApp'], 'Correo']],
+        apply: () => ({ flash: 'Certificados de retención generados y enviados a 3 proveedores' }),
+        links: [['IR-17', 'PreCalculo.dc.html']], btns: [['Certificado', 'flash', 'Certificado de retención generado (PDF)']] },
+      productos: { group: 'Inventario', label: 'Productos', sub: 'Catálogo de productos y servicios con su tasa de ITBIS', newLabel: 'Nuevo producto', saveLabel: 'Guardar producto', formHint: 'El código se usa en facturas y en el Kardex',
+        c: ['Código', 'Producto', 'ITBIS', '#Precio (RD$)', '#Existencia', '!Estado'],
+        rows: [['CEM-425', PROD[0], '18%', 545, 18, 'Bajo stock'], ['VAR-038', PROD[1], '18%', 285, 1250, 'Disponible'], ['PIN-AB1', PROD[2], '18%', 1150, 64, 'Disponible'], ['CAF-001', PROD[3], '16%', 320, 400, 'Disponible'], ['ARZ-010', PROD[4], 'Exento', 410, 220, 'Disponible'], ['BLK-006', PROD[5], '18%', 55, 9800, 'Disponible']],
+        f: [['Código', 'text', 'ARE-001'], ['Nombre', 'text', 'Arena lavada (m³)'], ['ITBIS', ['18%', '16%', 'Exento'], '18%'], ['Precio (RD$)', 'number', 1800]],
+        make: v => [v[0], v[1], v[2], v[3], 0, 'Sin existencia'],
+        links: [['Kardex', 'Kardex.dc.html']], btns: [['Inactivar', 'status', 'Inactivo']] },
+      lotes: { group: 'Inventario', label: 'Lotes', sub: 'Control de lotes y fechas de vencimiento', newLabel: 'Nuevo lote', saveLabel: 'Registrar lote', formHint: 'Se asociará a la próxima entrada de inventario',
+        c: ['Lote', 'Producto', 'Vence', '#Cantidad', 'Almacén', '!Estado'],
+        rows: [['L-2610-01', PROD[3], '15/03/2027', 250, 'Principal', 'Vigente'], ['L-2609-04', PROD[3], '20/12/2026', 150, 'Principal', 'Por vencer'], ['L-2610-02', PROD[2], '30/10/2028', 64, 'Principal', 'Vigente'], ['L-2608-07', PROD[4], '01/02/2027', 220, 'Sucursal Santiago', 'Vigente']],
+        f: [['Producto', PROD, PROD[3]], ['Número de lote', 'text', 'L-2610-05'], ['Vence', 'text', '30/06/2027'], ['Cantidad', 'number', 100]],
+        make: v => [v[1], v[0], v[2], v[3], 'Principal', 'Vigente'],
+        btns: [['Bloquear', 'status', 'Bloqueado']] },
+      ajustes: { group: 'Inventario', label: 'Ajustes de inventario', sub: 'Entradas y salidas por conteo físico, mermas o daños', newLabel: 'Nuevo ajuste', saveLabel: 'Aplicar ajuste', formHint: 'Afecta el Kardex y el costo del inventario',
+        c: ['N.º', 'Fecha', 'Producto', 'Tipo', '#Cantidad', 'Motivo', '!Estado'],
+        rows: [['AJ-0042', '22/10/2026', PROD[0], 'Salida', -2, 'Merma (sacos rotos)', 'Aplicado'], ['AJ-0041', '15/10/2026', PROD[1], 'Entrada', 10, 'Conteo físico', 'Aplicado'], ['AJ-0040', '30/09/2026', PROD[2], 'Salida', -3, 'Producto dañado', 'Aplicado']],
+        f: [['Producto', PROD, PROD[0]], ['Tipo', ['Salida', 'Entrada'], 'Salida'], ['Cantidad', 'number', 1], ['Motivo', 'text', 'Conteo físico']],
+        make: (v, n) => ['AJ-00' + (43 + n), '23/10/2026', v[0], v[1], v[1] === 'Salida' ? -Math.abs(v[2]) : Math.abs(v[2]), v[3], 'Aplicado'],
+        links: [['Kardex', 'Kardex.dc.html']], btns: [['Revertir', 'status', 'Revertido']] },
+      almacenes: { group: 'Inventario', label: 'Almacenes', sub: 'Bodegas y sucursales donde se guarda el inventario', newLabel: 'Nuevo almacén', saveLabel: 'Crear almacén', formHint: 'Podrá transferir mercancía entre almacenes',
+        c: ['Almacén', 'Dirección', '#Productos', '#Valor del inventario (RD$)', '!Estado'],
+        rows: [['Principal · Santo Domingo', 'Av. Duarte 1450, Villas Agrícolas', 6, 7215300, 'Activo'], ['Sucursal Santiago', 'Av. Circunvalación 88, Santiago', 4, 1980450, 'Activo']],
+        f: [['Nombre', 'text', 'Sucursal La Romana'], ['Dirección', 'text', 'C/ Padre Abreu 12, La Romana']],
+        make: v => [v[0], v[1], 0, 0, 'Activo'],
+        links: [['Kardex', 'Kardex.dc.html']], btns: [['Transferir', 'flash', 'Transferencia entre almacenes creada en borrador'], ['Inactivar', 'status', 'Inactivo']] }
+    };
+    const tab = st.tab || this.props.tab || 'nc';
+    const cur = D[tab];
+    const B = { Aceptada: 'bd b-acep', Cobrada: 'bd b-acep', Pagada: 'bd b-acep', Aplicado: 'bd b-acep', Activo: 'bd b-acep', Disponible: 'bd b-acep', Vigente: 'bd b-acep', Declarada: 'bd b-acep',
+      Abierta: 'bd b-env', Pendiente: 'bd b-proc', 'Por declarar': 'bd b-proc', 'Por vencer': 'bd b-proc', 'Bajo stock': 'bd b-pend', 'Sin existencia': 'bd b-borr',
+      Vencida: 'bd b-rech', Anulada: 'bd b-rech', Bloqueado: 'bd b-rech', Revertido: 'bd b-borr', Inactivo: 'bd b-borr' };
+    const added = (st.added || {})[tab] || [];
+    const ov = (st.ov || {})[tab] || {};
+    const flash = m => this.setState({ flash: m });
+    const setOv = (i, val, zero) => this.setState({ ov: { ...(st.ov || {}), [tab]: { ...ov, [i]: { s: val, zero } } }, flash: cur.label + ': registro marcado como ' + val.toLowerCase() });
+    const all = added.concat(cur.rows);
+    const q = (st.q || '').toLowerCase();
+    const statusIdx = cur.c.findIndex(c => c.startsWith('!'));
+    const rows = all.map((r, i) => {
+      const o = ov[i];
+      const cells = r.map((v, j) => {
+        const spec = cur.c[j]; const num = spec.startsWith('#'); const isSt = spec.startsWith('!');
+        let t = isSt && o ? o.s : v;
+        if (o && o.zero === j) t = 0;
+        return { t: num ? (typeof t === 'number' && Number.isInteger(t) && !/RD\$|Retenc|Neto|ITBIS|ISR/.test(spec) ? t.toLocaleString('en-US') : fmt(t)) : t, cls: num ? 'num' : (j === 0 ? 'mono' : ''), badge: isSt ? (B[t] || 'bd b-borr') : '' };
+      });
+      const state = o ? o.s : r[statusIdx];
+      return { cells, txt: r.join(' ').toLowerCase(),
+        links: (cur.links || []).map(([label, href]) => ({ label, href })),
+        btns: (cur.btns || []).filter(b => !(b[1] === 'status' && state === b[2])).map(([label, kind, arg, zero]) => ({ label, color: kind === 'status' && /Anul|Bloq|Inact|Revert/.test(arg) ? '#B91C1C' : '#374151',
+          run: () => kind === 'status' ? setOv(i, arg, zero)
+            : (kind === 'pdf' || label === 'Comprobante' || label === 'Certificado') ? this.ecfSave((cur.label + '_' + r[0]).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w-]+/g, '_') + '.pdf', this.ecfPdf(label === 'Certificado' ? 'Certificado de retencion' : label === 'Comprobante' ? 'Comprobante de pago' : cur.label, cur.c.map((c, j) => this.ecfPad([c.replace(/^[#!]/, ''), cells[j].t], [34, 40])), cur.group))
+            : label === 'XML' ? this.ecfSave(r[0] + '.xml', this.ecfXml(r[0].slice(1, 3), r[0], r[3] || '23-10-2026', r[2] || '', r[1], r[4] || 0, r[5] || 0))
+            : flash(arg) })) };
+    }).filter(r => !q || r.txt.includes(q));
+    const group = cur.group;
+    const tabs = Object.keys(D).filter(k => D[k].group === group).map(k => ({ label: D[k].label.replace(' de inventario', ''), on: k === tab, cls: k === tab ? 'tab on' : 'tab', pick: () => this.setState({ tab: k, creating: false, q: '' }) }));
+    const form = (st.form || {})[tab] || {};
+    const fields = cur.f.map(([label, t, def], i) => { const isSel = Array.isArray(t); const val = form[i] ?? def;
+      return { label, isSel, isInp: !isSel, opts: isSel ? t : [], type: isSel ? '' : t, val,
+        set: e => this.setState({ form: { ...(st.form || {}), [tab]: { ...form, [i]: t === 'number' ? Number(e.target.value) : e.target.value } } }) }; });
+    const vals = cur.f.map(([, t, def], i) => form[i] ?? def);
+    const save = () => {
+      if (cur.make) { const row = cur.make(vals, added.length); this.setState({ added: { ...(st.added || {}), [tab]: [row].concat(added) }, creating: false, flash: cur.label + ': registro creado' }); return; }
+      const a = cur.apply(vals);
+      if (a.flash) { this.setState({ creating: false, flash: a.flash }); return; }
+      const i = all.findIndex(r => r[0] === a.match || r[1] === a.match);
+      this.setState({ creating: false, ov: { ...(st.ov || {}), [tab]: { ...ov, [i]: { s: a.set, zero: a.zero } } }, flash: a.match + ' marcado como ' + a.set.toLowerCase() });
+    };
+    const numCol = cur.c.findIndex(c => c.startsWith('#'));
+    const total = all.reduce((s, r) => s + (typeof r[numCol] === 'number' ? r[numCol] : 0), 0);
+    const SB = { nc: 'nc', nd: 'nd', cot: 'cot', cobros: 'cobros', e41: 'e41', e43: 'e43', pagos: 'pagos', ret: 'ret', productos: 'productos', lotes: 'lotes', ajustes: 'ajustes', almacenes: 'almacenes' };
+    return {
+      dlOn: !!(this.state || {}).dl, dlHasText: !!((this.state || {}).dl && (this.state || {}).dl.text), dlText: ((this.state || {}).dl || {}).text || '',
+      dlTitle: ((this.state || {}).dl || {}).copy ? 'Copie el contenido manualmente' : 'Este visor no permitió descargar «' + (((this.state || {}).dl || {}).name || '') + '»',
+      dlMsg: ((this.state || {}).dl || {}).copy ? 'El navegador bloqueó el portapapeles dentro del lienzo. Puede copiar el texto desde aquí.' : (((this.state || {}).dl || {}).tried ? 'Intentamos descargarlo directamente; si no aparece en su carpeta de Descargas es porque el lienzo bloquea descargas. ' : '') + 'Abra el prototipo en pantalla completa (Play) o use el contenido de abajo.',
+      dlClose: () => this.setState({ dl: null }),
+      dlCopy: () => { const t = ((this.state || {}).dl || {}).text || ''; try { navigator.clipboard.writeText(t).then(() => this.setState({ dl: null, fx: 'Copiado al portapapeles', flash: 'Copiado al portapapeles' }), () => {}); } catch (e) {} },
+      tab: SB[tab], cur: { group, title: cur.label, sub: cur.sub, newLabel: cur.newLabel, saveLabel: cur.saveLabel, formHint: cur.formHint },
+      tabs, fields, save, rows, has: rows.length > 0, empty: rows.length === 0,
+      cols: cur.c.map(c => ({ t: c.replace(/^[#!]/, ''), cls: c.startsWith('#') ? 'num' : '' })),
+      stats: [{ k: 'Registros', v: String(all.length) }, { k: cur.c[numCol].replace(/^#/, '') + ' · total', v: /RD\$|Retenc|ISR|ITBIS|Neto/.test(cur.c[numCol]) ? 'RD$ ' + fmt(total) : total.toLocaleString('en-US') }, { k: 'Período', v: 'Octubre 2026' }],
+      q: st.q || '', setQ: e => this.setState({ q: e.target.value }), clearQ: () => this.setState({ q: '' }),
+      creating: !!st.creating, newLabel: st.creating ? 'Cerrar formulario' : '+ ' + cur.newLabel, toggleNew: () => this.setState({ creating: !st.creating }),
+      exportar: () => this.ecfSave(cur.label.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w]+/g, '_') + '_octubre_2026.csv', this.ecfCsv([cur.c.map(c => c.replace(/^[#!]/, ''))].concat(rows.map(r => r.cells.map(c => /^-?[\d,]+(\.\d+)?$/.test(String(c.t)) ? String(c.t).replace(/,/g, '') : c.t))))),
+      flash: st.flash || '', closeFlash: () => this.setState({ flash: '' })
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Bandeja de entrada</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="bandeja" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,64px"></dc-import>
+    <div class="content">
+      <div class="ph">
+        <div>
+          <h1>Bandeja de entrada</h1>
+          <p>e-CF recibidos de proveedores. El acuse de recibo se envía automáticamente; la aprobación comercial la decide usted.</p>
+        </div>
+        <button type="button" class="btn btn-o" onClick="{{act.refresh}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13a8.5 8.5 0 0 1-15 4.5L3 15.5M3.5 11a8.5 8.5 0 0 1 15-4.5L21 8.5"></path><path d="M21 3.5v5h-5M3 20.5v-5h5"></path></svg>Actualizar</button>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+        <section class="card" style="flex: 3 1 600px">
+          <div class="tabs" role="tablist" aria-label="Estado comercial" style="padding: 0 12px">
+            <sc-for list="{{filters}}" as="f" hint-placeholder-count="4">
+              <button type="button" role="tab" class="{{f.cls}}" aria-selected="{{f.on}}" onClick="{{f.pick}}">{{f.label}} <span class="chip" style="height: 20px; font-size: 11px">{{f.n}}</span></button>
+            </sc-for>
+          </div>
+          <sc-if value="{{hasRows}}" hint-placeholder-val="{{true}}">
+            <div class="tw">
+              <table class="tbl" style="min-width: 760px">
+                <thead><tr><th>Proveedor</th><th>RNC</th><th>e-NCF</th><th>Fecha</th><th class="num">Monto (RD$)</th><th><span class="tip" data-tip="Aprobación comercial: confirma al proveedor que acepta la mercancía o el servicio facturado. Es distinta del acuse de recibo técnico.">Estado comercial ⓘ</span></th></tr></thead>
+                <tbody>
+                  <sc-for list="{{rows}}" as="r" hint-placeholder-count="6">
+                    <tr style="background: {{r.bg}}">
+                      <td style="background: {{r.bg}}; box-shadow: {{r.mark}}"><button type="button" onClick="{{r.pick}}" style="border: 0; background: transparent; padding: 0; font: inherit; font-weight: 600; color: #111827; cursor: pointer; text-align: left">{{r.prov}}</button></td>
+                      <td class="mono mut" style="background: {{r.bg}}">{{r.rnc}}</td>
+                      <td class="mono" style="background: {{r.bg}}">{{r.encf}}</td>
+                      <td class="mut" style="background: {{r.bg}}">{{r.fecha}}</td>
+                      <td class="num" style="font-weight: 600; color: #111827; background: {{r.bg}}">{{r.monto}}</td>
+                      <td style="background: {{r.bg}}"><span class="{{r.cls}}">{{r.estado}}</span></td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </sc-if>
+          <sc-if value="{{noRows}}" hint-placeholder-val="{{false}}">
+            <div class="empty">
+              <span class="ei"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z"></path></svg></span>
+              <h3>{{emptyTitle}}</h3>
+              <p>{{emptyText}}</p>
+            </div>
+          </sc-if>
+        </section>
+
+        <section class="card" style="flex: 2 1 380px; min-width: 0">
+          <div class="card-h">
+            <div><h2>{{s.prov}}</h2><span class="hint">RNC {{s.rnc}} · Emisor electrónico</span></div>
+            <span class="{{s.cls}}">{{s.estado}}</span>
+          </div>
+          <div class="card-b" style="display: flex; flex-direction: column; gap: 16px">
+            <dl class="kv">
+              <dt>e-NCF</dt><dd class="mono">{{s.encf}}</dd>
+              <dt>Tipo</dt><dd>31 · Crédito fiscal</dd>
+              <dt>Fecha de emisión</dt><dd>{{s.fecha}}</dd>
+              <dt>Acuse de recibo</dt><dd><span class="ok-t"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>Enviado automáticamente</span></dd>
+            </dl>
+            <div style="border: 1px solid #E5E7EB; border-radius: 10px; overflow: hidden">
+              <table class="tbl">
+                <thead><tr><th>Descripción</th><th class="num">Importe</th></tr></thead>
+                <tbody>
+                  <sc-for list="{{s.items}}" as="it" hint-placeholder-count="2"><tr><td>{{it.d}}</td><td class="num">{{it.v}}</td></tr></sc-for>
+                </tbody>
+              </table>
+            </div>
+            <dl class="kv" style="grid-template-columns: 1fr auto">
+              <dt>Subtotal</dt><dd class="num">{{s.sub}}</dd>
+              <dt>ITBIS 18%</dt><dd class="num">{{s.itbis}}</dd>
+              <dt style="font-weight: 650; color: #111827">Total</dt><dd class="num" style="font-weight: 700; font-size: 16px">RD$ {{s.monto}}</dd>
+            </dl>
+
+            <sc-if value="{{s.pending}}" hint-placeholder-val="{{true}}">
+              <sc-if value="{{rejecting}}" hint-placeholder-val="{{false}}">
+                <div class="fld">
+                  <label class="lbl" for="motivo">Motivo del rechazo <span class="req">*</span></label>
+                  <textarea id="motivo" class="inp" rows="3" placeholder="Ej.: Cantidad facturada no coincide con la orden de compra OC-2026-0418" value="{{reason}}" onChange="{{setReason}}"></textarea>
+                  <span class="hint">El proveedor recibirá este motivo. Deberá emitir una nota de crédito si corresponde.</span>
+                </div>
+                <div class="row" style="justify-content: flex-end">
+                  <button type="button" class="btn btn-o" onClick="{{cancelReject}}">Cancelar</button>
+                  <button type="button" class="btn btn-d" onClick="{{confirmReject}}" disabled="{{noReason}}">Enviar rechazo</button>
+                </div>
+              </sc-if>
+              <sc-if value="{{notRejecting}}" hint-placeholder-val="{{true}}">
+                <div class="row">
+                  <button type="button" class="btn btn-p" style="flex: 1" onClick="{{approve}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>Aprobar comercialmente</button>
+                  <button type="button" class="btn btn-do" style="flex: 1" onClick="{{startReject}}">Rechazar</button>
+                </div>
+              </sc-if>
+            </sc-if>
+            <sc-if value="{{s.done}}" hint-placeholder-val="{{false}}">
+              <div class="{{s.alCls}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg><span>{{s.doneMsg}}</span></div>
+              <a href="Compra.dc.html" class="btn btn-o">Registrar como factura de compra</a>
+            </sc-if>
+          </div>
+        </section>
+      </div>
+    </div>
+  </main>
+  <sc-if value="{{toast}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite">
+      <div class="toast">
+        <span class="ti" style="background: {{toastBg}}; color: {{toastFg}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+        <div style="flex: 1; min-width: 0"><b>{{toastTitle}}</b><span class="mut">{{toastText}}</span></div>
+        <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{closeToast}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{fxOn}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite" style="top: 150px"><div class="toast">
+      <span class="ti" style="background: #E6F4F2; color: #0F766E"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+      <div style="flex: 1; min-width: 0"><b>{{fxMsg}}</b></div>
+      <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{fxClose}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div></div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = this.state || {};
+    const fmt = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const base = [
+      ['Cementos del Atlántico, SA', '1-01-55678-9', 'E310000045821', '22/10/2026', [['Cemento gris Portland 42.5 kg · 3,600 sacos', 1564067.80]], 'Pendiente'],
+      ['Transporte Cibao Express, SRL', '1-31-24567-8', 'E310000008734', '21/10/2026', [['Flete Santo Domingo – Santiago (12 viajes)', 82000]], 'Pendiente'],
+      ['Pinturas Tropical, SRL', '1-30-98765-4', 'E310000012045', '20/10/2026', [['Pintura acrílica blanca, galón · 300', 291000], ['Pintura esmalte gris, galón · 60', 58474.58]], 'Aprobada'],
+      ['Seguros Quisqueya, SA', '1-01-99887-7', 'E310000003310', '19/10/2026', [['Póliza flotilla vehicular · cuota octubre', 49508.47]], 'Pendiente'],
+      ['Aceros del Yaque, SRL', '1-31-55667-7', 'E310000020987', '18/10/2026', [['Varilla corrugada 3/8" × 20\' · 2,200', 620466.10]], 'Aprobada'],
+      ['Telecomunicaciones Isla, SA', '1-01-44556-6', 'E310000990213', '15/10/2026', [['Internet fibra 500 Mbps · octubre', 10800]], 'Aprobada']
+    ];
+    const over = st.over || {};
+    const B = { Pendiente: 'bd b-proc', Aprobada: 'bd b-acep', Rechazada: 'bd b-rech' };
+    const all = base.map(([prov, rnc, encf, fecha, lines, estado0], i) => {
+      const estado = over[i] || estado0;
+      const sub = lines.reduce((a, l) => a + l[1], 0), itbis = sub * 0.18;
+      return { i, prov, rnc, encf, fecha, estado, cls: B[estado], sub: fmt(sub), itbis: fmt(itbis), monto: fmt(sub + itbis),
+        items: lines.map(([d, v]) => ({ d, v: fmt(v) })) };
+    });
+    const sel = st.sel ?? 0;
+    const f = st.f || 'Todas';
+    const map = { Todas: null, Pendientes: 'Pendiente', Aprobadas: 'Aprobada', Rechazadas: 'Rechazada' };
+    const filters = Object.keys(map).map(label => ({ label, on: f === label, cls: f === label ? 'tab on' : 'tab',
+      n: all.filter(r => !map[label] || r.estado === map[label]).length, pick: () => this.setState({ f: label }) }));
+    const rows = all.filter(r => !map[f] || r.estado === map[f]).map(r => ({ ...r,
+      bg: r.i === sel ? '#F0FAF9' : 'transparent', mark: r.i === sel ? 'inset 3px 0 0 #14B8A6' : 'none',
+      pick: () => this.setState({ sel: r.i, rejecting: false, reason: '' }) }));
+    const s0 = all[sel];
+    const s = { ...s0, pending: s0.estado === 'Pendiente', done: s0.estado !== 'Pendiente',
+      alCls: s0.estado === 'Aprobada' ? 'al al-s' : 'al al-d',
+      doneMsg: s0.estado === 'Aprobada' ? 'Aprobada comercialmente. El proveedor fue notificado y el comprobante está disponible para el Formato 606.' : 'Rechazada comercialmente. Motivo enviado: ' + (st.lastReason || '—') };
+    const setOver = (estado, extra) => this.setState({ over: { ...over, [sel]: estado }, rejecting: false, toast: true,
+      toastTitle: estado === 'Aprobada' ? 'Aprobación comercial enviada' : 'Rechazo comercial enviado', toastText: s0.prov + ' · ' + s0.encf, ...extra });
+    const FX = {"refresh": "Bandeja actualizada · no hay e-CF nuevos de proveedores"};
+    const act = {};
+    Object.keys(FX).forEach(k => { act[k] = () => this.setState({ fx: FX[k] }); });
+    return {
+      act, fxOn: !!(this.state || {}).fx, fxMsg: (this.state || {}).fx || '', fxClose: () => this.setState({ fx: '' }),
+      filters, rows, hasRows: rows.length > 0, noRows: rows.length === 0,
+      emptyTitle: f === 'Rechazadas' ? 'No ha rechazado ningún comprobante' : 'Todo al día',
+      emptyText: f === 'Rechazadas' ? 'Cuando rechace un e-CF de un proveedor, aparecerá aquí con el motivo enviado.' : 'No hay comprobantes en esta vista. Los nuevos e-CF de proveedores llegarán automáticamente.',
+      s, rejecting: !!st.rejecting, notRejecting: !st.rejecting,
+      reason: st.reason || '', noReason: !(st.reason || '').trim(),
+      setReason: e => this.setState({ reason: e.target.value }),
+      startReject: () => this.setState({ rejecting: true }),
+      cancelReject: () => this.setState({ rejecting: false }),
+      approve: () => setOver('Aprobada'),
+      confirmReject: () => setOver('Rechazada', { lastReason: st.reason, reason: '' }),
+      toast: !!st.toast, toastTitle: st.toastTitle, toastText: st.toastText,
+      toastBg: st.toastTitle && st.toastTitle.startsWith('Rechazo') ? '#FEE2E2' : '#DCFCE7',
+      toastFg: st.toastTitle && st.toastTitle.startsWith('Rechazo') ? '#B91C1C' : '#166534',
+      closeToast: () => this.setState({ toast: false })
+    };
+  }
+}
+</script>
+</body>
+</html>

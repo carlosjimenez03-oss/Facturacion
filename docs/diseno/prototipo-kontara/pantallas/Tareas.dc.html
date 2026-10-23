@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Mis tareas</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="tareas" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,56px"></dc-import>
+    <div class="content" style="max-width: 1000px">
+      <div class="ph"><div><h1>Mis tareas</h1><p>Pendientes fiscales y de gestión. Las obligaciones de la DGII se agregan automáticamente.</p></div></div>
+      <section class="card card-b" style="display: flex; flex-wrap: wrap; gap: 10px; align-items: end">
+        <div class="fld" style="flex: 3 1 280px"><label class="lbl" for="nt">Nueva tarea</label><input id="nt" class="inp" placeholder="Ej.: Llamar a La Cosecha por factura vencida" value="{{draft}}" onChange="{{setDraft}}"></div>
+        <div class="fld" style="flex: 1 1 150px"><label class="lbl" for="nf">Vence</label><input id="nf" class="inp" value="{{draftDate}}" onChange="{{setDraftDate}}"></div>
+        <button type="button" class="btn btn-p" onClick="{{add}}" disabled="{{noDraft}}">Agregar</button>
+      </section>
+      <section class="card">
+        <div class="tabs" role="tablist" style="padding: 0 12px">
+          <sc-for list="{{tabs}}" as="t" hint-placeholder-count="3"><button type="button" role="tab" class="{{t.cls}}" onClick="{{t.pick}}">{{t.label}} <span class="chip" style="height: 20px; font-size: 11px">{{t.n}}</span></button></sc-for>
+        </div>
+        <sc-if value="{{has}}" hint-placeholder-val="{{true}}">
+          <sc-for list="{{items}}" as="i" hint-placeholder-count="6">
+            <div style="display: flex; align-items: center; gap: 14px; padding: 14px 20px; border-bottom: 1px solid #F0F1F3">
+              <input type="checkbox" checked="{{i.done}}" onChange="{{i.toggle}}" aria-label="Completar {{i.t}}" style="width: 20px; height: 20px; accent-color: #0F766E; flex: none">
+              <div style="flex: 1; min-width: 0">
+                <div style="font-weight: 500; color: {{i.color}}; text-decoration: {{i.deco}}">{{i.t}}</div>
+                <div class="hint">{{i.meta}}</div>
+              </div>
+              <span class="{{i.tagCls}}">{{i.tag}}</span>
+              <sc-if value="{{i.hasLink}}" hint-placeholder-val="{{true}}"><a href="{{i.href}}" class="btn btn-o btn-sm">Abrir</a></sc-if>
+              <button type="button" class="ib" onClick="{{i.del}}" aria-label="Eliminar tarea"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"></path></svg></button>
+            </div>
+          </sc-for>
+        </sc-if>
+        <sc-if value="{{empty}}" hint-placeholder-val="{{false}}">
+          <div class="empty"><span class="ei"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><h3>{{emptyT}}</h3><p>{{emptyP}}</p></div>
+        </sc-if>
+      </section>
+    </div>
+  </main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = this.state || {};
+    const base = st.list || [
+      { t: 'Presentar IR-17 de octubre', f: '10/11/2026', tag: 'DGII', href: 'IR17.dc.html', done: false },
+      { t: 'Enviar formatos 606, 607 y 608', f: '16/11/2026', tag: 'DGII', href: 'Formatos.dc.html', done: false },
+      { t: 'Declarar y pagar IT-1', f: '20/11/2026', tag: 'DGII', href: 'PreCalculo.dc.html', done: false },
+      { t: 'Renovar certificado digital .p12', f: '14/12/2026', tag: 'Urgente', href: 'Configuracion.dc.html', done: false },
+      { t: 'Corregir factura rechazada E310000000129', f: '24/10/2026', tag: 'e-CF', href: 'DetalleFactura.dc.html', done: false },
+      { t: 'Solicitar nueva secuencia E32', f: '30/10/2026', tag: 'e-CF', href: 'Configuracion.dc.html', done: false },
+      { t: 'Conciliar Banco Popular septiembre', f: '05/10/2026', tag: 'Gestión', href: 'Conciliacion.dc.html', done: true }
+    ];
+    const f = st.f || 'Pendientes';
+    const set = l => this.setState({ list: l });
+    const TC = { DGII: 'bd b-env nodot', Urgente: 'bd b-rech nodot', 'e-CF': 'bd b-teal nodot', 'Gestión': 'bd b-borr nodot' };
+    const items = base.map((x, i) => ({ ...x, i })).filter(x => f === 'Todas' || (f === 'Pendientes' ? !x.done : x.done)).map(x => ({
+      t: x.t, done: x.done, meta: 'Vence ' + x.f, tag: x.tag, tagCls: TC[x.tag] || 'chip', href: x.href || '#', hasLink: !!x.href,
+      color: x.done ? '#6B7280' : '#111827', deco: x.done ? 'line-through' : 'none',
+      toggle: () => set(base.map((y, j) => j === x.i ? { ...y, done: !y.done } : y)),
+      del: () => set(base.filter((_, j) => j !== x.i)) }));
+    const tabs = ['Pendientes', 'Completadas', 'Todas'].map(label => ({ label, cls: label === f ? 'tab on' : 'tab', pick: () => this.setState({ f: label }),
+      n: base.filter(x => label === 'Todas' || (label === 'Pendientes' ? !x.done : x.done)).length }));
+    const draft = st.draft || '';
+    return {
+      tabs, items, has: items.length > 0, empty: items.length === 0,
+      emptyT: f === 'Completadas' ? 'Aún no completas tareas' : '¡Todo al día!', emptyP: f === 'Completadas' ? 'Marca una tarea como hecha y aparecerá aquí.' : 'No tienes tareas pendientes. Agrega una arriba.',
+      draft, draftDate: st.dd ?? '31/10/2026', noDraft: !draft.trim(),
+      setDraft: e => this.setState({ draft: e.target.value }), setDraftDate: e => this.setState({ dd: e.target.value }),
+      add: () => this.setState({ list: [{ t: draft, f: st.dd ?? '31/10/2026', tag: 'Gestión', href: '', done: false }].concat(base), draft: '' })
+    };
+  }
+}
+</script>
+</body>
+</html>

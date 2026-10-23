@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Menú lateral</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<aside class="{{rootCls}}" aria-label="Menú principal" style="font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #374151">
+  <div class="sb-head">
+    <a href="Main.dc.html" class="sb-logo" aria-label="{{marca}} · Inicio">
+      <svg width="32" height="32" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#0F766E"></rect><path d="M10.5 7.5h8l4 4v13h-12z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"></path><path d="M13.5 17.5l2.4 2.4 4.4-4.9" fill="none" stroke="#5EEAD4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+      <span class="sb-word">{{marca}}</span>
+    </a>
+    <button type="button" class="ib sb-col" onClick="{{toggleCollapse}}" aria-label="Contraer o expandir menú">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M9 4v16"></path></svg>
+    </button>
+    <button type="button" class="ib sb-burger" onClick="{{toggleMob}}" aria-label="Abrir menú" aria-expanded="{{mob}}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+    </button>
+  </div>
+  <button type="button" class="sb-scrim" onClick="{{toggleMob}}" aria-label="Cerrar menú"></button>
+  <nav class="sb-nav">
+    <a href="Main.dc.html" class="{{c.inicio}}" title="Inicio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"></path><path d="M5 9.5V21h14V9.5"></path><path d="M10 21v-6h4v6"></path></svg><span class="sb-lbl">Inicio</span></a>
+    <a href="Bandeja.dc.html" class="{{c.bandeja}}" title="Bandeja de entrada"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2"></path><path d="M5.5 5.1 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.1z"></path></svg><span class="sb-lbl">Bandeja de entrada</span><span class="sb-lbl chip" style="margin-left: auto; background: #E6F4F2; color: #0F766E">3</span></a>
+    <div class="sb-sep"></div>
+
+    <button type="button" class="{{g.ingresos}}" onClick="{{t.ingresos}}" aria-expanded="{{o.ingresos}}" title="Ingresos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M15 9l-6 6M9 9.5V15h5.5"></path></svg><span class="sb-lbl">Ingresos</span><svg class="{{ch.ingresos}}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
+    <div class="{{subCls.ingresos}}">
+        <a href="Facturas.dc.html" class="{{c.facturas}}">Facturas de venta</a>
+        <a href="NotasCredito.dc.html" class="{{c.nc}}">Notas de crédito</a>
+        <a href="NotasDebito.dc.html" class="{{c.nd}}">Notas de débito</a>
+        <a href="Cotizaciones.dc.html" class="{{c.cot}}">Cotizaciones</a>
+        <a href="Cobros.dc.html" class="{{c.cobros}}">Cobros</a>
+      </div>
+
+    <button type="button" class="{{g.compras}}" onClick="{{t.compras}}" aria-expanded="{{o.compras}}" title="Compras"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 15l6-6M9.5 9H15v5.5"></path></svg><span class="sb-lbl">Compras</span><svg class="{{ch.compras}}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
+    <div class="{{subCls.compras}}">
+        <a href="Compra.dc.html" class="{{c.fcompra}}">Facturas de compra</a>
+        <a href="ComprasE41.dc.html" class="{{c.e41}}">Comprobantes de compras E41</a>
+        <a href="GastosE43.dc.html" class="{{c.e43}}">Gastos menores E43</a>
+        <a href="PagosProveedores.dc.html" class="{{c.pagos}}">Pagos a proveedores</a>
+        <a href="Retenciones.dc.html" class="{{c.ret}}">Retenciones</a>
+      </div>
+
+    <a href="Contactos.dc.html" class="{{c.contactos}}" title="Contactos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"></path></svg><span class="sb-lbl">Contactos</span></a>
+
+    <button type="button" class="{{g.inventario}}" onClick="{{t.inventario}}" aria-expanded="{{o.inventario}}" title="Inventario"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"></path><path d="M3 8l9 5 9-5M12 13v8"></path></svg><span class="sb-lbl">Inventario</span><svg class="{{ch.inventario}}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
+    <div class="{{subCls.inventario}}">
+        <a href="Productos.dc.html" class="{{c.productos}}">Productos</a>
+        <a href="Kardex.dc.html" class="{{c.kardex}}">Kardex valorizado</a>
+        <a href="Lotes.dc.html" class="{{c.lotes}}">Lotes</a>
+        <a href="Ajustes.dc.html" class="{{c.ajustes}}">Ajustes</a>
+        <a href="Almacenes.dc.html" class="{{c.almacenes}}">Almacenes</a>
+      </div>
+
+    <button type="button" class="{{g.bancos}}" onClick="{{t.bancos}}" aria-expanded="{{o.bancos}}" title="Bancos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 21h18M5 21v-9M9.5 21v-9M14.5 21v-9M19 21v-9M2.5 9.5 12 4l9.5 5.5z"></path></svg><span class="sb-lbl">Bancos</span><svg class="{{ch.bancos}}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
+    <div class="{{subCls.bancos}}">
+        <a href="CuentasBancarias.dc.html" class="{{c.cuentas}}">Cuentas bancarias</a>
+        <a href="Conciliacion.dc.html" class="{{c.conc}}">Conciliación</a>
+        <a href="Transferencias.dc.html" class="{{c.trans}}">Transferencias</a>
+      </div>
+
+    <button type="button" class="{{g.contabilidad}}" onClick="{{t.contabilidad}}" aria-expanded="{{o.contabilidad}}" title="Contabilidad"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2.5" width="14" height="19" rx="2"></rect><path d="M8.5 6.5h7M8.5 11h.01M12 11h.01M15.5 11h.01M8.5 14.5h.01M12 14.5h.01M15.5 14.5h.01M8.5 18h7"></path></svg><span class="sb-lbl">Contabilidad</span><svg class="{{ch.contabilidad}}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
+    <div class="{{subCls.contabilidad}}">
+        <a href="CatalogoCuentas.dc.html" class="{{c.catalogo}}">Catálogo de cuentas</a>
+        <a href="Asientos.dc.html" class="{{c.asientos}}">Asientos</a>
+        <a href="ActivosFijos.dc.html" class="{{c.activos}}">Activos fijos</a>
+      </div>
+
+    <button type="button" class="{{g.impuestos}}" onClick="{{t.impuestos}}" aria-expanded="{{o.impuestos}}" title="Impuestos"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2.5h12v19l-3-2-3 2-3-2-3 2z"></path><path d="M9.5 14.5l5-6M9.8 9h.01M14.2 14h.01"></path></svg><span class="sb-lbl">Impuestos</span><svg class="{{ch.impuestos}}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
+    <div class="{{subCls.impuestos}}">
+        <a href="Formatos.dc.html" class="{{c.f606}}">Formato 606</a>
+        <a href="Formato607.dc.html" class="{{c.f607}}">Formato 607</a>
+        <a href="Formato608.dc.html" class="{{c.f608}}">Formato 608</a>
+        <a href="PreCalculo.dc.html" class="{{c.it1}}">Pre-cálculo IT-1</a>
+        <a href="PreCalculoIR2.dc.html" class="{{c.ir2}}">Pre-cálculo IR-2</a>
+        <a href="IR17.dc.html" class="{{c.ir17}}">IR-17</a>
+      </div>
+
+    <a href="Reportes.dc.html" class="{{c.reportes}}" title="Reportes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"></path><path d="M15 7h6v6"></path></svg><span class="sb-lbl">Reportes</span></a>
+    <a href="Tareas.dc.html" class="{{c.tareas}}" title="Mis tareas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5.5" y="4" width="13" height="17" rx="2"></rect><path d="M9 4V2.5h6V4M9.5 12.5l2 2 3.5-4"></path></svg><span class="sb-lbl">Mis tareas</span></a>
+    <div class="sb-sep"></div>
+    <a href="Sincronizacion.dc.html" class="{{c.sync}}" title="Centro de sincronización"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13a8.5 8.5 0 0 1-15 4.5L3 15.5M3.5 11a8.5 8.5 0 0 1 15-4.5L21 8.5"></path><path d="M21 3.5v5h-5M3 20.5v-5h5"></path></svg><span class="sb-lbl">Centro de sincronización</span></a>
+    <a href="Configuracion.dc.html" class="{{c.config}}" title="Configuración"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"></path></svg><span class="sb-lbl">Configuración</span></a>
+
+    <div class="sb-cap">Descubre más soluciones</div>
+    <a href="Nomina.dc.html" class="{{c.nomina}}" title="Nómina"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"></circle><circle cx="9" cy="10" r="2"></circle><circle cx="15" cy="10" r="2"></circle><path d="M5.5 17a3.8 3.8 0 0 1 7 0M11.5 17a3.8 3.8 0 0 1 7 0"></path></svg><span class="sb-lbl">Nómina</span></a>
+    <button type="button" class="nv" onClick="{{openPos}}" title="POS"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="10" width="18" height="10" rx="2"></rect><path d="M7 10V4h10v6M7 14h.01M11 14h.01M15 14h.01M7 17h10"></path></svg><span class="sb-lbl">POS</span></button>
+    <a href="PortalClientes.dc.html" class="{{c.portal}}" title="Portal de clientes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 15c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2.1-.1-2.9a2.1 2.1 0 0 0-2.9-.1z"></path><path d="M12 15l-3-3a22 22 0 0 1 2-4A12.9 12.9 0 0 1 22 2c0 2.7-.8 7.5-6 11a22 22 0 0 1-4 2z"></path><path d="M9 12H4s.6-3 2-4c1.6-1.1 5 0 5 0M12 15v5s3-.6 4-2c1.1-1.6 0-5 0-5"></path></svg><span class="sb-lbl">Portal de clientes</span></a>
+    <a href="Ventas.dc.html" class="{{c.ventas}}" title="{{marca}} Ventas"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 7l-8.5 8.5-5-5L2 17"></path><path d="M16 7h6v6"></path></svg><span class="sb-lbl">{{marca}} Ventas</span></a>
+  </nav>
+  <div class="sb-foot" style="margin-top: 24px; background: #F5F7F8; border-color: #EEF0F2; gap: 12px">
+    <span style="font-size: 14px; font-weight: 500; color: #111827">Te quedan 15 días gratis</span>
+    <div class="pb" style="height: 5px"><span style="width: 50%; background: #2BA89D"></span></div>
+    <a href="Planes.dc.html" class="btn btn-sm" style="background: #2BA89D; color: #fff; width: 100%">Elegir plan</a>
+  </div>
+  <button type="button" class="sb-fab" onClick="{{toggleFab}}" aria-expanded="{{fab}}" aria-label="Ayuda y soporte"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"></circle><path d="M9.5 9a2.6 2.6 0 0 1 5 .9c0 1.7-2.5 2.3-2.5 3.6M12 17h.01"></path></svg></button>
+
+  <sc-if value="{{fab}}" hint-placeholder-val="{{false}}">
+    <div class="pop" style="position: fixed; top: auto; bottom: 92px; right: 24px; width: 320px; z-index: 96">
+      <div class="pop-h" style="font-size: 14px; color: #111827">¿En qué te ayudamos?<button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{toggleFab}}" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button></div>
+      <sc-if value="{{fabSent}}" hint-placeholder-val="{{false}}">
+        <div class="pop-sec"><div class="al al-s" style="margin: 4px 8px 10px"><span><b>Solicitud enviada.</b> Un asesor te escribirá por WhatsApp al +1 809-555-0142 en menos de 10 minutos.</span></div></div>
+      </sc-if>
+      <div class="pop-sec">
+        <button type="button" class="pop-i" onClick="{{fabChat}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.6-4.7a8.5 8.5 0 1 1 15.9-4.3z"></path></svg><span style="flex: 1"><b style="display: block">Hablar con un asesor</b><span class="hint">Lun a sáb · 8:00 a. m. – 8:00 p. m.</span></span></button>
+        <a href="Configuracion.dc.html" class="pop-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3"></path></svg><span style="flex: 1"><b style="display: block">Configurar facturación electrónica</b><span class="hint">Certificado, ambiente y secuencias</span></span></a>
+        <a href="Sincronizacion.dc.html" class="pop-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13a8.5 8.5 0 0 1-15 4.5L3 15.5M3.5 11a8.5 8.5 0 0 1 15-4.5L21 8.5"></path></svg><span style="flex: 1"><b style="display: block">Estado de la conexión DGII</b><span class="hint">Contingencia y envíos pendientes</span></span></a>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{pos}}" hint-placeholder-val="{{false}}">
+    <div class="scrim" style="z-index: 120">
+      <div role="dialog" aria-modal="true" aria-labelledby="pos-t" style="position: relative; background: #fff; border-radius: 16px; width: 100%; max-width: 860px; display: flex; flex-wrap: wrap; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.28)">
+        <button type="button" class="ib" onClick="{{closePos}}" aria-label="Cerrar" style="position: absolute; top: 10px; right: 10px; z-index: 2; background: rgba(255,255,255,.8)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+        <div style="flex: 1 1 360px; padding: 36px 32px; display: flex; flex-direction: column; gap: 18px">
+          <div style="display: flex; align-items: center; gap: 8px">
+            <span style="width: 32px; height: 32px; border-radius: 8px; background: #14B8A6; color: #fff; display: grid; place-items: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="10" width="18" height="10" rx="2"></rect><path d="M7 10V4h10v6"></path></svg></span>
+            <span style="line-height: 1"><span style="display: block; font-size: 10px; color: #6B7280">{{marcaLower}}</span><b style="font-size: 17px; color: #111827">POS</b></span>
+          </div>
+          <h2 id="pos-t" style="margin: 0; font-size: 24px; line-height: 1.3; color: #111827; font-weight: 650">Conecta tu <span style="color: #14B8A6">punto de venta</span> y automatiza ventas</h2>
+          <p style="margin: 0; font-size: 14px; color: #374151">Al conectar {{marca}} POS con tu facturación, podrás:</p>
+          <div style="display: flex; flex-direction: column; gap: 14px; font-size: 14px; color: #4B5563">
+            <div style="display: flex; gap: 12px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F766E" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none"><ellipse cx="15" cy="6" rx="6" ry="3"></ellipse><path d="M9 6v12c0 1.7 2.7 3 6 3s6-1.3 6-3V6M9 12c0 1.7 2.7 3 6 3s6-1.3 6-3M3 9h4M5 7v4"></path></svg>Emitir e-CF de consumo desde caja y actualizar tu contabilidad al instante.</div>
+            <div style="display: flex; gap: 12px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F766E" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none"><rect x="3" y="4" width="18" height="17" rx="2"></rect><path d="M16 2v4M8 2v4M3 10h18M12 14v3l2 1"></path></svg>Cerrar el mes sin tareas repetitivas.</div>
+            <div style="display: flex; gap: 12px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F766E" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none"><rect x="5.5" y="4" width="13" height="17" rx="2"></rect><path d="M9 4V2.5h6V4M12 9v6M10 11h3a1 1 0 0 1 0 2h-2a1 1 0 0 0 0 2h3"></path></svg>Sincronizar caja, ingresos y bancos en un solo lugar.</div>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-top: 8px">
+            <a href="Planes.dc.html" class="btn" style="background: #2BA89D; color: #fff">Probar {{marca}} POS</a>
+            <button type="button" class="btn btn-g" style="color: #0F766E" onClick="{{closePos}}">Seguir en Facturación</button>
+          </div>
+        </div>
+        <div aria-hidden="true" style="flex: 1 1 360px; background: #E8F7F5; padding: 28px 0 0 28px; display: flex">
+          <div style="flex: 1; background: #fff; border-radius: 10px 0 0 0; border: 1px solid #DDE7E6; display: flex; overflow: hidden">
+            <div style="width: 28px; padding: 30px 0; display: flex; flex-direction: column; align-items: center; gap: 10px; border-right: 1px solid #EEF0F2"><span style="width: 12px; height: 12px; border-radius: 50%; background: #14B8A6"></span><span style="width: 12px; height: 12px; border-radius: 50%; background: #A3E635"></span><span style="width: 12px; height: 12px; border-radius: 50%; background: #475569"></span></div>
+            <div style="flex: 1; padding: 12px; display: flex; flex-direction: column; gap: 10px">
+              <div style="display: flex; gap: 8px; align-items: center"><span style="width: 50px; height: 14px; border-radius: 4px; background: #0F766E"></span><span style="flex: 1"></span><span style="width: 70px; height: 14px; border-radius: 4px; border: 1px solid #CBD5E1"></span></div>
+              <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+                <sc-for list="{{posCards}}" as="p" hint-placeholder-count="6">
+                  <div style="border: 1px solid #E5E7EB; border-radius: 6px; padding: 8px; display: flex; flex-direction: column; gap: 6px; align-items: center">
+                    <span style="align-self: flex-start; width: 26px; height: 5px; border-radius: 3px; background: #2DD4BF"></span>
+                    <span style="width: 30px; height: 40px; border-radius: {{p.r}}; background: {{p.c}}"></span>
+                    <span style="width: 34px; height: 4px; border-radius: 2px; background: #5EEAD4"></span>
+                    <span style="width: 44px; height: 4px; border-radius: 2px; background: #D1D5DB"></span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</aside>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"active":{"editor":"enum","options":["inicio","bandeja","facturas","fcompra","kardex","f606","it1","sync","config","nomina","portal","ventas"],"default":"inicio"},"marca":{"editor":"text","default":"Kontara"},"$preview":{"width":270,"height":1100}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const a = this.props.active ?? 'inicio';
+    const parent = { facturas: 'ingresos', nc: 'ingresos', nd: 'ingresos', cot: 'ingresos', cobros: 'ingresos',
+      fcompra: 'compras', e41: 'compras', e43: 'compras', pagos: 'compras', ret: 'compras',
+      productos: 'inventario', kardex: 'inventario', lotes: 'inventario', ajustes: 'inventario', almacenes: 'inventario',
+      bancos: 'bancos', cuentas: 'bancos', conc: 'bancos', trans: 'bancos',
+      contab: 'contabilidad', catalogo: 'contabilidad', asientos: 'contabilidad', activos: 'contabilidad',
+      f606: 'impuestos', f607: 'impuestos', f608: 'impuestos', it1: 'impuestos', ir2: 'impuestos', ir17: 'impuestos' };
+    const st = this.state || {};
+    const open = st.open || { [parent[a] || 'none']: true };
+    const groups = ['ingresos', 'compras', 'inventario', 'bancos', 'contabilidad', 'impuestos'];
+    const top = ['inicio', 'bandeja', 'contactos', 'reportes', 'tareas', 'sync', 'config', 'nomina', 'portal', 'ventas'];
+    const subs = Object.keys(parent).filter(k => k !== 'bancos' && k !== 'contab');
+    const c = {}, g = {}, o = {}, ch = {}, t = {}, subCls = {};
+    top.forEach(k => { c[k] = k === a ? 'nv on' : 'nv'; });
+    subs.forEach(k => { c[k] = k === a ? 'sv on' : 'sv'; });
+    groups.forEach(k => {
+      g[k] = parent[a] === k ? 'nv has' : 'nv';
+      o[k] = !!open[k];
+      subCls[k] = open[k] ? 'sub' : 'sub sub-closed';
+      ch[k] = open[k] ? 'chev up' : 'chev';
+      t[k] = () => this.setState({ open: { ...open, [k]: !open[k] } });
+    });
+    const collapsed = !!st.collapsed, mob = !!st.mob;
+    return {
+      marca: this.props.marca ?? 'Kontara',
+      rootCls: 'sb' + (collapsed ? ' collapsed' : '') + (mob ? ' open' : ''),
+      c, g, o, ch, t, mob, subCls,
+      marcaLower: (this.props.marca ?? 'Kontara').toLowerCase(),
+      fab: !!st.fab, fabSent: !!st.fabSent, toggleFab: () => this.setState({ fab: !st.fab, fabSent: false }), fabChat: () => this.setState({ fabSent: true }),
+      pos: !!st.pos, openPos: () => this.setState({ pos: true, mob: false }), closePos: () => this.setState({ pos: false }),
+      posCards: [['#86EFAC', '40% 40% 6px 6px'], ['#5EEAD4', '6px'], ['#A7F3D0', '50% 50% 4px 4px'], ['#FCD34D', '50% 50% 0 0'], ['#6EE7B7', '45%'], ['#FDE68A', '8px 8px 4px 4px']].map(([c, r]) => ({ c, r })),
+      toggleCollapse: () => this.setState({ collapsed: !collapsed }),
+      toggleMob: () => this.setState({ mob: !mob })
+    };
+  }
+}
+</script>
+</body>
+</html>

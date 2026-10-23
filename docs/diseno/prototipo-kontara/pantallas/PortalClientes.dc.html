@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Portal de clientes</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="portal" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,56px"></dc-import>
+    <div class="content" style="max-width: 1120px">
+      <div class="ph">
+        <div>
+          <h1>Portal de clientes</h1>
+          <p>Envía a tus clientes un enlace a su historial de facturas: desde allí descargan sus e-CF (PDF y XML) y pagan lo pendiente. ¡Todo desde un solo lugar!</p>
+        </div>
+      </div>
+
+      <section class="card" style="display: flex; flex-wrap: wrap; align-items: center; gap: 20px; padding: 0 20px 0 0; overflow: hidden; background: #F6FAFF">
+        <div aria-hidden="true" style="width: 110px; height: 96px; background: #CCEFEA; border-radius: 0 60px 0 0; display: flex; align-items: flex-end; padding: 0 0 10px 10px; flex: none">
+          <div style="width: 82px; height: 58px; background: #fff; border-radius: 4px; box-shadow: 0 2px 6px rgba(0,0,0,.1); padding: 6px; display: flex; flex-direction: column; gap: 4px">
+            <span style="height: 4px; width: 60%; background: #F9A8D4; border-radius: 2px"></span><span style="height: 3px; background: #E5E7EB"></span><span style="height: 3px; background: #E5E7EB"></span><span style="height: 3px; width: 70%; background: #14B8A6"></span><span style="height: 3px; background: #E5E7EB"></span>
+          </div>
+        </div>
+        <div style="flex: 1 1 360px; padding: 16px 0">
+          <b style="color: #111827">¡Sácale el máximo provecho a las funciones del portal!</b>
+          <p style="margin: 4px 0 0; font-size: 13.5px; color: #374151">Descubre cómo simplificar tu vida y gestionar las cuentas de tus clientes desde dónde estés.</p>
+        </div>
+        <div class="row" style="padding: 12px 0">
+          <button type="button" class="btn btn-o btn-sm" onClick="{{openHelp}}">Ir a la ayuda</button>
+          <button type="button" class="btn btn-sm" style="background: #CCEFEA; color: #0F766E" onClick="{{openVideo}}">▶ Ver video</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="card-h"><h2>Enviar enlace a mis clientes</h2></div>
+        <div class="card-b" style="display: flex; flex-direction: column; gap: 20px">
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px">
+            <div class="fld" style="position: relative">
+              <label class="lbl" for="cli">Cliente</label>
+              <label class="tb-search" style="max-width: none">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+                <input id="cli" class="inp" placeholder="Buscar…" value="{{q}}" onChange="{{setQ}}" style="padding-right: 12px; background: #fff">
+              </label>
+              <span class="hint">Ingresa al menos 3 letras para iniciar la búsqueda</span>
+              <sc-if value="{{showSug}}" hint-placeholder-val="{{false}}">
+                <div class="pop" style="left: 0; right: 0; width: auto; top: 72px">
+                  <div class="pop-sec">
+                    <sc-for list="{{sug}}" as="c" hint-placeholder-count="3"><button type="button" class="pop-i" onClick="{{c.pick}}"><span class="co-av">{{c.ini}}</span><span style="flex: 1"><b style="display: block; color: #111827">{{c.n}}</b><span class="hint">RNC {{c.rnc}} · {{c.email}}</span></span></button></sc-for>
+                    <sc-if value="{{noSug}}" hint-placeholder-val="{{false}}"><div style="padding: 12px 10px; color: #6B7280">No hay clientes con ese nombre. <a href="Contactos.dc.html">Crear cliente</a></div></sc-if>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+            <div class="fld">
+              <label class="lbl" for="link">Enlace al portal</label>
+              <div style="display: flex">
+                <input id="link" class="inp mono" value="{{link}}" readonly style="border-radius: 8px 0 0 8px; background: #F8FAFC">
+                <button type="button" class="btn btn-o" style="border-radius: 0 8px 8px 0; margin-left: -1px" onClick="{{copy}}" disabled="{{noClient}}">{{copyLabel}}</button>
+              </div>
+            </div>
+          </div>
+          <div class="fld">
+            <span class="lbl">Métodos de pago disponibles</span>
+            <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center">
+              <button type="button" onClick="{{toggleAddPay}}" aria-label="Agregar método de pago" style="width: 40px; height: 40px; border-radius: 50%; border: 1px solid #D1D5DB; background: #fff; color: #0F766E; font-size: 22px; cursor: pointer">+</button>
+              <sc-for list="{{pays}}" as="p" hint-placeholder-count="2">
+                <span class="chip" style="height: 36px; border-radius: 18px; padding: 0 12px; gap: 8px; background: #fff; border: 1px solid #E5E7EB">{{p.n}}<button type="button" onClick="{{p.remove}}" aria-label="Quitar {{p.n}}" style="border: 0; background: none; cursor: pointer; color: #9CA3AF; padding: 0; font-size: 14px">×</button></span>
+              </sc-for>
+              <sc-if value="{{addPay}}" hint-placeholder-val="{{false}}">
+                <div class="row">
+                  <sc-for list="{{payOpts}}" as="p" hint-placeholder-count="3"><button type="button" class="btn btn-o btn-sm" onClick="{{p.add}}">+ {{p.n}}</button></sc-for>
+                </div>
+              </sc-if>
+            </div>
+          </div>
+          <sc-if value="{{sent}}" hint-placeholder-val="{{false}}">
+            <div class="al al-s"><span><b>Enlace enviado a {{client.n}}</b> por correo ({{client.email}}) y WhatsApp. Podrá ver 14 facturas y pagar RD$ 412,880.00 pendientes.</span></div>
+          </sc-if>
+          <div class="row" style="justify-content: flex-end">
+            <button type="button" class="btn btn-o" onClick="{{togglePreview}}" disabled="{{noClient}}">{{previewLabel}}</button>
+            <button type="button" class="btn btn-p" onClick="{{send}}" disabled="{{noClient}}">Enviar enlace</button>
+          </div>
+        </div>
+      </section>
+
+      <sc-if value="{{preview}}" hint-placeholder-val="{{false}}">
+        <section class="card" style="border-style: dashed">
+          <div class="card-h"><h2>Vista previa · lo que verá {{client.n}}</h2><span class="chip">portal.kontara.do</span></div>
+          <div class="tw"><table class="tbl" style="min-width: 640px">
+            <thead><tr><th>e-NCF</th><th>Fecha</th><th class="num">Total (RD$)</th><th>Estado de pago</th><th style="text-align: right">Descargas</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">E310000000131</td><td>23/10/2026</td><td class="num">1,284,560.00</td><td><span class="bd b-proc">Pendiente</span></td><td style="text-align: right"><button type="button" class="btn btn-g btn-sm" onClick="{{dlPdf}}">PDF</button><button type="button" class="btn btn-g btn-sm" onClick="{{dlXml}}">XML</button></td></tr>
+              <tr><td class="mono">E310000000124</td><td>14/10/2026</td><td class="num">412,880.00</td><td><span class="bd b-acep">Pagada</span></td><td style="text-align: right"><button type="button" class="btn btn-g btn-sm" onClick="{{dlPdf}}">PDF</button><button type="button" class="btn btn-g btn-sm" onClick="{{dlXml}}">XML</button></td></tr>
+            </tbody>
+          </table></div>
+        </section>
+      </sc-if>
+    </div>
+  </main>
+
+  <sc-if value="{{video}}" hint-placeholder-val="{{false}}">
+    <div class="scrim">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="Video del portal" style="max-width: 720px">
+        <div class="modal-h" style="display: flex; justify-content: space-between; align-items: center"><h3>Cómo funciona el portal de clientes</h3><button type="button" class="ib" onClick="{{closeVideo}}" aria-label="Cerrar video"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button></div>
+        <div class="modal-b"><div style="aspect-ratio: 16/9; background: #0F172A; border-radius: 10px; display: grid; place-items: center; color: #fff"><button type="button" onClick="{{togglePlay}}" style="width: 64px; height: 64px; border-radius: 50%; border: 0; background: #14B8A6; color: #fff; font-size: 22px; cursor: pointer" aria-label="Reproducir">{{playIcon}}</button></div><span class="hint">{{playText}}</span></div>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{flash}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite"><div class="toast">
+      <span class="ti" style="background: #DCFCE7; color: #166534"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+      <div style="flex: 1; min-width: 0"><b>{{flash}}</b></div>
+      <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{closeFlash}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div></div>
+  </sc-if>
+  <sc-if value="{{dlOn}}" hint-placeholder-val="{{false}}">
+    <div class="scrim" style="z-index: 140">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dl-t" style="max-width: 640px">
+        <div class="modal-h"><h3 id="dl-t">{{dlTitle}}</h3></div>
+        <div class="modal-b">
+          <span>{{dlMsg}}</span>
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}">
+            <textarea class="inp mono" readonly rows="10" style="font-size: 12px; white-space: pre" aria-label="Contenido del archivo" value="{{dlText}}"></textarea>
+            <span class="hint">Seleccione el texto (Ctrl+A) y cópielo (Ctrl+C). Para Excel, péguelo en un archivo de texto y guárdelo con la extensión indicada.</span>
+          </sc-if>
+        </div>
+        <div class="modal-f">
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}"><button type="button" class="btn btn-o" onClick="{{dlCopy}}">Copiar contenido</button></sc-if>
+          <button type="button" class="btn btn-p" onClick="{{dlClose}}">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1000}}'>
+class Component extends DCLogic {
+  ecfNote(msg) {
+    this.setState({ fx: msg, flash: msg });
+  }
+  ecfWins() {
+    const out = [];
+    try { let w = window; for (let i = 0; i < 5 && w; i++) { out.push(w); if (w === w.parent) break; w = w.parent; } } catch (e) {}
+    return out;
+  }
+  async ecfCap(name) {
+    for (const w of this.ecfWins()) {
+      try {
+        if (w.claude && typeof w.claude.use === 'function') {
+          const cap = await Promise.race([w.claude.use(name), new Promise(r => setTimeout(() => r(null), 4000))]);
+          if (cap) return cap;
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+  async ecfSave(filename, data) {
+    this.ecfNote('Preparando ' + filename + '…');
+    const cap = await this.ecfCap('downloads');
+    if (cap) {
+      try {
+        await cap.save({ filename, data: typeof data === 'string' ? data : data });
+        this.ecfNote('Archivo guardado: ' + filename);
+        return true;
+      } catch (e) {
+        const code = e && e.code;
+        if (code === 'declined') { this.ecfNote('Descarga cancelada'); return false; }
+        if (code === 'rate_limited') { this.ecfNote('Ya hay una descarga esperando confirmación'); return false; }
+        if (code === 'rejected_extension' && !/\.txt$/.test(filename)) return this.ecfSave(filename + '.txt', data);
+      }
+    }
+    // Sin capacidad de descarga en este visor: intento directo en la ventana accesible más alta
+    let tried = false;
+    const wins = this.ecfWins().reverse();
+    for (const w of wins) {
+      try {
+        const doc = w.document;
+        const blob = new w.Blob([data], { type: /\.pdf$/.test(filename) ? 'application/pdf' : 'text/plain;charset=utf-8' });
+        const url = w.URL.createObjectURL(blob);
+        const a = doc.createElement('a');
+        a.href = url; a.download = filename; a.style.display = 'none';
+        doc.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => { try { w.URL.revokeObjectURL(url); } catch (e) {} }, 8000);
+        tried = true; break;
+      } catch (e) {}
+    }
+    this.setState({ dl: { name: filename, text: typeof data === 'string' && !/\.pdf$/.test(filename) ? data.replace(/^﻿/, '') : '', tried }, fx: '', flash: '' });
+    return false;
+  }
+  async ecfCopy(text, label) {
+    let ok = false;
+    for (const w of this.ecfWins()) {
+      try { await w.navigator.clipboard.writeText(text); ok = true; break; } catch (e) {}
+    }
+    if (!ok) {
+      for (const w of this.ecfWins()) {
+        try {
+          const d = w.document; const t = d.createElement('textarea');
+          t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.top = '-1000px';
+          d.body.appendChild(t); t.select(); ok = d.execCommand('copy'); t.remove();
+          if (ok) break;
+        } catch (e) {}
+      }
+    }
+    if (ok) this.ecfNote(label || 'Copiado al portapapeles');
+    else this.setState({ dl: { name: 'Copiar manualmente', text, tried: false, copy: true }, fx: '', flash: '' });
+    return ok;
+  }
+  ecfCsv(rows) {
+    const q = v => { const s = v == null ? '' : String(v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    return '﻿' + rows.map(r => r.map(q).join(',')).join('\r\n');
+  }
+  ecfNum(v) {
+    const n = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? String(v) : n.toFixed(2);
+  }
+  ecfPad(cols, widths) {
+    return cols.map((c, i) => { const w = widths[i] || 12; let s = String(c == null ? '' : c); if (s.length > w) s = s.slice(0, w - 1) + '.'; return w < 0 ? s : (i > 0 && /^[-(]?[\d,]+\.\d\d\)?$/.test(s) ? s.padStart(w) : s.padEnd(w)); }).join(' ');
+  }
+  ecfPdf(title, lines, subtitle) {
+    const map = { '−': '-', '–': '-', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'", '…': '...', '→': '->', '›': '>', '≥': '>=', '✓': 'v', '★': '*' };
+    const esc = s => String(s).replace(/[−–—“”‘’…→›≥✓★]/g, ch => map[ch]).replace(/[\\()]/g, m => '\\' + m)
+      .replace(/[^\x20-\x7e]/g, ch => { const c = ch.charCodeAt(0); return c < 256 ? '\\' + c.toString(8).padStart(3, '0') : '?'; });
+    const per = 50, pages = [];
+    for (let i = 0; i < Math.max(lines.length, 1); i += per) pages.push(lines.slice(i, i + per));
+    const objs = [];
+    objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+    objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>';
+    objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+    objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>';
+    objs[6] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+    const kids = [];
+    pages.forEach((pl, p) => {
+      const po = 7 + p * 2, co = po + 1;
+      kids.push(po + ' 0 R');
+      let s = '0.06 0.46 0.43 rg 40 806 515 3 re f\n';
+      s += 'BT /F2 15 Tf 40 784 Td (' + esc(title) + ') Tj ET\n';
+      s += 'BT /F4 8.5 Tf 40 770 Td (' + esc((subtitle ? subtitle + '  |  ' : '') + 'Distribuidora Caribe Verde, SRL  |  RNC 1-31-89754-2  |  Pag. ' + (p + 1) + '/' + pages.length) + ') Tj ET\n';
+      s += '0.8 0.8 0.8 RG 0.5 w 40 762 m 555 762 l S\n';
+      s += 'BT /F1 8.5 Tf 40 746 Td 13.5 TL\n';
+      pl.forEach(l => {
+        const o = typeof l === 'object' && l !== null ? l : { t: l };
+        s += (o.b ? '/F3 8.5 Tf (' + esc(o.t) + ") ' /F1 8.5 Tf\n" : '(' + esc(o.t) + ") '\n");
+      });
+      s += 'ET\nBT /F4 7 Tf 40 30 Td (' + esc('Generado por Kontara el 23/10/2026 - Documento de referencia') + ') Tj ET';
+      objs[co] = '<< /Length ' + s.length + ' >>\nstream\n' + s + '\nendstream';
+      objs[po] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents ' + co + ' 0 R >>';
+    });
+    objs[2] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>';
+    let out = '%PDF-1.4\n';
+    const off = [];
+    for (let i = 1; i < objs.length; i++) { off[i] = out.length; out += i + ' 0 obj\n' + objs[i] + '\nendobj\n'; }
+    const x = out.length;
+    out += 'xref\n0 ' + objs.length + '\n0000000000 65535 f \n';
+    for (let i = 1; i < objs.length; i++) out += String(off[i]).padStart(10, '0') + ' 00000 n \n';
+    out += 'trailer\n<< /Size ' + objs.length + ' /Root 1 0 R >>\nstartxref\n' + x + '\n%%EOF\n';
+    return out;
+  }
+  ecfXml(tipo, encf, fecha, rncComprador, comprador, total, itbis) {
+    const e = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<?xml version="1.0" encoding="UTF-8"?>\n<ECF>\n  <Encabezado>\n    <Version>1.0</Version>\n    <IdDoc>\n      <TipoeCF>' + tipo + '</TipoeCF>\n      <eNCF>' + e(encf) + '</eNCF>\n      <FechaVencimientoSecuencia>31-12-2027</FechaVencimientoSecuencia>\n      <TipoIngresos>01</TipoIngresos>\n    </IdDoc>\n    <Emisor>\n      <RNCEmisor>131897542</RNCEmisor>\n      <RazonSocialEmisor>Distribuidora Caribe Verde, SRL</RazonSocialEmisor>\n      <DireccionEmisor>Av. 27 de Febrero 415, Piantini, Santo Domingo</DireccionEmisor>\n      <FechaEmision>' + e(fecha) + '</FechaEmision>\n    </Emisor>\n    <Comprador>\n      <RNCComprador>' + e(String(rncComprador).replace(/\D/g, '')) + '</RNCComprador>\n      <RazonSocialComprador>' + e(comprador) + '</RazonSocialComprador>\n    </Comprador>\n    <Totales>\n      <MontoTotal>' + this.ecfNum(total) + '</MontoTotal>\n      <TotalITBIS>' + this.ecfNum(itbis) + '</TotalITBIS>\n    </Totales>\n  </Encabezado>\n  <FechaHoraFirma>' + e(fecha) + ' 10:42:18</FechaHoraFirma>\n  <!-- Firma digital XAdES omitida en el prototipo -->\n</ECF>\n';
+  }
+  renderVals() {
+    const st = this.state || {};
+    const C = [
+      ['Constructora Hispaniola, SRL', '1-30-45218-7', 'compras@hispaniola.com.do', 'hispaniola'],
+      ['Supermercado La Cosecha, SRL', '1-01-78452-3', 'pagos@lacosecha.do', 'lacosecha'],
+      ['Hotel Brisas de Bávaro, SA', '1-30-11234-9', 'cxp@brisasbavaro.do', 'brisas'],
+      ['Ayuntamiento Municipal de Moca', '4-30-00123-5', 'tesoreria@moca.gob.do', 'moca']
+    ];
+    const q = st.q || '';
+    const client = st.client != null ? C[st.client] : null;
+    const sug = q.length >= 3 && !client ? C.map((c, i) => ({ n: c[0], rnc: c[1], email: c[2], ini: c[0][0], i })).filter(c => c.n.toLowerCase().includes(q.toLowerCase()) || c.rnc.replace(/-/g, '').includes(q.replace(/-/g, '')))
+      .map(c => ({ ...c, pick: () => this.setState({ client: c.i, q: c.n, sent: false }) })) : [];
+    const pays = st.pays || ['Tarjeta de crédito/débito', 'Transferencia bancaria'];
+    const allPay = ['Tarjeta de crédito/débito', 'Transferencia bancaria', 'Pago móvil', 'Depósito en efectivo'];
+    const flash = m => this.setState({ flash: m });
+    return {
+      dlOn: !!(this.state || {}).dl, dlHasText: !!((this.state || {}).dl && (this.state || {}).dl.text), dlText: ((this.state || {}).dl || {}).text || '',
+      dlTitle: ((this.state || {}).dl || {}).copy ? 'Copie el contenido manualmente' : 'Este visor no permitió descargar «' + (((this.state || {}).dl || {}).name || '') + '»',
+      dlMsg: ((this.state || {}).dl || {}).copy ? 'El navegador bloqueó el portapapeles dentro del lienzo. Puede copiar el texto desde aquí.' : (((this.state || {}).dl || {}).tried ? 'Intentamos descargarlo directamente; si no aparece en su carpeta de Descargas es porque el lienzo bloquea descargas. ' : '') + 'Abra el prototipo en pantalla completa (Play) o use el contenido de abajo.',
+      dlClose: () => this.setState({ dl: null }),
+      dlCopy: () => { const t = ((this.state || {}).dl || {}).text || ''; try { navigator.clipboard.writeText(t).then(() => this.setState({ dl: null, fx: 'Copiado al portapapeles', flash: 'Copiado al portapapeles' }), () => {}); } catch (e) {} },
+      q, setQ: e => this.setState({ q: e.target.value, client: e.target.value === (client && client[0]) ? st.client : null, sent: false }),
+      sug, showSug: q.length >= 3 && !client, noSug: q.length >= 3 && !client && sug.length === 0,
+      client: client ? { n: client[0], email: client[2] } : { n: '', email: '' }, noClient: !client,
+      link: client ? 'portal.kontara.do/c/' + client[3] + '-7f3a' : '',
+      copyLabel: st.copied ? 'Copiado' : 'Copiar', copy: () => this.ecfCopy('https://portal.kontara.do/c/' + client[3] + '-7f3a', 'Enlace copiado al portapapeles').then(ok => ok && this.setState({ copied: true })),
+      pays: pays.map(n => ({ n, remove: () => this.setState({ pays: pays.filter(x => x !== n) }) })),
+      addPay: !!st.addPay, toggleAddPay: () => this.setState({ addPay: !st.addPay }),
+      payOpts: allPay.filter(n => !pays.includes(n)).map(n => ({ n, add: () => this.setState({ pays: pays.concat(n), addPay: false }) })),
+      preview: !!st.preview && !!client, previewLabel: st.preview ? 'Ocultar vista previa' : 'Vista previa', togglePreview: () => this.setState({ preview: !st.preview }),
+      sent: !!st.sent && !!client, send: () => { this.setState({ sent: true }); flash('Enlace del portal enviado a ' + client[0]); },
+      dlPdf: () => this.ecfSave('E310000000131.pdf', this.ecfPdf('Factura de Credito Fiscal Electronica', [{ t: 'e-NCF: E310000000131', b: true }, 'Cliente: ' + (client ? client[0] : ''), 'Fecha: 23/10/2026', 'Total: RD$ 1,284,560.00', 'Estado de pago: Pendiente'], 'Portal de clientes')),
+      dlXml: () => this.ecfSave('E310000000131.xml', this.ecfXml('31', 'E310000000131', '23-10-2026', client ? client[1] : '', client ? client[0] : '', 1284560, 180000)),
+      openHelp: () => flash('Abra el Centro de ayuda con el ícono ? de la barra superior › Recursos'),
+      video: !!st.video, openVideo: () => this.setState({ video: true }), closeVideo: () => this.setState({ video: false, playing: false }),
+      togglePlay: () => this.setState({ playing: !st.playing }), playIcon: st.playing ? '❚❚' : '▶', playText: st.playing ? 'Reproduciendo · 0:12 / 2:45' : 'Duración: 2 min 45 s',
+      flash: st.flash || '', closeFlash: () => this.setState({ flash: '' })
+    };
+  }
+}
+</script>
+</body>
+</html>

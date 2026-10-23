@@ -1,0 +1,8 @@
+﻿Nombre o razon social,Tipo (Cliente/Proveedor),RNC o cedula,Correo,Telefono
+"Constructora Hispaniola, SRL",Cliente,1-30-45218-7,compras@hispaniola.com.do,
+"Supermercado La Cosecha, SRL",Cliente,1-01-78452-3,pagos@lacosecha.do,
+"Hotel Brisas de Bávaro, SA",Cliente,1-30-11234-9,cxp@brisasbavaro.do,
+Ayuntamiento Municipal de Moca,Cliente,4-30-00123-5,tesoreria@moca.gob.do,
+Juan Pablo Méndez Rosario,Cliente,001-1456789-2,jpmendez@correo.do,
+"Cementos del Atlántico, SA",Proveedor,1-01-55678-9,ventas@cematlantico.do,
+"Transporte Cibao Express, SRL",Proveedor,1-31-24567-8,facturas@cibaoexpress.do,

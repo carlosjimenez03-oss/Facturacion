@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Planes y suscripción</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="planes" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,56px"></dc-import>
+    <div class="content" style="max-width: 1180px">
+      <div class="ph">
+        <div><h1>Elige tu plan</h1><p>{{subtitle}} Todos los planes incluyen facturación electrónica e-CF certificada por la DGII.</p></div>
+        <div class="seg" role="group" aria-label="Periodicidad"><button type="button" class="{{mCls}}" onClick="{{setMes}}">Mensual</button><button type="button" class="{{aCls}}" onClick="{{setAnual}}">Anual · 2 meses gratis</button></div>
+      </div>
+      <sc-if value="{{current}}" hint-placeholder-val="{{false}}"><div class="al al-s"><span><b>¡Listo! Tu plan {{current}} está activo.</b> Recibirás la factura E31 de la suscripción en facturacion@caribeverde.do.</span></div></sc-if>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; align-items: stretch">
+        <sc-for list="{{plans}}" as="p" hint-placeholder-count="3">
+          <section class="card" style="padding: 24px; display: flex; flex-direction: column; gap: 14px; border: {{p.border}}">
+            <div style="display: flex; justify-content: space-between; align-items: center"><b style="font-size: 17px; color: #111827">{{p.n}}</b><sc-if value="{{p.pop}}" hint-placeholder-val="{{false}}"><span class="bd b-teal nodot">Más elegido</span></sc-if></div>
+            <span class="hint" style="font-size: 13.5px">{{p.d}}</span>
+            <div><span style="font-size: 30px; font-weight: 700; color: #111827">RD$ {{p.price}}</span><span class="mut"> / {{per}}</span></div>
+            <span class="hint">+ ITBIS 18%</span>
+            <ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; color: #374151; flex: 1">
+              <sc-for list="{{p.f}}" as="f" hint-placeholder-count="4"><li style="display: flex; gap: 8px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0F766E" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 2px"><path d="M20 6 9 17l-5-5"></path></svg>{{f}}</li></sc-for>
+            </ul>
+            <button type="button" class="{{p.btn}}" onClick="{{p.pick}}" disabled="{{p.isCur}}">{{p.cta}}</button>
+          </section>
+        </sc-for>
+      </div>
+      <section class="card">
+        <div class="card-h"><h2>Consumo del plan · octubre 2026</h2></div>
+        <div class="card-b" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px">
+          <sc-for list="{{uso}}" as="u" hint-placeholder-count="3"><div style="display: flex; flex-direction: column; gap: 6px"><div style="display: flex; justify-content: space-between; font-size: 13.5px"><span>{{u.k}}</span><b>{{u.v}}</b></div><div class="pb"><span style="width: {{u.p}}"></span></div></div></sc-for>
+        </div>
+      </section>
+    </div>
+  </main>
+  <sc-if value="{{confirm}}" hint-placeholder-val="{{false}}">
+    <div class="scrim"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="pl-t">
+      <div class="modal-h"><h3 id="pl-t">Confirmar plan {{sel.n}}</h3></div>
+      <div class="modal-b">
+        <dl class="kv" style="grid-template-columns: 1fr auto"><dt>Plan {{sel.n}} ({{per}})</dt><dd class="num">RD$ {{sel.price}}</dd><dt>ITBIS 18%</dt><dd class="num">RD$ {{sel.itbis}}</dd><dt style="font-weight: 650; color: #111827">Total</dt><dd class="num" style="font-weight: 700">RD$ {{sel.total}}</dd></dl>
+        <div class="fld"><span class="lbl">Forma de pago</span><div class="seg" role="group"><button type="button" class="{{payT}}" onClick="{{setTarjeta}}">Tarjeta</button><button type="button" class="{{payB}}" onClick="{{setTransf}}">Transferencia</button></div><span class="hint">{{payHint}}</span></div>
+      </div>
+      <div class="modal-f"><button type="button" class="btn btn-o" onClick="{{cancel}}">Cancelar</button><button type="button" class="btn btn-p" onClick="{{doConfirm}}">Confirmar suscripción</button></div>
+    </div></div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1100}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = this.state || {};
+    const fmt = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const anual = !!st.anual;
+    const P = [
+      ['Emprendedor', 'Para negocios que inician con e-CF', 1950, ['200 e-CF al mes', '1 usuario', 'Facturación, compras y contactos', 'Formatos 606, 607 y 608']],
+      ['Pyme', 'Para empresas en crecimiento', 4450, ['2,000 e-CF al mes', '5 usuarios', 'Inventario con Kardex valorizado', 'Retenciones, IT-1 e IR-2', 'Envío por WhatsApp y correo']],
+      ['Empresarial', 'Para alto volumen y varias sucursales', 9850, ['e-CF ilimitados', 'Usuarios ilimitados', 'Contingencia con firma local', 'Multiempresa y API', 'Soporte prioritario']]
+    ];
+    const cur = st.current || '';
+    const plans = P.map(([n, d, m, f], i) => { const price = anual ? m * 10 : m; const isCur = cur === n; return { n, d, f, price: fmt(price), pop: i === 1, isCur,
+      border: i === 1 ? '1.5px solid #0F766E' : '1px solid #E5E7EB', btn: i === 1 ? 'btn btn-p' : 'btn btn-o', cta: isCur ? 'Plan actual' : 'Elegir ' + n,
+      pick: () => this.setState({ sel: i, confirm: true }) }; });
+    const s = P[st.sel ?? 1], sp = anual ? s[2] * 10 : s[2];
+    const pay = st.pay || 'tarjeta';
+    return {
+      plans, per: anual ? 'año' : 'mes', mCls: anual ? '' : 'on', aCls: anual ? 'on' : '',
+      setMes: () => this.setState({ anual: false }), setAnual: () => this.setState({ anual: true }),
+      current: cur, confirm: !!st.confirm, subtitle: cur ? 'Plan ' + cur + ' activo · próxima factura el 23/11/2026.' : 'Te quedan 15 días de prueba gratis.',
+      sel: { n: s[0], price: fmt(sp), itbis: fmt(sp * .18), total: fmt(sp * 1.18) },
+      payT: pay === 'tarjeta' ? 'on' : '', payB: pay === 'transf' ? 'on' : '',
+      setTarjeta: () => this.setState({ pay: 'tarjeta' }), setTransf: () => this.setState({ pay: 'transf' }),
+      payHint: pay === 'tarjeta' ? 'Se abrirá la pasarela de pago segura del banco para completar el cobro.' : 'Te enviaremos los datos bancarios por correo. El plan se activa al confirmar el depósito.',
+      cancel: () => this.setState({ confirm: false }), doConfirm: () => this.setState({ confirm: false, current: s[0] }),
+      uso: [{ k: 'e-CF emitidos', v: '2,184 / 2,000', p: '100%' }, { k: 'Usuarios', v: '4 / 5', p: '80%' }, { k: 'Almacenamiento de XML', v: '1.2 GB / 10 GB', p: '12%' }]
+    };
+  }
+}
+</script>
+</body>
+</html>

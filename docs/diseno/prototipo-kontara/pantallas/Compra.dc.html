@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Factura de compra con retenciones</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="fcompra" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,64px"></dc-import>
+    <div class="content">
+      <div class="ph">
+        <div>
+          <div class="crumb"><a href="Compra.dc.html">Compras</a><span>/</span><span>Nueva factura de compra</span></div>
+          <h1>Nueva factura de compra</h1>
+          <p>Registre la compra y el sistema calcula las retenciones de ISR e ITBIS según el proveedor y el tipo de gasto</p>
+        </div>
+        <div class="row"><button type="button" class="btn btn-o" onClick="{{act.cancel}}">Cancelar</button><button type="button" class="btn btn-p" onClick="{{act.save}}">Guardar compra</button></div>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+        <div style="flex: 2 1 600px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+          <section class="card">
+            <div class="card-h"><h2>Proveedor</h2></div>
+            <div class="card-b" style="display: flex; flex-direction: column; gap: 18px">
+              <div style="display: flex; flex-wrap: wrap; gap: 24px">
+                <div class="fld">
+                  <span class="lbl">Tipo de persona</span>
+                  <div class="seg" role="group" aria-label="Tipo de persona">
+                    <sc-for list="{{personas}}" as="p" hint-placeholder-count="3"><button type="button" class="{{p.cls}}" aria-pressed="{{p.on}}" onClick="{{p.pick}}">{{p.label}}</button></sc-for>
+                  </div>
+                </div>
+                <div class="fld">
+                  <span class="lbl">¿Es emisor electrónico? <span class="tip" data-tip="Si el proveedor emite e-CF, se registra su e-NCF. Si no, usted debe emitir un Comprobante de Compras (E41) a su nombre."><button type="button" class="info" aria-label="Qué significa emisor electrónico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></button></span></span>
+                  <div class="seg" role="group" aria-label="Emisor electrónico">
+                    <button type="button" class="{{emSi}}" onClick="{{setEmSi}}" disabled="{{isExt}}">Sí</button>
+                    <button type="button" class="{{emNo}}" onClick="{{setEmNo}}" disabled="{{isExt}}">No</button>
+                  </div>
+                </div>
+              </div>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px">
+                <div class="fld"><label class="lbl" for="pid">{{prov.idLabel}} <span class="req">*</span></label><input id="pid" class="inp mono" value="{{prov.id}}" readonly></div>
+                <div class="fld"><label class="lbl" for="pn">Nombre o razón social</label><input id="pn" class="inp" value="{{prov.name}}" readonly></div>
+              </div>
+              <sc-if value="{{e41}}" hint-placeholder-val="{{false}}">
+                <div class="al al-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6"></path></svg><span><b>Se emitirá un Comprobante de Compras E41</b> (<span class="mono">E410000000057</span>) porque el proveedor no es emisor electrónico. Se enviará a la DGII junto con las retenciones.</span></div>
+              </sc-if>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-h"><h2>Comprobante y clasificación</h2></div>
+            <div class="card-b" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px">
+              <sc-if value="{{showNcf}}" hint-placeholder-val="{{true}}">
+                <div class="fld"><label class="lbl" for="ncf">e-NCF del proveedor <span class="req">*</span></label><input id="ncf" class="inp mono" value="{{prov.ncf}}"></div>
+              </sc-if>
+              <div class="fld" style="grid-column: span 2; min-width: 0">
+                <label class="lbl" for="tipo">Tipo de bien o servicio (606) <span class="req">*</span></label>
+                <select id="tipo" class="inp" value="{{tipo}}" onChange="{{setTipo}}">
+                  <option value="01">01 · Gastos de personal</option>
+                  <option value="02">02 · Gastos por trabajos, suministros y servicios</option>
+                  <option value="03">03 · Arrendamientos</option>
+                  <option value="04">04 · Gastos de activos fijos</option>
+                  <option value="05">05 · Gastos de representación</option>
+                  <option value="06">06 · Otras deducciones admitidas</option>
+                  <option value="07">07 · Gastos financieros</option>
+                  <option value="08">08 · Gastos extraordinarios</option>
+                  <option value="09">09 · Compras y gastos que forman parte del costo de venta</option>
+                  <option value="10">10 · Adquisiciones de activos</option>
+                  <option value="11">11 · Gastos de seguros</option>
+                </select>
+              </div>
+              <div class="fld"><label class="lbl" for="fc">Fecha del comprobante</label><input id="fc" class="inp" value="18/10/2026"></div>
+              <div class="fld"><label class="lbl" for="fp">Fecha de pago <span class="tip" data-tip="Las retenciones se declaran en el período en que se paga la factura, no en el de emisión."><button type="button" class="info" aria-label="Por qué importa la fecha de pago"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></button></span></label><input id="fp" class="inp" value="30/10/2026"></div>
+              <div class="fld"><label class="lbl" for="fpago">Forma de pago</label><select id="fpago" class="inp"><option>Transferencia · Banco Popular ****4471</option><option>Cheque</option><option>Efectivo</option><option>Crédito</option></select></div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-h"><h2>Detalle</h2></div>
+            <div class="card-b" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px">
+              <div class="fld" style="grid-column: 1 / -1"><label class="lbl" for="con">Concepto</label><input id="con" class="inp" value="{{prov.concepto}}"></div>
+              <div class="fld"><label class="lbl" for="mon">Monto antes de ITBIS (RD$)</label><input id="mon" type="number" class="inp" value="{{monto}}" onChange="{{setMonto}}" style="font-variant-numeric: tabular-nums"></div>
+              <div class="fld"><span class="lbl">ITBIS facturado (18%)</span><div class="inp" style="display: flex; align-items: center; background: #F8FAFC; font-variant-numeric: tabular-nums">{{r.itbisF}}</div></div>
+              <div class="fld"><span class="lbl">Total del comprobante</span><div class="inp" style="display: flex; align-items: center; background: #F8FAFC; font-weight: 600; font-variant-numeric: tabular-nums">{{r.total}}</div></div>
+            </div>
+          </section>
+        </div>
+
+        <aside class="card" style="flex: 1 1 340px; min-width: 0; border-color: #B7E3DD">
+          <div class="card-h" style="background: #F0FAF9; border-radius: 12px 12px 0 0"><h2>Retenciones calculadas</h2><span class="chip b-teal">Automático</span></div>
+          <div class="card-b" style="display: flex; flex-direction: column; gap: 16px">
+            <div style="display: flex; flex-direction: column; gap: 4px; padding: 14px; border: 1px solid #E5E7EB; border-radius: 10px">
+              <div style="display: flex; justify-content: space-between; align-items: center"><span class="lbl">ISR retenido <span class="tip" data-tip="Impuesto Sobre la Renta retenido al proveedor. Se paga a la DGII en el IR-17 antes del día 10 del mes siguiente al pago.">ⓘ</span></span><span class="chip" style="background: #E6F4F2; color: #0F766E">{{r.isrPct}}</span></div>
+              <span style="font-size: 22px; font-weight: 700; color: #111827; font-variant-numeric: tabular-nums">RD$ {{r.isr}}</span>
+              <span class="hint">Sobre el monto antes de ITBIS</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px; padding: 14px; border: 1px solid #E5E7EB; border-radius: 10px">
+              <div style="display: flex; justify-content: space-between; align-items: center"><span class="lbl">ITBIS retenido <span class="tip" data-tip="Parte del ITBIS facturado que usted retiene y paga directamente a la DGII en el IT-1.">ⓘ</span></span><span class="chip" style="background: #E6F4F2; color: #0F766E">{{r.itbisPct}}</span></div>
+              <span style="font-size: 22px; font-weight: 700; color: #111827; font-variant-numeric: tabular-nums">RD$ {{r.itbisR}}</span>
+              <span class="hint">Sobre ITBIS facturado de RD$ {{r.itbisF}}</span>
+            </div>
+            <div class="al al-i" style="font-size: 13px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"></path></svg><span><b>Regla aplicada:</b> {{r.rule}}</span></div>
+            <dl class="kv" style="grid-template-columns: 1fr auto; border-top: 1px solid #EEF0F2; padding-top: 14px">
+              <dt>Total del comprobante</dt><dd class="num">{{r.total}}</dd>
+              <dt>(−) Retenciones</dt><dd class="num">{{r.ret}}</dd>
+              <dt style="font-weight: 650; color: #111827">Neto a pagar al proveedor</dt><dd class="num" style="font-weight: 700; font-size: 16px">RD$ {{r.neto}}</dd>
+            </dl>
+            <div class="al al-w" style="font-size: 13px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="17" rx="2"></rect><path d="M16 2v4M8 2v4M3 10h18"></path></svg><span>Estas retenciones se reportarán en el <b>606, IR-17 e IT-1 de octubre 2026</b>, el mes en que se paga la factura (30/10/2026). Si cambia la fecha de pago, cambia el período.</span></div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </main>
+  <sc-if value="{{fxOn}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite" style="top: 150px"><div class="toast">
+      <span class="ti" style="background: #E6F4F2; color: #0F766E"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+      <div style="flex: 1; min-width: 0"><b>{{fxMsg}}</b></div>
+      <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{fxClose}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div></div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1240}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = this.state || {};
+    const fmt = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const per = st.per || 'fisica';
+    const tipo = st.tipo || '02';
+    const isExt = per === 'exterior';
+    const emisor = isExt ? false : (st.em ?? (per === 'juridica'));
+    const monto = st.monto ?? 85000;
+    const P = {
+      fisica: { idLabel: 'Cédula', id: '001-0987654-3', name: 'Ing. Rafael Antonio Cruz Peña', ncf: 'E310000000214', concepto: 'Diseño estructural · ampliación almacén Haina' },
+      juridica: { idLabel: 'RNC', id: '1-31-77889-1', name: 'Seguridad Integral Dominicana, SRL', ncf: 'E310000006652', concepto: 'Servicio de vigilancia · octubre 2026' },
+      exterior: { idLabel: 'Identificación fiscal extranjera', id: 'US 84-2219037', name: 'CloudOps Software Inc. (EE. UU.)', ncf: '', concepto: 'Licencias de software de gestión · anual' }
+    };
+    const servicios = ['02', '05'], bienes = ['04', '09', '10'];
+    let isr = 0, it = 0, rule;
+    if (isExt) { isr = 27; rule = 'Pago a persona no residente: ISR 27% sobre el monto pagado. No aplica retención de ITBIS.'; }
+    else if (per === 'fisica') {
+      if (servicios.includes(tipo)) { isr = 10; it = 100; rule = 'Servicios prestados por persona física: ISR 10% e ITBIS retenido 100%.'; }
+      else if (tipo === '03') { isr = 10; it = 100; rule = 'Arrendamiento pagado a persona física: ISR 10% e ITBIS retenido 100%.'; }
+      else if (bienes.includes(tipo) && !emisor) { isr = 2; it = 100; rule = 'Compra de bienes a proveedor informal con Comprobante de Compras (E41): ISR 2% e ITBIS retenido 100%.'; }
+      else { rule = 'Tipo de gasto sin retención para persona física.'; }
+    } else {
+      if (servicios.includes(tipo)) { it = 30; rule = 'Servicios prestados por persona jurídica: retención del 30% del ITBIS facturado. No aplica ISR.'; }
+      else { rule = 'Compras a persona jurídica de este tipo: no aplica retención.'; }
+    }
+    const itbisF = monto * 0.18, isrV = monto * isr / 100, itR = itbisF * it / 100, total = monto + itbisF;
+    const personas = [['fisica', 'Persona física'], ['juridica', 'Persona jurídica'], ['exterior', 'Del exterior']].map(([k, label]) => ({ label, on: per === k, cls: per === k ? 'on' : '', pick: () => this.setState({ per: k, em: undefined }) }));
+    const FX = {"cancel": "Cambios descartados", "save": "Compra guardada · retenciones registradas para el IR-17 de octubre"};
+    const act = {};
+    Object.keys(FX).forEach(k => { act[k] = () => this.setState({ fx: FX[k] }); });
+    return {
+      act, fxOn: !!(this.state || {}).fx, fxMsg: (this.state || {}).fx || '', fxClose: () => this.setState({ fx: '' }),
+      personas, isExt, prov: P[per], tipo, monto,
+      emSi: emisor ? 'on' : '', emNo: emisor ? '' : 'on',
+      setEmSi: () => this.setState({ em: true }), setEmNo: () => this.setState({ em: false }),
+      e41: !emisor && !isExt, showNcf: emisor,
+      setTipo: e => this.setState({ tipo: e.target.value }),
+      setMonto: e => this.setState({ monto: Number(e.target.value) || 0 }),
+      r: { itbisF: fmt(itbisF), total: fmt(total), isr: fmt(isrV), isrPct: isr + '%', itbisR: fmt(itR), itbisPct: it + '%', rule, ret: '-' + fmt(isrV + itR), neto: fmt(total - isrV - itR) }
+    };
+  }
+}
+</script>
+</body>
+</html>

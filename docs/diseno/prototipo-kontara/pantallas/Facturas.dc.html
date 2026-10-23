@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Facturas de venta</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="facturas" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,64px"></dc-import>
+    <div class="content">
+      <div class="ph">
+        <div>
+          <div class="crumb"><a href="Facturas.dc.html">Ingresos</a><span>/</span><span>Facturas de venta</span></div>
+          <h1>Facturas de venta</h1>
+          <p>Comprobantes fiscales electrónicos emitidos y su estado ante la DGII</p>
+        </div>
+        <div class="row">
+          <button type="button" class="btn btn-o" onClick="{{act.exp}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path></svg>Exportar</button>
+          <a href="NuevaFactura.dc.html" class="btn btn-p"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Nueva factura</a>
+        </div>
+      </div>
+
+      <sc-if value="{{hasRech}}" hint-placeholder-val="{{true}}">
+        <section class="card" style="border-color: #FECACA; background: #FEF2F2">
+          <div style="padding: 14px 18px; display: flex; flex-direction: column; gap: 10px">
+            <div style="display: flex; align-items: center; gap: 10px; color: #7F1D1D"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M15 9l-6 6M9 9l6 6"></path></svg><b style="font-size: 14.5px">{{rechTitle}}</b></div>
+            <sc-for list="{{rechList}}" as="x" hint-placeholder-count="1">
+              <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: #fff; border: 1px solid #FECACA; border-radius: 10px; padding: 10px 14px">
+                <span class="mono" style="font-weight: 600; color: #111827">{{x.encf}}</span>
+                <span style="color: #374151">{{x.cliente}} · RD$ {{x.total}}</span>
+                <span style="flex: 1 1 280px; color: #B91C1C; font-size: 13px"><b>{{x.codigo}}</b> · {{x.motivo}}. {{x.accion}}</span>
+                <a href="{{x.href}}" class="btn btn-sm" style="background: #B91C1C; color: #fff">Ver y corregir</a>
+              </div>
+            </sc-for>
+          </div>
+        </section>
+      </sc-if>
+
+      <section class="card">
+        <div class="tabs" role="tablist" aria-label="Filtrar por estado" style="padding: 0 12px">
+          <sc-for list="{{filters}}" as="f" hint-placeholder-count="6">
+            <button type="button" role="tab" class="{{f.cls}}" aria-selected="{{f.on}}" onClick="{{f.pick}}">{{f.label}} <span class="chip" style="height: 20px; font-size: 11px">{{f.n}}</span></button>
+          </sc-for>
+        </div>
+        <div style="display: flex; flex-wrap: wrap; gap: 10px; padding: 14px 16px; border-bottom: 1px solid #EEF0F2">
+          <label class="tb-search" style="flex: 1 1 260px; max-width: 360px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+            <input class="inp" type="search" placeholder="Buscar por e-NCF, cliente o RNC" aria-label="Buscar facturas" style="padding-right: 12px">
+          </label>
+          <select class="inp" aria-label="Tipo de e-CF" style="width: auto; min-width: 200px">
+            <option>Todos los tipos</option><option>31 · Crédito fiscal</option><option>32 · Consumo</option><option>33 · Nota de débito</option><option>34 · Nota de crédito</option><option>44 · Regímenes especiales</option><option>45 · Gubernamental</option><option>46 · Exportaciones</option>
+          </select>
+          <select class="inp" aria-label="Período" style="width: auto; min-width: 180px">
+            <option>Octubre 2026</option><option>Septiembre 2026</option><option>Últimos 90 días</option>
+          </select>
+          <button type="button" class="btn btn-g" onClick="{{act.filt}}">Más filtros</button>
+        </div>
+        <sc-if value="{{hasRows}}" hint-placeholder-val="{{true}}">
+          <div class="tw">
+            <table class="tbl" style="min-width: 1180px">
+              <thead><tr>
+                <th>e-NCF</th><th>Cliente</th><th>RNC / Cédula</th><th>Fecha</th><th>Tipo</th><th class="num">Total (RD$)</th><th>Estado DGII</th>
+                <th><span class="tip" data-tip="Identificador que devuelve la DGII al recibir el e-CF. Sirve para consultar el resultado del envío.">Track ID <button type="button" class="info" aria-label="Qué es el Track ID"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></button></span></th>
+                <th style="text-align: right">Acciones</th>
+              </tr></thead>
+              <tbody>
+                <sc-for list="{{rows}}" as="r" hint-placeholder-count="10">
+                  <tr>
+                    <td><a href="{{r.href}}" class="mono" style="text-decoration: none; font-weight: 500">{{r.encf}}</a></td>
+                    <td style="color: #111827; font-weight: 500">{{r.cliente}}</td>
+                    <td class="mono mut">{{r.rnc}}</td>
+                    <td class="mut" style="white-space: nowrap">{{r.fecha}}</td>
+                    <td><span class="chip">{{r.tipo}}</span></td>
+                    <td class="num" style="font-weight: 600; color: #111827">{{r.total}}</td>
+                    <td>
+                      <span class="{{r.cls}}">
+                        <sc-if value="{{r.cond}}" hint-placeholder-val="{{false}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4M12 17h.01"></path></svg></sc-if>
+                        {{r.estado}}
+                      </span>
+                      <sc-if value="{{r.rech}}" hint-placeholder-val="{{false}}"><div style="margin-top: 6px; font-size: 12px; color: #B91C1C; line-height: 1.35; max-width: 240px"><b>{{r.codigo}}</b> · {{r.motivo}}</div></sc-if>
+                    </td>
+                    <td class="mono mut" title="{{r.trackFull}}">{{r.track}}</td>
+                    <td>
+                      <div style="display: flex; justify-content: flex-end; gap: 0">
+                        <a href="{{r.href}}" class="ib" aria-label="Ver detalle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"></path><circle cx="12" cy="12" r="3"></circle></svg></a>
+                        <button type="button" class="ib" aria-label="Descargar PDF" onClick="{{r.pdf}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6M9 15h6"></path></svg></button>
+                        <button type="button" class="ib" aria-label="Descargar XML" onClick="{{r.xml}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M13.5 5l-3 14"></path></svg></button>
+                        <sc-if value="{{r.canSend}}" hint-placeholder-val="{{true}}">
+                          <button type="button" class="ib" aria-label="Enviar por WhatsApp" style="color: #15803D" onClick="{{act.wa}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.6-4.7a8.5 8.5 0 1 1 15.9-4.3z"></path><path d="M9 9.5c.3 2.3 2.2 4.2 4.5 4.5l1-1.2 2 .9"></path></svg></button>
+                          <button type="button" class="ib" aria-label="Enviar por correo" onClick="{{act.mail}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg></button>
+                        </sc-if>
+                        <sc-if value="{{r.noSend}}" hint-placeholder-val="{{false}}">
+                          <span class="tip r" data-tip="{{r.why}}"><button type="button" class="ib" disabled aria-label="Enviar por WhatsApp (no disponible)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.6-4.7a8.5 8.5 0 1 1 15.9-4.3z"></path></svg></button></span>
+                          <span class="tip r" data-tip="{{r.why}}"><button type="button" class="ib" disabled aria-label="Enviar por correo (no disponible)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg></button></span>
+                        </sc-if>
+                        <button type="button" class="ib" onClick="{{r.anular}}" aria-label="Anular factura" style="color: #B91C1C"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="m5.7 5.7 12.6 12.6"></path></svg></button>
+                      </div>
+                    </td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; border-top: 1px solid #EEF0F2; font-size: 13px; color: #6B7280">
+            <span>Página {{page}} · mostrando {{count}} de 2,184 comprobantes · Total del período RD$ 4,872,350.00</span>
+            <div class="row"><button type="button" class="btn btn-o btn-sm" onClick="{{prevPage}}" disabled="{{firstPage}}">Anterior</button><button type="button" class="btn btn-o btn-sm" onClick="{{act.next}}">Siguiente</button></div>
+          </div>
+        </sc-if>
+        <sc-if value="{{noRows}}" hint-placeholder-val="{{false}}">
+          <div class="empty">
+            <span class="ei"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6M9.5 14.5l5-5M9.5 9.5l5 5"></path></svg></span>
+            <h3>No hay facturas anuladas este mes</h3>
+            <p>Buenas noticias: ningún comprobante de octubre fue anulado. Las anulaciones que registre aparecerán aquí y en el Formato 608.</p>
+            <button type="button" class="btn btn-o btn-sm" onClick="{{resetFilter}}">Ver todas las facturas</button>
+          </div>
+        </sc-if>
+      </section>
+    </div>
+  </main>
+
+  <sc-if value="{{modal}}" hint-placeholder-val="{{false}}">
+    <div class="scrim">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="anular-t">
+        <div class="modal-h"><h3 id="anular-t">¿Anular la factura {{sel.encf}}?</h3></div>
+        <div class="modal-b">
+          <span>{{sel.cliente}} · RD$ {{sel.total}} · {{sel.estado}}</span>
+          <div class="al al-w"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4M12 17h.01"></path></svg><span>{{sel.anularMsg}}</span></div>
+          <div class="fld">
+            <label class="lbl" for="motivo">Motivo de anulación (Formato 608)</label>
+            <select id="motivo" class="inp">
+              <option>04 · Corrección de la información</option><option>05 · Cambio de productos</option><option>06 · Devolución de productos</option><option>07 · Omisión de productos</option><option>08 · Errores en secuencia de NCF</option>
+            </select>
+          </div>
+        </div>
+        <div class="modal-f">
+          <button type="button" class="btn btn-o" onClick="{{closeModal}}">Cancelar</button>
+          <button type="button" class="btn btn-d" onClick="{{confirmAnular}}">{{sel.anularBtn}}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{toast}}" hint-placeholder-val="{{true}}">
+    <div class="toasts" role="status" aria-live="polite">
+      <div class="toast">
+        <span class="ti" style="background: #FEE2E2; color: #B91C1C"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></span>
+        <div style="flex: 1; min-width: 0"><b>{{toastTitle}}</b><span class="mut">{{toastText}}</span> <a href="DetalleRechazada.dc.html" style="font-weight: 600">Ver detalle</a></div>
+        <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{closeToast}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{fxOn}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite" style="top: 150px"><div class="toast">
+      <span class="ti" style="background: #E6F4F2; color: #0F766E"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+      <div style="flex: 1; min-width: 0"><b>{{fxMsg}}</b></div>
+      <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{fxClose}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div></div>
+  </sc-if>
+  <sc-if value="{{dlOn}}" hint-placeholder-val="{{false}}">
+    <div class="scrim" style="z-index: 140">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dl-t" style="max-width: 640px">
+        <div class="modal-h"><h3 id="dl-t">{{dlTitle}}</h3></div>
+        <div class="modal-b">
+          <span>{{dlMsg}}</span>
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}">
+            <textarea class="inp mono" readonly rows="10" style="font-size: 12px; white-space: pre" aria-label="Contenido del archivo" value="{{dlText}}"></textarea>
+            <span class="hint">Seleccione el texto (Ctrl+A) y cópielo (Ctrl+C). Para Excel, péguelo en un archivo de texto y guárdelo con la extensión indicada.</span>
+          </sc-if>
+        </div>
+        <div class="modal-f">
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}"><button type="button" class="btn btn-o" onClick="{{dlCopy}}">Copiar contenido</button></sc-if>
+          <button type="button" class="btn btn-p" onClick="{{dlClose}}">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1080}}'>
+class Component extends DCLogic {
+  ecfNote(msg) {
+    this.setState({ fx: msg, flash: msg });
+  }
+  ecfWins() {
+    const out = [];
+    try { let w = window; for (let i = 0; i < 5 && w; i++) { out.push(w); if (w === w.parent) break; w = w.parent; } } catch (e) {}
+    return out;
+  }
+  async ecfCap(name) {
+    for (const w of this.ecfWins()) {
+      try {
+        if (w.claude && typeof w.claude.use === 'function') {
+          const cap = await Promise.race([w.claude.use(name), new Promise(r => setTimeout(() => r(null), 4000))]);
+          if (cap) return cap;
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+  async ecfSave(filename, data) {
+    this.ecfNote('Preparando ' + filename + '…');
+    const cap = await this.ecfCap('downloads');
+    if (cap) {
+      try {
+        await cap.save({ filename, data: typeof data === 'string' ? data : data });
+        this.ecfNote('Archivo guardado: ' + filename);
+        return true;
+      } catch (e) {
+        const code = e && e.code;
+        if (code === 'declined') { this.ecfNote('Descarga cancelada'); return false; }
+        if (code === 'rate_limited') { this.ecfNote('Ya hay una descarga esperando confirmación'); return false; }
+        if (code === 'rejected_extension' && !/\.txt$/.test(filename)) return this.ecfSave(filename + '.txt', data);
+      }
+    }
+    // Sin capacidad de descarga en este visor: intento directo en la ventana accesible más alta
+    let tried = false;
+    const wins = this.ecfWins().reverse();
+    for (const w of wins) {
+      try {
+        const doc = w.document;
+        const blob = new w.Blob([data], { type: /\.pdf$/.test(filename) ? 'application/pdf' : 'text/plain;charset=utf-8' });
+        const url = w.URL.createObjectURL(blob);
+        const a = doc.createElement('a');
+        a.href = url; a.download = filename; a.style.display = 'none';
+        doc.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => { try { w.URL.revokeObjectURL(url); } catch (e) {} }, 8000);
+        tried = true; break;
+      } catch (e) {}
+    }
+    this.setState({ dl: { name: filename, text: typeof data === 'string' && !/\.pdf$/.test(filename) ? data.replace(/^﻿/, '') : '', tried }, fx: '', flash: '' });
+    return false;
+  }
+  async ecfCopy(text, label) {
+    let ok = false;
+    for (const w of this.ecfWins()) {
+      try { await w.navigator.clipboard.writeText(text); ok = true; break; } catch (e) {}
+    }
+    if (!ok) {
+      for (const w of this.ecfWins()) {
+        try {
+          const d = w.document; const t = d.createElement('textarea');
+          t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.top = '-1000px';
+          d.body.appendChild(t); t.select(); ok = d.execCommand('copy'); t.remove();
+          if (ok) break;
+        } catch (e) {}
+      }
+    }
+    if (ok) this.ecfNote(label || 'Copiado al portapapeles');
+    else this.setState({ dl: { name: 'Copiar manualmente', text, tried: false, copy: true }, fx: '', flash: '' });
+    return ok;
+  }
+  ecfCsv(rows) {
+    const q = v => { const s = v == null ? '' : String(v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    return '﻿' + rows.map(r => r.map(q).join(',')).join('\r\n');
+  }
+  ecfNum(v) {
+    const n = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? String(v) : n.toFixed(2);
+  }
+  ecfPad(cols, widths) {
+    return cols.map((c, i) => { const w = widths[i] || 12; let s = String(c == null ? '' : c); if (s.length > w) s = s.slice(0, w - 1) + '.'; return w < 0 ? s : (i > 0 && /^[-(]?[\d,]+\.\d\d\)?$/.test(s) ? s.padStart(w) : s.padEnd(w)); }).join(' ');
+  }
+  ecfPdf(title, lines, subtitle) {
+    const map = { '−': '-', '–': '-', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'", '…': '...', '→': '->', '›': '>', '≥': '>=', '✓': 'v', '★': '*' };
+    const esc = s => String(s).replace(/[−–—“”‘’…→›≥✓★]/g, ch => map[ch]).replace(/[\\()]/g, m => '\\' + m)
+      .replace(/[^\x20-\x7e]/g, ch => { const c = ch.charCodeAt(0); return c < 256 ? '\\' + c.toString(8).padStart(3, '0') : '?'; });
+    const per = 50, pages = [];
+    for (let i = 0; i < Math.max(lines.length, 1); i += per) pages.push(lines.slice(i, i + per));
+    const objs = [];
+    objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+    objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>';
+    objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+    objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>';
+    objs[6] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+    const kids = [];
+    pages.forEach((pl, p) => {
+      const po = 7 + p * 2, co = po + 1;
+      kids.push(po + ' 0 R');
+      let s = '0.06 0.46 0.43 rg 40 806 515 3 re f\n';
+      s += 'BT /F2 15 Tf 40 784 Td (' + esc(title) + ') Tj ET\n';
+      s += 'BT /F4 8.5 Tf 40 770 Td (' + esc((subtitle ? subtitle + '  |  ' : '') + 'Distribuidora Caribe Verde, SRL  |  RNC 1-31-89754-2  |  Pag. ' + (p + 1) + '/' + pages.length) + ') Tj ET\n';
+      s += '0.8 0.8 0.8 RG 0.5 w 40 762 m 555 762 l S\n';
+      s += 'BT /F1 8.5 Tf 40 746 Td 13.5 TL\n';
+      pl.forEach(l => {
+        const o = typeof l === 'object' && l !== null ? l : { t: l };
+        s += (o.b ? '/F3 8.5 Tf (' + esc(o.t) + ") ' /F1 8.5 Tf\n" : '(' + esc(o.t) + ") '\n");
+      });
+      s += 'ET\nBT /F4 7 Tf 40 30 Td (' + esc('Generado por Kontara el 23/10/2026 - Documento de referencia') + ') Tj ET';
+      objs[co] = '<< /Length ' + s.length + ' >>\nstream\n' + s + '\nendstream';
+      objs[po] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents ' + co + ' 0 R >>';
+    });
+    objs[2] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>';
+    let out = '%PDF-1.4\n';
+    const off = [];
+    for (let i = 1; i < objs.length; i++) { off[i] = out.length; out += i + ' 0 obj\n' + objs[i] + '\nendobj\n'; }
+    const x = out.length;
+    out += 'xref\n0 ' + objs.length + '\n0000000000 65535 f \n';
+    for (let i = 1; i < objs.length; i++) out += String(off[i]).padStart(10, '0') + ' 00000 n \n';
+    out += 'trailer\n<< /Size ' + objs.length + ' /Root 1 0 R >>\nstartxref\n' + x + '\n%%EOF\n';
+    return out;
+  }
+  ecfXml(tipo, encf, fecha, rncComprador, comprador, total, itbis) {
+    const e = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<?xml version="1.0" encoding="UTF-8"?>\n<ECF>\n  <Encabezado>\n    <Version>1.0</Version>\n    <IdDoc>\n      <TipoeCF>' + tipo + '</TipoeCF>\n      <eNCF>' + e(encf) + '</eNCF>\n      <FechaVencimientoSecuencia>31-12-2027</FechaVencimientoSecuencia>\n      <TipoIngresos>01</TipoIngresos>\n    </IdDoc>\n    <Emisor>\n      <RNCEmisor>131897542</RNCEmisor>\n      <RazonSocialEmisor>Distribuidora Caribe Verde, SRL</RazonSocialEmisor>\n      <DireccionEmisor>Av. 27 de Febrero 415, Piantini, Santo Domingo</DireccionEmisor>\n      <FechaEmision>' + e(fecha) + '</FechaEmision>\n    </Emisor>\n    <Comprador>\n      <RNCComprador>' + e(String(rncComprador).replace(/\D/g, '')) + '</RNCComprador>\n      <RazonSocialComprador>' + e(comprador) + '</RazonSocialComprador>\n    </Comprador>\n    <Totales>\n      <MontoTotal>' + this.ecfNum(total) + '</MontoTotal>\n      <TotalITBIS>' + this.ecfNum(itbis) + '</TotalITBIS>\n    </Totales>\n  </Encabezado>\n  <FechaHoraFirma>' + e(fecha) + ' 10:42:18</FechaHoraFirma>\n  <!-- Firma digital XAdES omitida en el prototipo -->\n</ECF>\n';
+  }
+  renderVals() {
+    const st = this.state || {};
+    const B = { Borrador: 'bd b-borr', Enviada: 'bd b-env', 'En proceso': 'bd b-proc', Aceptada: 'bd b-acep', 'Aceptada condicional': 'bd b-cond', Rechazada: 'bd b-rech', 'Pendiente de sincronizar': 'bd b-pend' };
+    const why = {
+      Borrador: 'Disponible cuando la DGII acepte la factura. Este borrador aún no se ha emitido.',
+      Enviada: 'La DGII recibió el e-CF y aún no responde. Podrá enviarlo al cliente cuando sea aceptado.',
+      'En proceso': 'La DGII está validando el e-CF. Podrá enviarlo al cliente cuando sea aceptado.',
+      Rechazada: 'Una factura rechazada no tiene validez fiscal y no puede enviarse al cliente. Corríjala y emita una nueva.',
+      'Pendiente de sincronizar': 'Firmada en modo contingencia. Se enviará a la DGII al reconectar; luego podrá compartirla.'
+    };
+    const raw = [
+      ['E310000000131', 'Constructora Hispaniola, SRL', '1-30-45218-7', '23/10/2026', '31 · Crédito fiscal', '1,284,560.00', 'Aceptada', '8f2c4e1a-6b7d-4c3e-9a21-5d0e7f3ba91e'],
+      ['E320000004587', 'Consumidor final', '—', '23/10/2026', '32 · Consumo', '4,850.00', 'Pendiente de sincronizar', ''],
+      ['E310000000130', 'Supermercado La Cosecha, SRL', '1-01-78452-3', '22/10/2026', '31 · Crédito fiscal', '356,920.40', 'En proceso', '3b9d07c2-1e44-4f8a-b6d2-77a0c19e5f04'],
+      ['E450000000018', 'Ayuntamiento Municipal de Moca', '4-30-00123-5', '22/10/2026', '45 · Gubernamental', '812,300.00', 'Aceptada condicional', 'c71e5a90-2f3b-48d6-a0c4-e9b1d2f6830a'],
+      ['E340000000027', 'Hotel Brisas de Bávaro, SA', '1-30-11234-9', '21/10/2026', '34 · Nota de crédito', '45,200.00', 'Aceptada', '0d4a8b6e-93c1-4a7f-8e52-b16f2c0d7e39'],
+      ['E310000000129', 'Juan Pablo Méndez Rosario', '001-1456789-2', '21/10/2026', '31 · Crédito fiscal', '98,412.00', 'Rechazada', 'e2f60b13-7a8d-4e95-b3c0-4d1a9e7f2c68'],
+      ['E460000000009', 'Caribbean Fresh Imports LLC', 'Exterior', '20/10/2026', '46 · Exportaciones', '2,145,000.00', 'Enviada', '5a1c3e7d-0b2f-4d86-91e4-a8c6f0b3d257'],
+      ['E440000000014', 'Textiles del Norte ZF, SA', '1-31-55882-0', '20/10/2026', '44 · Reg. especiales', '268,750.00', 'Aceptada', '9e7b2d40-c5a1-4f3e-86d9-2b0c7e1a4f95'],
+      ['Sin asignar', 'Constructora Hispaniola, SRL', '1-30-45218-7', '19/10/2026', '31 · Crédito fiscal', '74,300.00', 'Borrador', ''],
+      ['E330000000006', 'Supermercado La Cosecha, SRL', '1-01-78452-3', '19/10/2026', '33 · Nota de débito', '12,980.00', 'Aceptada', '61f0d8a3-4b9e-4c27-a5f1-3e8d0b6c9a72']
+    ];
+    const all = raw.map(([encf, cliente, rnc, fecha, tipo, total, estado, track], i) => {
+      const ok = estado === 'Aceptada' || estado === 'Aceptada condicional';
+      const r = {
+        encf, cliente, rnc, fecha, tipo, total, estado, cls: B[estado], cond: estado === 'Aceptada condicional',
+        track: track ? track.slice(0, 8) + '…' + track.slice(-4) : '—', trackFull: track || 'Sin Track ID',
+        canSend: ok, noSend: !ok, why: why[estado] || '',
+        anularMsg: ok
+          ? 'Un e-CF aceptado no puede eliminarse. Se creará una Nota de crédito electrónica (E34) por el total que referencia este e-NCF.'
+          : estado === 'Borrador'
+            ? 'El borrador se descartará. No consume secuencia ni se reporta a la DGII.'
+            : 'Se anulará la secuencia ante la DGII (ANECF) y quedará reportada en el Formato 608 del período.',
+        anularBtn: ok ? 'Crear nota de crédito' : 'Confirmar anulación'
+      };
+      r.anular = () => this.setState({ modal: i });
+      r.rech = estado === 'Rechazada';
+      r.codigo = r.rech ? 'Código 145' : '';
+      r.motivo = r.rech ? 'RNCComprador no válido: la cédula no figura como contribuyente activo para e-CF tipo 31' : '';
+      r.accion = r.rech ? 'La secuencia quedó utilizada: emita una nueva factura (E32 si el cliente no tiene RNC).' : '';
+      r.href = r.rech ? 'DetalleRechazada.dc.html' : 'DetalleFactura.dc.html';
+      const tnum = Number(total.replace(/,/g, ''));
+      r.pdf = () => this.ecfSave(encf.replace(/\s/g, '_') + '.pdf', this.ecfPdf('Factura ' + tipo.split(' · ')[1] + ' Electronica', [
+        { t: 'e-NCF: ' + encf, b: true }, 'Fecha de emision: ' + fecha, 'Cliente: ' + cliente, 'RNC / Cedula: ' + rnc, 'Estado DGII: ' + estado, 'Track ID: ' + (track || 'Sin Track ID'), '',
+        { t: this.ecfPad(['Concepto', 'Monto (RD$)'], [60, 18]), b: true }, this.ecfPad(['Subtotal', (tnum / 1.18).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })], [60, 18]),
+        this.ecfPad(['ITBIS 18%', (tnum - tnum / 1.18).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })], [60, 18]), { t: this.ecfPad(['TOTAL', total], [60, 18]), b: true }, '',
+        'Codigo de seguridad: Q7m2Xa', 'Representacion impresa de un Comprobante Fiscal Electronico (e-CF).'], tipo));
+      r.xml = () => this.ecfSave(encf + '.xml', this.ecfXml(tipo.slice(0, 2), encf, fecha.replace(/\//g, '-'), rnc, cliente, tnum, tnum - tnum / 1.18));
+      return r;
+    });
+    const f = st.f || 'Todas';
+    const groups = {
+      Todas: () => true,
+      Aceptadas: r => r.estado.startsWith('Aceptada'),
+      'En curso': r => r.estado === 'Enviada' || r.estado === 'En proceso',
+      Rechazadas: r => r.estado === 'Rechazada',
+      Pendientes: r => r.estado === 'Pendiente de sincronizar' || r.estado === 'Borrador',
+      Anuladas: () => false
+    };
+    const filters = Object.keys(groups).map(label => ({
+      label, n: all.filter(groups[label]).length, on: f === label,
+      cls: f === label ? 'tab on' : 'tab', pick: () => this.setState({ f: label })
+    }));
+    const rows = all.filter(groups[f]);
+    const sel = st.modal != null ? all[st.modal] : all[0];
+    const toastCustom = st.toastTitle;
+    const FX = {"exp": "Listado exportado: facturas_octubre_2026.xlsx", "filt": "Filtros avanzados: vendedor, forma de pago y monto (simulado)", "xml": "XML firmado descargado", "wa": "Factura enviada al cliente por WhatsApp", "mail": "Factura enviada al cliente por correo (PDF + XML)", "next": "Página 2 de 219"};
+    const act = {};
+    Object.keys(FX).forEach(k => { act[k] = () => this.setState({ fx: FX[k] }); });
+    act.exp = () => this.ecfSave('facturas_octubre_2026.csv', this.ecfCsv([['e-NCF', 'Cliente', 'RNC/Cedula', 'Fecha', 'Tipo', 'Total RD$', 'Estado DGII', 'Track ID']].concat(all.map(r => [r.encf, r.cliente, r.rnc, r.fecha, r.tipo, this.ecfNum(r.total), r.estado, r.trackFull])))); 
+    act.next = () => this.setState({ page: ((this.state || {}).page || 1) + 1, fx: '' });
+    return {
+      dlOn: !!(this.state || {}).dl, dlHasText: !!((this.state || {}).dl && (this.state || {}).dl.text), dlText: ((this.state || {}).dl || {}).text || '',
+      dlTitle: ((this.state || {}).dl || {}).copy ? 'Copie el contenido manualmente' : 'Este visor no permitió descargar «' + (((this.state || {}).dl || {}).name || '') + '»',
+      dlMsg: ((this.state || {}).dl || {}).copy ? 'El navegador bloqueó el portapapeles dentro del lienzo. Puede copiar el texto desde aquí.' : (((this.state || {}).dl || {}).tried ? 'Intentamos descargarlo directamente; si no aparece en su carpeta de Descargas es porque el lienzo bloquea descargas. ' : '') + 'Abra el prototipo en pantalla completa (Play) o use el contenido de abajo.',
+      dlClose: () => this.setState({ dl: null }),
+      dlCopy: () => { const t = ((this.state || {}).dl || {}).text || ''; try { navigator.clipboard.writeText(t).then(() => this.setState({ dl: null, fx: 'Copiado al portapapeles', flash: 'Copiado al portapapeles' }), () => {}); } catch (e) {} },
+      page: (this.state || {}).page || 1, firstPage: ((this.state || {}).page || 1) === 1,
+      prevPage: () => this.setState({ page: Math.max(1, ((this.state || {}).page || 1) - 1), fx: '' }),
+      act, fxOn: !!(this.state || {}).fx, fxMsg: (this.state || {}).fx || '', fxClose: () => this.setState({ fx: '' }),
+      hasRech: all.some(r => r.rech), rechList: all.filter(r => r.rech),
+      rechTitle: all.filter(r => r.rech).length === 1 ? '1 factura rechazada por la DGII este mes' : all.filter(r => r.rech).length + ' facturas rechazadas por la DGII este mes',
+      filters, rows, count: rows.length, hasRows: rows.length > 0, noRows: rows.length === 0,
+      resetFilter: () => this.setState({ f: 'Todas' }),
+      modal: st.modal != null, sel,
+      closeModal: () => this.setState({ modal: null }),
+      confirmAnular: () => this.setState({ modal: null, hideToast: false, toastTitle: sel.anularBtn === 'Crear nota de crédito' ? 'Nota de crédito creada' : 'Anulación registrada', toastText: sel.encf + ' · ' + (sel.anularBtn === 'Crear nota de crédito' ? 'E340000000028 quedó en borrador, lista para emitir.' : 'se incluirá en el Formato 608 de octubre.') }),
+      toast: !st.hideToast,
+      toastTitle: toastCustom || 'Factura rechazada por la DGII',
+      toastText: st.toastText || 'E310000000129 · Juan Pablo Méndez Rosario. Código 2: RNC/Cédula del comprador no válido.',
+      closeToast: () => this.setState({ hideToast: true })
+    };
+  }
+}
+</script>
+</body>
+</html>
