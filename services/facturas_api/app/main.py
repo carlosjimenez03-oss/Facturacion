@@ -439,7 +439,7 @@ async def enviar_factura(factura_id: str, settings: FacturasApiSettings = Depend
         # repository.registrar_sincronizacion_inventario).
         try:
             await inventario_client.registrar_salida_por_factura(
-                settings.inventario_api_url, str(fid), items_inventario
+                settings.inventario_api_url, str(fid), items_inventario, documento=encf
             )
             await repository.registrar_sincronizacion_inventario(
                 _pool(), fid, sincronizado=True, error=None

@@ -1,42 +1,72 @@
 """Acceso a Postgres para el esquema `inventario` (productos, proveedores,
-compras, movimientos/kardex).
+compras, movimientos/kardex y la integración con ventas).
 
 A diferencia de `libs.ecf_common.db` (auditoría best-effort, nunca lanza),
 este repositorio SÍ requiere una base de datos disponible -- igual que
 `services/facturas_api/app/repository.py`.
+
+Todo cambio de existencia pasa por `stock.registrar_entrada` /
+`stock.registrar_salida` (existencias por almacén y lote, total en
+`productos.stock_actual`, costo promedio). Almacenes, lotes, ajustes,
+transferencias, Kardex y valuación viven en sus propios módulos
+(`almacenes_repository`, `lotes_repository`, `ajustes_repository`,
+`kardex`).
 """
 from __future__ import annotations
 
 import uuid
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
 import asyncpg
 
+from . import stock
+from .errores import (  # noqa: F401 -- re-exportados: main.py y los tests los usan como repository.X
+    AlmacenNoEncontradoError,
+    CompraEstadoInvalidoError,
+    CompraNoEncontradaError,
+    LoteNoEncontradoError,
+    OperacionInvalidaError,
+    ProductoNoEncontradoError,
+    ProveedorNoEncontradoError,
+    StockInsuficienteError,
+)
+from .stock import con_id_str as _con_id_str
 
-class ProductoNoEncontradoError(Exception):
-    pass
+# Clave fija (primer argumento) del advisory lock por factura de
+# `registrar_salida_por_factura`; el segundo es hashtext(factura_id).
+_LOCK_SALIDA_FACTURA = 7_004_002
 
 
-class ProveedorNoEncontradoError(Exception):
-    pass
-
-
-class CompraNoEncontradaError(Exception):
-    pass
-
-
-class CompraEstadoInvalidoError(Exception):
-    """La compra ya está confirmada (o en otro estado) y no admite la operación pedida."""
-
-
-def _con_id_str(fila: asyncpg.Record) -> dict[str, Any]:
-    datos = dict(fila)
-    datos["id"] = str(datos["id"])
-    return datos
+def rango_fechas(desde: date | None, hasta: date | None) -> tuple[datetime | None, datetime | None]:
+    """[desde 00:00, hasta+1 00:00) en hora de RD, para filtrar `creado_en`
+    (timestamptz) por días calendario sin castear la columna."""
+    inicio = datetime.combine(desde, time.min, tzinfo=stock.ZONA_RD) if desde else None
+    fin = datetime.combine(hasta + timedelta(days=1), time.min, tzinfo=stock.ZONA_RD) if hasta else None
+    return inicio, fin
 
 
 # --- Productos ---------------------------------------------------------
+
+def estado_stock(producto: dict[str, Any]) -> str:
+    """'no_aplica' (servicio) | 'sin_existencia' | 'bajo_minimo' | 'disponible'."""
+    if producto.get("tipo") == "servicio":
+        return "no_aplica"
+    existencia = producto["stock_actual"]
+    minimo = producto.get("stock_minimo") or Decimal("0")
+    if existencia <= 0:
+        return "sin_existencia"
+    if minimo > 0 and existencia <= minimo:
+        return "bajo_minimo"
+    return "disponible"
+
+
+def _producto(fila: asyncpg.Record) -> dict[str, Any]:
+    datos = _con_id_str(fila)
+    datos["estado_stock"] = estado_stock(datos)
+    return datos
+
 
 async def crear_producto(
     pool: asyncpg.Pool,
@@ -47,14 +77,27 @@ async def crear_producto(
     unidad_medida: str | None,
     precio_venta: Decimal,
     stock_inicial: Decimal,
+    tipo: str = "bien",
+    tasa_itbis: str = "18",
+    codigo_barras: str | None = None,
+    categoria: str | None = None,
+    stock_minimo: Decimal = Decimal("0"),
+    maneja_lotes: bool = False,
+    costo_unitario_inicial: Decimal | None = None,
+    almacen_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
+    """Crea el producto y, si trae `stock_inicial`, lo ingresa al almacén
+    indicado (o al principal) al `costo_unitario_inicial` (0 si no se da)."""
+    if tipo == "servicio" and stock_inicial != 0:
+        raise OperacionInvalidaError("Un servicio no lleva existencia: no admite stock inicial")
     async with pool.acquire() as conn:
         async with conn.transaction():
             fila = await conn.fetchrow(
                 """
                 INSERT INTO inventario.productos
-                    (sku, nombre, descripcion, unidad_medida, precio_venta, stock_actual)
-                VALUES ($1, $2, $3, $4, $5, $6)
+                    (sku, nombre, descripcion, unidad_medida, precio_venta, tipo, tasa_itbis,
+                     codigo_barras, categoria, stock_minimo, maneja_lotes)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 RETURNING *
                 """,
                 sku,
@@ -62,19 +105,26 @@ async def crear_producto(
                 descripcion,
                 unidad_medida,
                 precio_venta,
-                stock_inicial,
+                tipo,
+                tasa_itbis,
+                codigo_barras,
+                categoria,
+                stock_minimo,
+                maneja_lotes,
             )
             if stock_inicial > 0:
-                await conn.execute(
-                    """
-                    INSERT INTO inventario.movimientos
-                        (producto_id, tipo, cantidad, motivo, referencia_tipo)
-                    VALUES ($1, 'entrada', $2, 'Stock inicial', 'ajuste')
-                    """,
-                    fila["id"],
-                    stock_inicial,
+                almacen = await stock.obtener_almacen(conn, almacen_id)
+                await stock.registrar_entrada(
+                    conn,
+                    producto_id=fila["id"],
+                    almacen_id=almacen["id"],
+                    cantidad=stock_inicial,
+                    costo_unitario=costo_unitario_inicial or Decimal("0"),
+                    motivo="Stock inicial",
+                    referencia_tipo="ajuste",
                 )
-    return _con_id_str(fila)
+                fila = await conn.fetchrow("SELECT * FROM inventario.productos WHERE id = $1", fila["id"])
+    return _producto(fila)
 
 
 async def listar_productos(
@@ -82,6 +132,9 @@ async def listar_productos(
     *,
     q: str | None = None,
     activo: bool | None = None,
+    categoria: str | None = None,
+    tipo: str | None = None,
+    alerta_stock: bool | None = None,
     limite: int = 50,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
@@ -89,10 +142,21 @@ async def listar_productos(
     valores: list[Any] = []
     if q:
         valores.append(f"%{q}%")
-        condiciones.append(f"(nombre ILIKE ${len(valores)} OR sku ILIKE ${len(valores)})")
+        condiciones.append(
+            f"(nombre ILIKE ${len(valores)} OR sku ILIKE ${len(valores)} OR codigo_barras ILIKE ${len(valores)})"
+        )
     if activo is not None:
         valores.append(activo)
         condiciones.append(f"activo = ${len(valores)}")
+    if categoria:
+        valores.append(categoria)
+        condiciones.append(f"categoria = ${len(valores)}")
+    if tipo:
+        valores.append(tipo)
+        condiciones.append(f"tipo = ${len(valores)}")
+    if alerta_stock is not None:
+        alerta = "(tipo = 'bien' AND (stock_actual <= 0 OR (stock_minimo > 0 AND stock_actual <= stock_minimo)))"
+        condiciones.append(alerta if alerta_stock else f"NOT {alerta}")
     where = f"WHERE {' AND '.join(condiciones)}" if condiciones else ""
     valores.extend([limite, offset])
     query = f"""
@@ -103,7 +167,15 @@ async def listar_productos(
     """
     async with pool.acquire() as conn:
         filas = await conn.fetch(query, *valores)
-    return [_con_id_str(fila) for fila in filas]
+    return [_producto(fila) for fila in filas]
+
+
+async def listar_categorias(pool: asyncpg.Pool) -> list[str]:
+    async with pool.acquire() as conn:
+        filas = await conn.fetch(
+            "SELECT DISTINCT categoria FROM inventario.productos WHERE categoria IS NOT NULL ORDER BY categoria"
+        )
+    return [fila["categoria"] for fila in filas]
 
 
 async def obtener_producto(pool: asyncpg.Pool, producto_id: uuid.UUID) -> dict[str, Any]:
@@ -111,7 +183,19 @@ async def obtener_producto(pool: asyncpg.Pool, producto_id: uuid.UUID) -> dict[s
         fila = await conn.fetchrow("SELECT * FROM inventario.productos WHERE id = $1", producto_id)
     if fila is None:
         raise ProductoNoEncontradoError(str(producto_id))
-    return _con_id_str(fila)
+    return _producto(fila)
+
+
+# Campos de la Fase 4 que `actualizar_producto` solo cambia si vienen en el
+# payload (un cliente de antes que no los manda no los borra).
+CAMPOS_PRODUCTO_OPCIONALES = (
+    "tipo",
+    "tasa_itbis",
+    "codigo_barras",
+    "categoria",
+    "stock_minimo",
+    "maneja_lotes",
+)
 
 
 async def actualizar_producto(
@@ -124,27 +208,43 @@ async def actualizar_producto(
     unidad_medida: str | None,
     precio_venta: Decimal,
     activo: bool,
+    **opcionales: Any,
 ) -> dict[str, Any]:
+    """`opcionales`: solo los de `CAMPOS_PRODUCTO_OPCIONALES` que el cliente
+    mandó. Pasar a 'servicio' exige existencia cero."""
+    cambios: dict[str, Any] = {
+        "sku": sku,
+        "nombre": nombre,
+        "descripcion": descripcion,
+        "unidad_medida": unidad_medida,
+        "precio_venta": precio_venta,
+        "activo": activo,
+    }
+    cambios.update({k: v for k, v in opcionales.items() if k in CAMPOS_PRODUCTO_OPCIONALES})
+    asignaciones = ", ".join(f"{campo} = ${i}" for i, campo in enumerate(cambios, start=2))
     async with pool.acquire() as conn:
-        fila = await conn.fetchrow(
-            """
-            UPDATE inventario.productos
-            SET sku = $2, nombre = $3, descripcion = $4, unidad_medida = $5,
-                precio_venta = $6, activo = $7, actualizado_en = now()
-            WHERE id = $1
-            RETURNING *
-            """,
-            producto_id,
-            sku,
-            nombre,
-            descripcion,
-            unidad_medida,
-            precio_venta,
-            activo,
-        )
-    if fila is None:
-        raise ProductoNoEncontradoError(str(producto_id))
-    return _con_id_str(fila)
+        async with conn.transaction():
+            actual = await conn.fetchrow(
+                "SELECT tipo, stock_actual FROM inventario.productos WHERE id = $1 FOR UPDATE", producto_id
+            )
+            if actual is None:
+                raise ProductoNoEncontradoError(str(producto_id))
+            if cambios.get("tipo") == "servicio" and actual["tipo"] != "servicio" and actual["stock_actual"] != 0:
+                raise OperacionInvalidaError(
+                    "Solo se puede convertir en servicio un producto sin existencia "
+                    f"(existencia actual: {actual['stock_actual']})"
+                )
+            fila = await conn.fetchrow(
+                f"""
+                UPDATE inventario.productos
+                SET {asignaciones}, actualizado_en = now()
+                WHERE id = $1
+                RETURNING *
+                """,
+                producto_id,
+                *cambios.values(),
+            )
+    return _producto(fila)
 
 
 # --- Proveedores ---------------------------------------------------------
@@ -236,6 +336,8 @@ async def actualizar_proveedor(
     return _con_id_str(fila)
 
 
+
+
 # --- Compras ---------------------------------------------------------
 
 async def _compra_con_items(conn: asyncpg.Connection, compra_id: uuid.UUID) -> dict[str, Any] | None:
@@ -250,6 +352,11 @@ async def _compra_con_items(conn: asyncpg.Connection, compra_id: uuid.UUID) -> d
     return compra
 
 
+async def _validar_almacen_compra(conn: asyncpg.Connection, almacen_id: uuid.UUID | None) -> None:
+    if almacen_id is not None:
+        await stock.obtener_almacen(conn, almacen_id)
+
+
 async def crear_compra(
     pool: asyncpg.Pool,
     *,
@@ -257,18 +364,21 @@ async def crear_compra(
     numero_documento: str | None,
     notas: str | None,
     items: list[dict[str, Any]],
+    almacen_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     async with pool.acquire() as conn:
         async with conn.transaction():
+            await _validar_almacen_compra(conn, almacen_id)
             fila = await conn.fetchrow(
                 """
-                INSERT INTO inventario.compras (proveedor_id, numero_documento, notas)
-                VALUES ($1, $2, $3)
+                INSERT INTO inventario.compras (proveedor_id, numero_documento, notas, almacen_id)
+                VALUES ($1, $2, $3, $4)
                 RETURNING id
                 """,
                 proveedor_id,
                 numero_documento,
                 notas,
+                almacen_id,
             )
             compra_id = fila["id"]
             await _reemplazar_items_compra(conn, compra_id, items)
@@ -284,13 +394,16 @@ async def _reemplazar_items_compra(
     for item in items:
         await conn.execute(
             """
-            INSERT INTO inventario.compra_items (compra_id, producto_id, cantidad, costo_unitario)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO inventario.compra_items
+                (compra_id, producto_id, cantidad, costo_unitario, lote_numero, lote_vencimiento)
+            VALUES ($1, $2, $3, $4, $5, $6)
             """,
             compra_id,
             item["producto_id"],
             item["cantidad"],
             item["costo_unitario"],
+            item.get("lote_numero"),
+            item.get("lote_vencimiento"),
         )
 
 
@@ -331,6 +444,7 @@ async def actualizar_compra(
     numero_documento: str | None,
     notas: str | None,
     items: list[dict[str, Any]],
+    almacen_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -343,16 +457,19 @@ async def actualizar_compra(
                 raise CompraEstadoInvalidoError(
                     f"Solo se pueden editar compras en estado 'borrador' (estado actual: {actual['estado']})"
                 )
+            await _validar_almacen_compra(conn, almacen_id)
             await conn.execute(
                 """
                 UPDATE inventario.compras
-                SET proveedor_id = $2, numero_documento = $3, notas = $4, actualizado_en = now()
+                SET proveedor_id = $2, numero_documento = $3, notas = $4, almacen_id = $5,
+                    actualizado_en = now()
                 WHERE id = $1
                 """,
                 compra_id,
                 proveedor_id,
                 numero_documento,
                 notas,
+                almacen_id,
             )
             await _reemplazar_items_compra(conn, compra_id, items)
             compra = await _compra_con_items(conn, compra_id)
@@ -370,14 +487,16 @@ async def eliminar_compra(pool: asyncpg.Pool, compra_id: uuid.UUID) -> None:
 
 
 async def confirmar_compra(pool: asyncpg.Pool, compra_id: uuid.UUID) -> dict[str, Any]:
-    """Confirma una compra en 'borrador': genera un movimiento 'entrada' por
-    cada línea, sube `stock_actual` y recalcula `costo_promedio` (promedio
-    ponderado) de cada producto involucrado. Todo en una sola transacción --
-    o se aplica completo o no se aplica nada."""
+    """Confirma una compra en 'borrador': cada línea entra al almacén de la
+    compra (o al principal) -- y a su lote, que se crea si no existe --,
+    sube `stock_actual` y recalcula `costo_promedio` (promedio ponderado).
+    Las líneas de servicios no mueven inventario. Todo en una sola
+    transacción -- o se aplica completo o no se aplica nada."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             actual = await conn.fetchrow(
-                "SELECT estado FROM inventario.compras WHERE id = $1 FOR UPDATE", compra_id
+                "SELECT estado, almacen_id, numero_documento FROM inventario.compras WHERE id = $1 FOR UPDATE",
+                compra_id,
             )
             if actual is None:
                 raise CompraNoEncontradaError(str(compra_id))
@@ -387,48 +506,35 @@ async def confirmar_compra(pool: asyncpg.Pool, compra_id: uuid.UUID) -> dict[str
                 )
 
             items = await conn.fetch(
-                "SELECT * FROM inventario.compra_items WHERE compra_id = $1 ORDER BY id", compra_id
+                """
+                SELECT ci.*, p.tipo AS producto_tipo
+                FROM inventario.compra_items ci
+                JOIN inventario.productos p ON p.id = ci.producto_id
+                WHERE ci.compra_id = $1
+                ORDER BY ci.id
+                """,
+                compra_id,
             )
-            for item in items:
-                producto = await conn.fetchrow(
-                    "SELECT stock_actual, costo_promedio FROM inventario.productos WHERE id = $1 FOR UPDATE",
-                    item["producto_id"],
-                )
-                if producto is None:
-                    raise ProductoNoEncontradoError(str(item["producto_id"]))
-
-                stock_previo: Decimal = producto["stock_actual"]
-                costo_previo: Decimal = producto["costo_promedio"]
-                cantidad: Decimal = item["cantidad"]
-                costo_unitario: Decimal = item["costo_unitario"]
-
-                nuevo_stock = stock_previo + cantidad
-                nuevo_costo_promedio = (
-                    (stock_previo * costo_previo + cantidad * costo_unitario) / nuevo_stock
-                    if nuevo_stock > 0
-                    else costo_unitario
-                )
-
-                await conn.execute(
-                    """
-                    UPDATE inventario.productos
-                    SET stock_actual = $2, costo_promedio = $3, actualizado_en = now()
-                    WHERE id = $1
-                    """,
-                    item["producto_id"],
-                    nuevo_stock,
-                    nuevo_costo_promedio,
-                )
-                await conn.execute(
-                    """
-                    INSERT INTO inventario.movimientos
-                        (producto_id, tipo, cantidad, costo_unitario, motivo, referencia_tipo, referencia_id)
-                    VALUES ($1, 'entrada', $2, $3, 'Compra confirmada', 'compra', $4)
-                    """,
-                    item["producto_id"],
-                    cantidad,
-                    costo_unitario,
-                    str(compra_id),
+            almacen = await stock.obtener_almacen(conn, actual["almacen_id"])
+            bienes = [item for item in items if item["producto_tipo"] != "servicio"]
+            await stock.bloquear_productos(conn, [item["producto_id"] for item in bienes])
+            for item in bienes:
+                lote_id = None
+                if item["lote_numero"]:
+                    lote_id = await stock.obtener_o_crear_lote(
+                        conn, item["producto_id"], item["lote_numero"], item["lote_vencimiento"]
+                    )
+                await stock.registrar_entrada(
+                    conn,
+                    producto_id=item["producto_id"],
+                    almacen_id=almacen["id"],
+                    cantidad=item["cantidad"],
+                    costo_unitario=item["costo_unitario"],
+                    lote_id=lote_id,
+                    motivo="Compra confirmada",
+                    referencia_tipo="compra",
+                    referencia_id=str(compra_id),
+                    documento=actual["numero_documento"],
                 )
 
             await conn.execute(
@@ -451,23 +557,37 @@ async def listar_movimientos(
     *,
     producto_id: uuid.UUID | None = None,
     tipo: str | None = None,
+    almacen_id: uuid.UUID | None = None,
+    lote_id: uuid.UUID | None = None,
+    referencia_tipo: str | None = None,
+    referencia_id: str | None = None,
+    desde: date | None = None,
+    hasta: date | None = None,
     limite: int = 50,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
     condiciones = []
     valores: list[Any] = []
-    if producto_id is not None:
-        valores.append(producto_id)
-        condiciones.append(f"producto_id = ${len(valores)}")
-    if tipo is not None:
-        valores.append(tipo)
-        condiciones.append(f"tipo = ${len(valores)}")
+    inicio, fin = rango_fechas(desde, hasta)
+    for columna, operador, valor in (
+        ("producto_id", "=", producto_id),
+        ("tipo", "=", tipo),
+        ("almacen_id", "=", almacen_id),
+        ("lote_id", "=", lote_id),
+        ("referencia_tipo", "=", referencia_tipo),
+        ("referencia_id", "=", referencia_id),
+        ("creado_en", ">=", inicio),
+        ("creado_en", "<", fin),
+    ):
+        if valor is not None:
+            valores.append(valor)
+            condiciones.append(f"{columna} {operador} ${len(valores)}")
     where = f"WHERE {' AND '.join(condiciones)}" if condiciones else ""
     valores.extend([limite, offset])
     query = f"""
         SELECT * FROM inventario.movimientos
         {where}
-        ORDER BY creado_en DESC
+        ORDER BY creado_en DESC, secuencia DESC
         LIMIT ${len(valores) - 1} OFFSET ${len(valores)}
     """
     async with pool.acquire() as conn:
@@ -480,72 +600,156 @@ async def listar_movimientos(
 async def validar_disponibilidad(
     pool: asyncpg.Pool, items: list[dict[str, Any]]
 ) -> tuple[bool, list[dict[str, Any]]]:
+    """¿Alcanza la existencia para facturar `items`? Cada ítem puede traer
+    `almacen_id` (None = principal) y `lote_id`. Se suma lo pedido por
+    (producto, almacén) y por lote antes de comparar (dos líneas del mismo
+    producto cuentan juntas). Los servicios siempre están disponibles. Un
+    lote vencido o bloqueado se reporta como faltante (`motivo`)."""
     faltantes: list[dict[str, Any]] = []
+    por_almacen: dict[tuple[uuid.UUID, uuid.UUID], Decimal] = {}
+    sin_lote: dict[tuple[uuid.UUID, uuid.UUID], Decimal] = {}
+    por_lote: dict[tuple[uuid.UUID, uuid.UUID, uuid.UUID], Decimal] = {}
+    hoy = stock.hoy_rd()
     async with pool.acquire() as conn:
+        productos: dict[uuid.UUID, asyncpg.Record] = {}
+        almacenes: dict[uuid.UUID, asyncpg.Record] = {}
         for item in items:
-            producto = await conn.fetchrow(
-                "SELECT nombre, stock_actual FROM inventario.productos WHERE id = $1",
-                item["producto_id"],
-            )
-            if producto is None:
-                raise ProductoNoEncontradoError(str(item["producto_id"]))
-            if producto["stock_actual"] < item["cantidad"]:
-                faltantes.append(
-                    {
-                        "producto_id": str(item["producto_id"]),
-                        "nombre": producto["nombre"],
-                        "solicitado": item["cantidad"],
-                        "disponible": producto["stock_actual"],
-                    }
+            producto_id = item["producto_id"]
+            if producto_id not in productos:
+                producto = await conn.fetchrow(
+                    "SELECT id, nombre, tipo, maneja_lotes FROM inventario.productos WHERE id = $1",
+                    producto_id,
                 )
+                if producto is None:
+                    raise ProductoNoEncontradoError(str(producto_id))
+                productos[producto_id] = producto
+            if productos[producto_id]["tipo"] == "servicio":
+                continue
+            almacen = await stock.obtener_almacen(conn, item.get("almacen_id"), exigir_activo=False)
+            almacenes[almacen["id"]] = almacen
+            clave = (producto_id, almacen["id"])
+            por_almacen[clave] = por_almacen.get(clave, Decimal("0")) + item["cantidad"]
+            if item.get("lote_id") is not None:
+                clave_lote = (producto_id, almacen["id"], item["lote_id"])
+                por_lote[clave_lote] = por_lote.get(clave_lote, Decimal("0")) + item["cantidad"]
+            else:
+                sin_lote[clave] = sin_lote.get(clave, Decimal("0")) + item["cantidad"]
+
+        def _faltante(producto_id, almacen_id, solicitado, disponible, *, lote_id=None, motivo="stock"):
+            faltantes.append(
+                {
+                    "producto_id": str(producto_id),
+                    "nombre": productos[producto_id]["nombre"],
+                    "solicitado": solicitado,
+                    "disponible": disponible,
+                    "almacen_id": str(almacen_id),
+                    "lote_id": str(lote_id) if lote_id else None,
+                    "motivo": motivo,
+                }
+            )
+
+        for (producto_id, almacen_id), solicitado in por_almacen.items():
+            if almacenes[almacen_id]["permite_negativo"]:
+                continue
+            disponible = await stock.existencia(conn, producto_id, almacen_id)
+            if disponible < solicitado:
+                _faltante(producto_id, almacen_id, solicitado, disponible)
+                continue
+            pedido_sin_lote = sin_lote.get((producto_id, almacen_id), Decimal("0"))
+            if productos[producto_id]["maneja_lotes"] and pedido_sin_lote > 0:
+                # Sin lote indicado se venderá por FEFO: solo cuentan los lotes
+                # vendibles (ni vencidos ni bloqueados) y lo que está sin lote.
+                # Lo pedido con lote explícito de esos mismos lotes ya no está
+                # disponible para el FEFO (la salida procesa primero esas líneas).
+                vendibles = await stock.lotes_fefo(conn, producto_id, almacen_id, hoy)
+                en_lotes = await stock.cantidad_en_lotes(conn, producto_id, almacen_id)
+                vendible = sum(
+                    (
+                        max(lote["cantidad"] - por_lote.get((producto_id, almacen_id, lote["lote_id"]), Decimal("0")),
+                            Decimal("0"))
+                        for lote in vendibles
+                    ),
+                    Decimal("0"),
+                ) + max(disponible - en_lotes, Decimal("0"))
+                if vendible < pedido_sin_lote:
+                    _faltante(producto_id, almacen_id, pedido_sin_lote, vendible)
+
+        for (producto_id, almacen_id, lote_id), solicitado in por_lote.items():
+            lote = await stock.obtener_lote_de_producto(conn, lote_id, producto_id)
+            estado = stock.estado_lote(
+                fecha_vencimiento=lote["fecha_vencimiento"], bloqueado=lote["bloqueado"], hoy=hoy, dias_alerta=0
+            )
+            disponible = await stock.existencia_lote(conn, lote_id, almacen_id)
+            if estado in ("vencido", "bloqueado"):
+                _faltante(producto_id, almacen_id, solicitado, disponible, lote_id=lote_id, motivo=f"lote_{estado}")
+            elif disponible < solicitado and not almacenes[almacen_id]["permite_negativo"]:
+                _faltante(producto_id, almacen_id, solicitado, disponible, lote_id=lote_id)
     return (len(faltantes) == 0, faltantes)
 
 
 async def registrar_salida_por_factura(
-    pool: asyncpg.Pool, factura_id: str, items: list[dict[str, Any]]
+    pool: asyncpg.Pool, factura_id: str, items: list[dict[str, Any]], *, documento: str | None = None
 ) -> list[dict[str, Any]]:
-    """Registra la salida de mercancía de una factura ya enviada exitosamente
-    a la DGII. Idempotente por (factura_id, producto_id): si ya existe un
-    movimiento de salida para ese par (reintento de facturas_api), no se
-    vuelve a descontar stock -- se devuelve el movimiento ya existente."""
-    movimientos: list[dict[str, Any]] = []
+    """Registra la salida de mercancía de una factura ya enviada
+    exitosamente a la DGII: cada ítem sale de su `almacen_id` (o del
+    principal) y de su `lote_id` (o por FEFO si el producto maneja lotes).
+    NO valida existencia: el e-CF ya es irreversible, así que puede dejar
+    el stock negativo (la validación es `validar_disponibilidad`, antes de
+    enviar).
+
+    Idempotente por factura: un advisory lock por `factura_id` serializa
+    los reintentos simultáneos y, si ya hay salidas de esta factura
+    (reintento de facturas_api tras un timeout), no se descuenta nada -- se
+    devuelven los movimientos ya registrados. Como toda la salida es una
+    sola transacción, "ya hay alguna" equivale a "ya está completa"."""
     async with pool.acquire() as conn:
         async with conn.transaction():
-            for item in items:
-                nuevo = await conn.fetchrow(
-                    """
-                    INSERT INTO inventario.movimientos
-                        (producto_id, tipo, cantidad, motivo, referencia_tipo, referencia_id)
-                    VALUES ($1, 'salida', $2, 'Venta (factura enviada a la DGII)', 'factura', $3)
-                    ON CONFLICT (referencia_id, producto_id) WHERE referencia_tipo = 'factura' AND tipo = 'salida'
-                    DO NOTHING
-                    RETURNING *
-                    """,
-                    item["producto_id"],
-                    item["cantidad"],
-                    factura_id,
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1, hashtext($2))", _LOCK_SALIDA_FACTURA, factura_id
+            )
+            existentes = await conn.fetch(
+                """
+                SELECT * FROM inventario.movimientos
+                WHERE referencia_tipo = 'factura' AND referencia_id = $1 AND tipo = 'salida'
+                ORDER BY secuencia
+                """,
+                factura_id,
+            )
+            if existentes:
+                return [_con_id_str(fila) for fila in existentes]
+
+            ids = list({item["producto_id"] for item in items})
+            tipos = {
+                fila["id"]: fila["tipo"]
+                for fila in await conn.fetch(
+                    "SELECT id, tipo FROM inventario.productos WHERE id = ANY($1::uuid[])", ids
                 )
-                if nuevo is not None:
-                    await conn.execute(
-                        """
-                        UPDATE inventario.productos
-                        SET stock_actual = stock_actual - $2, actualizado_en = now()
-                        WHERE id = $1
-                        """,
-                        item["producto_id"],
-                        item["cantidad"],
+            }
+            faltan = [pid for pid in ids if pid not in tipos]
+            if faltan:
+                raise ProductoNoEncontradoError(str(faltan[0]))
+            bienes = [item for item in items if tipos[item["producto_id"]] != "servicio"]
+            # Primero las líneas con lote explícito: si no, el FEFO de otra
+            # línea del mismo producto podría tomar justo esas unidades.
+            bienes.sort(key=lambda item: item.get("lote_id") is None)
+            await stock.bloquear_productos(conn, [item["producto_id"] for item in bienes])
+
+            movimientos: list[dict[str, Any]] = []
+            for item in bienes:
+                almacen = await stock.obtener_almacen(conn, item.get("almacen_id"), exigir_activo=False)
+                movimientos.extend(
+                    await stock.registrar_salida(
+                        conn,
+                        producto_id=item["producto_id"],
+                        almacen=almacen,
+                        cantidad=item["cantidad"],
+                        lote_id=item.get("lote_id"),
+                        forzar=True,
+                        motivo="Venta (factura enviada a la DGII)",
+                        referencia_tipo="factura",
+                        referencia_id=factura_id,
+                        referencia_linea=item.get("numero_linea"),
+                        documento=documento,
                     )
-                    movimientos.append(_con_id_str(nuevo))
-                else:
-                    existente = await conn.fetchrow(
-                        """
-                        SELECT * FROM inventario.movimientos
-                        WHERE referencia_tipo = 'factura' AND referencia_id = $1 AND producto_id = $2
-                            AND tipo = 'salida'
-                        """,
-                        factura_id,
-                        item["producto_id"],
-                    )
-                    if existente is not None:
-                        movimientos.append(_con_id_str(existente))
+                )
     return movimientos

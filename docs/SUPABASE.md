@@ -16,6 +16,8 @@ directamente por `asyncpg`: lo único que cambia es la variable
 `DATABASE_URL`. Las tablas siguen en sus esquemas de siempre:
 `facturacion`, `inventario` y `compras606`. `erp-api` agrega el esquema
 `ventas`, que crea él mismo al arrancar (ver [`ERP_API.md`](ERP_API.md)).
+`inventario-api` también crea y migra el esquema `inventario` al arrancar
+(almacenes, lotes, ajustes...; ver [`INVENTARIO.md`](INVENTARIO.md)).
 
 > **Orden importante:** haga los pasos 1 a 4 **antes** de unir a `main` el
 > cambio que quita el `postgres` del compose. Mientras tanto, la aplicación

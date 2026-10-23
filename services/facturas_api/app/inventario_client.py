@@ -30,7 +30,17 @@ class StockInsuficienteError(Exception):
 
 
 def _items_venta(items_inventario: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{"producto_id": item["producto_id"], "cantidad": item["cantidad"]} for item in items_inventario]
+    """Cada línea va con su NumeroLinea y, si la factura los indica, el
+    almacén y el lote de donde sale (inventario_api usa el principal / FEFO
+    cuando faltan)."""
+    items = []
+    for item in items_inventario:
+        venta = {"producto_id": item["producto_id"], "cantidad": item["cantidad"]}
+        for campo in ("numero_linea", "almacen_id", "lote_id"):
+            if item.get(campo) is not None:
+                venta[campo] = str(item[campo])
+        items.append(venta)
+    return items
 
 
 async def validar_disponibilidad(base_url: str, items_inventario: list[dict[str, Any]]) -> None:
@@ -52,13 +62,14 @@ async def validar_disponibilidad(base_url: str, items_inventario: list[dict[str,
 
 
 async def registrar_salida_por_factura(
-    base_url: str, factura_id: str, items_inventario: list[dict[str, Any]]
+    base_url: str, factura_id: str, items_inventario: list[dict[str, Any]], *, documento: str | None = None
 ) -> None:
+    """`documento` (el e-NCF) es lo que el Kardex muestra como documento."""
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             respuesta = await client.post(
                 f"{base_url}/movimientos/salida-por-factura",
-                json={"factura_id": factura_id, "items": _items_venta(items_inventario)},
+                json={"factura_id": factura_id, "items": _items_venta(items_inventario), "documento": documento},
             )
     except httpx.HTTPError as exc:
         raise InventarioApiError(f"No se pudo contactar inventario_api: {exc}") from exc

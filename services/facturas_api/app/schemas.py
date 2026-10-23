@@ -28,6 +28,10 @@ class ItemInventario(BaseModel):
     numero_linea: str
     producto_id: UUID
     cantidad: Decimal = Field(..., gt=0)
+    # Almacén de donde sale la mercancía (None = el principal) y lote (None =
+    # inventario_api lo toma por FEFO si el producto maneja lotes).
+    almacen_id: UUID | None = None
+    lote_id: UUID | None = None
 
 
 class FacturaCrear(BaseModel):
