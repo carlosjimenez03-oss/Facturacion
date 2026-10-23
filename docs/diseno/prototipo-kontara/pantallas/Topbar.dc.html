@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Barra superior</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}</style>
+</helmet>
+<header class="tb" style="font-family: Inter, ui-sans-serif, system-ui, sans-serif; color: #1F2937; position: relative">
+  <sc-if value="{{anyOpen}}" hint-placeholder-val="{{false}}">
+    <button type="button" class="pop-scrim" onClick="{{close}}" aria-label="Cerrar menú"></button>
+  </sc-if>
+
+  <div class="tb-c">
+    <label class="tb-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+      <input class="inp" type="search" placeholder="Buscar" aria-label="Búsqueda global: e-NCF, cliente, RNC o producto" value="{{q}}" onChange="{{setQ}}">
+      <sc-if value="{{showRes}}" hint-placeholder-val="{{false}}">
+        <div class="pop" style="left: 0; right: 0; width: auto">
+          <div class="pop-h">Resultados para “{{q}}”</div>
+          <div class="pop-sec">
+            <sc-for list="{{res}}" as="r" hint-placeholder-count="3"><a href="{{r.href}}" class="pop-i"><span class="chip">{{r.k}}</span><span style="flex: 1; min-width: 0"><b style="display: block; color: #111827">{{r.t}}</b><span class="hint">{{r.s}}</span></span></a></sc-for>
+            <sc-if value="{{noRes}}" hint-placeholder-val="{{false}}"><div style="padding: 14px 10px; color: #6B7280">Sin resultados. Pruebe con un e-NCF, RNC o nombre de cliente.</div></sc-if>
+          </div>
+        </div>
+      </sc-if>
+    </label>
+    <div class="pw">
+      <button type="button" class="{{cls.nuevo}}" onClick="{{t.nuevo}}" aria-expanded="{{o.nuevo}}" aria-label="Crear nuevo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+      <sc-if value="{{o.nuevo}}" hint-placeholder-val="{{false}}">
+        <div class="pop" style="left: 50%; right: auto; transform: translateX(-50%); width: 260px">
+          <div class="pop-h">Crear nuevo</div>
+          <div class="pop-sec">
+            <a href="NuevaFactura.dc.html" class="pop-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6M12 12v6M9 15h6"></path></svg>Factura de venta</a>
+            <a href="Compra.dc.html" class="pop-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9 15l6-6M9.5 9H15v5.5"></path></svg>Factura de compra</a>
+            <a href="Contactos.dc.html" class="pop-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M19 8v6M16 11h6"></path></svg>Cliente o proveedor</a>
+            <a href="Kardex.dc.html" class="pop-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"></path><path d="M3 8l9 5 9-5M12 13v8"></path></svg>Producto</a>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+
+  <div class="tb-right">
+    <span class="tip" data-tip="Ambiente de la DGII al que se envían los e-CF. Solo Producción tiene validez fiscal."><span class="{{envCls}}">DGII · {{ambiente}}</span></span>
+    <span class="tip r" data-tip="{{connTip}}"><span class="{{connCls}}"><i></i>{{conexion}}</span></span>
+
+    <button type="button" class="{{cls.help}}" onClick="{{t.help}}" aria-expanded="{{o.help}}" aria-label="Centro de ayuda"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"></circle><path d="M9.5 9a2.6 2.6 0 0 1 5 .9c0 1.7-2.5 2.3-2.5 3.6M12 17h.01"></path></svg></button>
+
+    <div class="pw">
+      <button type="button" class="{{cls.bell}}" onClick="{{t.bell}}" aria-expanded="{{o.bell}}" aria-label="Notificaciones, {{unread}} sin leer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.9 1.9 0 0 0 3.4 0"></path></svg>
+        <sc-if value="{{unread}}" hint-placeholder-val="{{true}}"><span class="dot-n">{{unread}}</span></sc-if>
+      </button>
+      <sc-if value="{{o.bell}}" hint-placeholder-val="{{false}}">
+        <div class="pop" style="width: 380px">
+          <div class="pop-h" style="font-size: 14px; color: #111827">Notificaciones<button type="button" class="btn btn-g btn-sm" onClick="{{readAll}}">Marcar todo como leído</button></div>
+          <div class="pop-sec">
+            <sc-for list="{{notifs}}" as="n" hint-placeholder-count="4">
+              <a href="{{n.href}}" class="pop-i" style="align-items: flex-start; background: {{n.bg}}">
+                <span style="width: 30px; height: 30px; border-radius: 50%; background: {{n.icBg}}; color: {{n.icFg}}; display: grid; place-items: center; flex: none; font-weight: 700">{{n.ic}}</span>
+                <span style="flex: 1; min-width: 0"><b style="display: block; color: #111827">{{n.t}}</b><span style="display: block; font-size: 12.5px; color: {{n.dColor}}; line-height: 1.4">{{n.d}}</span><span class="hint">{{n.time}}</span></span>
+              </a>
+            </sc-for>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+
+    <div class="pw">
+      <button type="button" class="{{cls.eco}}" onClick="{{t.eco}}" aria-expanded="{{o.eco}}" aria-label="Compromiso ambiental">
+        <span class="eco"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10z"></path><path d="M2 21c0-3 1.9-5.4 5.1-6"></path></svg></span>
+      </button>
+      <sc-if value="{{o.eco}}" hint-placeholder-val="{{false}}">
+        <div class="pop" style="width: 320px; background: linear-gradient(#E6F4F2, #F6FBFA 60%, #fff); text-align: center">
+          <div style="padding: 22px 20px 20px; display: flex; flex-direction: column; align-items: center; gap: 14px">
+            <span style="width: 48px; height: 48px; border-radius: 50%; background: #14B8A6; border: 3px solid #fff; box-shadow: 0 2px 8px rgba(15,118,110,.25); color: #fff; display: grid; place-items: center"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 20A7 7 0 0 1 9.8 6.1C15.5 5 17 4.5 19 2c1 2 2 4.2 2 8 0 5.5-4.8 10-10 10z"></path><path d="M2 21c0-3 1.9-5.4 5.1-6"></path></svg></span>
+            <b style="font-size: 15px; color: #111827">Compromiso ambiental</b>
+            <div style="display: flex; width: 100%; justify-content: center">
+              <div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 20px; font-weight: 700; color: #111827">2,184 <span style="font-size: 12px; font-weight: 500; color: #6B7280">/2,500</span></span><span class="hint">Facturas creadas</span></div>
+              <div style="width: 1px; background: #D1D5DB"></div>
+              <div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-size: 20px; font-weight: 700; color: #111827">4</span><span class="hint">Árboles plantados</span></div>
+            </div>
+            <p style="margin: 0; font-size: 13px; color: #374151; line-height: 1.55">Al emitir comprobantes electrónicos dejas de imprimir papel. <b>Cada 500 facturas</b> plantamos un árbol en la Cordillera Central de la República Dominicana. <button type="button" onClick="{{toggleEcoMore}}" style="border: 0; background: none; padding: 0; font: inherit; color: #0F766E; text-decoration: underline; cursor: pointer">Descubre cómo</button></p>
+            <sc-if value="{{ecoMore}}" hint-placeholder-val="{{false}}"><div style="font-size: 12.5px; color: #4B5563; text-align: left; background: #fff; border: 1px solid #E5E7EB; border-radius: 10px; padding: 12px; line-height: 1.5">Contamos automáticamente cada e-CF aceptado. Al llegar a 500 sumamos un árbol a la jornada de reforestación trimestral y te enviamos el certificado por correo. Faltan 316 facturas para tu próximo árbol.</div></sc-if>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+
+    <div class="pw">
+      <button type="button" class="{{cls.apps}}" onClick="{{t.apps}}" aria-expanded="{{o.apps}}" aria-label="Mis soluciones"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="5" r="1.7"></circle><circle cx="12" cy="5" r="1.7"></circle><circle cx="19" cy="5" r="1.7"></circle><circle cx="5" cy="12" r="1.7"></circle><circle cx="12" cy="12" r="1.7"></circle><circle cx="19" cy="12" r="1.7"></circle><circle cx="5" cy="19" r="1.7"></circle><circle cx="12" cy="19" r="1.7"></circle><circle cx="19" cy="19" r="1.7"></circle></svg></button>
+      <sc-if value="{{o.apps}}" hint-placeholder-val="{{false}}">
+        <div class="pop">
+          <div class="pop-h">Mis soluciones</div>
+          <div class="pop-sec">
+            <a href="Main.dc.html" class="pop-i"><span class="app-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6M9 14l2 2 4-4"></path></svg></span><span style="flex: 1"><b style="display: block; color: #0F766E; font-size: 14.5px">{{marca}} Facturación</b><span class="hint" style="font-size: 12.5px">Factura electrónica, contabilidad e inventario.</span></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F766E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></a>
+            <a href="Nomina.dc.html" class="pop-i"><span class="app-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20a6.5 6.5 0 0 1 13 0M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 6"></path></svg></span><span style="flex: 1"><b style="display: block; color: #0F766E; font-size: 14.5px">Nómina</b><span class="hint" style="font-size: 12.5px">Nómina con TSS, ISR e INFOTEP.</span></span></a>
+          </div>
+          <div class="pop-sep"></div>
+          <div class="pop-h" style="padding-top: 8px">Descubre más</div>
+          <div class="pop-sec">
+            <a href="Planes.dc.html" class="pop-i"><span class="app-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="9" width="16" height="11" rx="2"></rect><path d="M8 9V4h8v5M8 14h.01M12 14h.01M16 14h.01M8 17h8"></path></svg></span><span style="flex: 1"><b style="display: block; color: #0F766E; font-size: 14.5px">POS</b><span class="hint" style="font-size: 12.5px">Vende y emite e-CF de consumo en caja.</span></span><span class="bd b-acep nodot" style="box-shadow: inset 0 0 0 1px #BBF7D0">Probar gratis</span></a>
+          </div>
+          <div class="pop-f"><a href="Planes.dc.html" style="font-weight: 600; text-decoration: none; display: inline-flex; gap: 6px; align-items: center"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"></path></svg>Administrar mis soluciones</a></div>
+        </div>
+      </sc-if>
+    </div>
+
+    <div class="pw">
+      <button type="button" class="{{cls.co}}" onClick="{{t.co}}" aria-expanded="{{o.co}}" aria-label="Cambiar empresa">
+        <span class="co-av">C</span>
+        <span class="co-txt" style="font-size: 14px; font-weight: 500; color: #111827">Caribe Verde</span>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#374151" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg>
+      </button>
+      <sc-if value="{{o.co}}" hint-placeholder-val="{{false}}">
+        <div class="pop" style="width: 360px">
+          <div class="pop-h" style="font-size: 14px; color: #111827">Mis empresas
+            <span style="display: flex; gap: 2px">
+              <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{refreshCo}}" aria-label="Actualizar lista"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 13a8.5 8.5 0 0 1-15 4.5L3 15.5M3.5 11a8.5 8.5 0 0 1 15-4.5L21 8.5"></path><path d="M21 3.5v5h-5M3 20.5v-5h5"></path></svg></button>
+              <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{close}}" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+            </span>
+          </div>
+          <div class="pop-sec">
+            <div class="pop-i" style="background: #F0FAF9; cursor: default"><span class="co-av" style="width: 32px; height: 32px">C</span><span style="flex: 1; min-width: 0"><b style="display: block; color: #111827">Distribuidora Caribe Verde, SRL</b><span class="hint">RNC 1-31-89754-2 · Emisor electrónico</span></span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#0F766E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></div>
+          </div>
+          <div style="padding: 14px 20px 6px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center">
+            <span style="position: relative; width: 52px; height: 52px; border-radius: 12px; border: 1px solid #E5E7EB; background: #F8FAFC; display: grid; place-items: center; color: #6B7280">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="1.5"></rect><path d="M9 7h2M13 7h2M9 11h2M13 11h2M10 21v-4h4v4"></path></svg>
+              <span style="position: absolute; top: -6px; right: -6px; width: 20px; height: 20px; border-radius: 50%; background: #14B8A6; color: #fff; display: grid; place-items: center; font-size: 15px; font-weight: 700; line-height: 1">+</span>
+            </span>
+            <b style="color: #111827; font-size: 14.5px">¡Agrega otras empresas a tu cuenta!</b>
+            <span class="hint" style="font-size: 13px; line-height: 1.5">Gestiona todas tus empresas en un mismo lugar y simplifica tu administración.</span>
+          </div>
+          <sc-if value="{{coMsg}}" hint-placeholder-val="{{false}}"><div class="hint" style="text-align: center; padding: 0 16px">{{coMsg}}</div></sc-if>
+          <sc-if value="{{addCo}}" hint-placeholder-val="{{false}}">
+            <div style="padding: 12px 16px 0; display: flex; flex-direction: column; gap: 10px">
+              <div class="fld"><label class="lbl" for="nrnc">RNC de la nueva empresa</label><input id="nrnc" class="inp mono" placeholder="1-00-00000-0"></div>
+              <div class="fld"><label class="lbl" for="nrs">Razón social</label><input id="nrs" class="inp" placeholder="Nombre de la empresa"></div>
+            </div>
+          </sc-if>
+          <div style="padding: 12px 16px 16px"><button type="button" class="btn" style="width: 100%; background: #CCEFEA; color: #0F766E" onClick="{{addCoClick}}">{{addCoLabel}}</button></div>
+        </div>
+      </sc-if>
+    </div>
+
+    <div class="pw">
+      <button type="button" class="{{cls.user}}" onClick="{{t.user}}" aria-expanded="{{o.user}}" aria-label="Menú de usuario">M</button>
+      <sc-if value="{{o.user}}" hint-placeholder-val="{{false}}">
+        <div class="pop" style="width: 300px">
+          <div style="padding: 16px 16px 12px">
+            <b style="display: block; color: #111827; font-size: 14.5px">María Rosario</b>
+            <span class="hint" style="font-size: 13px">maria.rosario@caribeverde.do</span>
+          </div>
+          <div class="pop-sep"></div>
+          <div style="padding: 12px 16px; display: flex; justify-content: space-between; align-items: center; gap: 8px">
+            <span style="color: #111827">Facturación electrónica</span>
+            <span class="bd b-acep nodot">Activada</span>
+          </div>
+          <div class="pop-sep"></div>
+          <div class="pop-sec">
+            <a href="Planes.dc.html" class="pop-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M5 20v-6M10 20V10M15 20V4M20 20v-9"></path></svg><span style="flex: 1">Consumo del plan</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></a>
+            <a href="Configuracion.dc.html" class="pop-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"></path></svg><span style="flex: 1">Configuración</span></a>
+            <a href="Configuracion.dc.html" class="pop-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9.5"></circle><circle cx="12" cy="10" r="3"></circle><path d="M6.5 18.5a6.5 6.5 0 0 1 11 0"></path></svg><span style="flex: 1">Mi perfil</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></a>
+            <a href="Configuracion.dc.html#certificado" class="pop-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg><span style="flex: 1">Seguridad</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></a>
+            <a href="Sincronizacion.dc.html" class="pop-i"><span style="width: 17px; display: grid; place-items: center; flex: none"><span style="width: 8px; height: 8px; border-radius: 50%; background: #16A34A"></span></span><span style="flex: 1">Estado de las soluciones</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9CA3AF" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></a>
+          </div>
+          <div class="pop-sep"></div>
+          <div class="pop-sec">
+            <button type="button" onClick="{{logout}}" class="pop-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"></path></svg><span style="flex: 1">Cerrar sesión</span></button>
+          </div>
+        </div>
+      </sc-if>
+    </div>
+  </div>
+  <sc-if value="{{o.help}}" hint-placeholder-val="{{false}}">
+    <aside role="dialog" aria-label="Centro de ayuda" style="position: fixed; top: 0; right: 0; bottom: 0; width: 480px; max-width: 100vw; background: #fff; border-left: 1px solid #E5E7EB; box-shadow: -12px 0 40px rgba(15,23,42,.14); z-index: 110; display: flex; flex-direction: column; overflow-y: auto">
+      <div style="display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 8px">
+        <h2 style="margin: 0; font-size: 18px; font-weight: 650; color: #111827">Centro de ayuda</h2>
+        <div style="display: flex; gap: 2px">
+          <button type="button" class="ib" onClick="{{toggleWide}}" aria-label="Expandir panel"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"></path></svg></button>
+          <button type="button" class="ib" onClick="{{close}}" aria-label="Cerrar centro de ayuda"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+        </div>
+      </div>
+      <div class="tabs" role="tablist" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr))">
+        <button type="button" role="tab" class="{{hTabIa}}" onClick="{{showIa}}" style="justify-content: center">Asistente IA <span class="chip" style="height: 20px; background: #EEF0FF; color: #4338CA; font-size: 11px">Beta</span></button>
+        <button type="button" role="tab" class="{{hTabRec}}" onClick="{{showRec}}" style="justify-content: center">Recursos</button>
+      </div>
+      <sc-if value="{{isIa}}" hint-placeholder-val="{{true}}">
+        <div style="background: linear-gradient(#F3FAF9, #E9F5F3); padding: 32px 20px 24px; display: flex; flex-direction: column; align-items: center; gap: 6px; text-align: center">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#14B8A6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2 2M16 16l2 2M6 18l2-2M16 8l2-2"></path></svg>
+          <b style="font-size: 18px; color: #111827; margin-top: 6px">Buenos días.</b>
+          <span style="font-size: 15px; color: #374151">¿Cómo podemos ayudarte hoy?</span>
+          <div style="display: flex; gap: 8px; width: 100%; margin-top: 16px">
+            <label class="tb-search" style="flex: 1; max-width: none">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+              <input class="inp" placeholder="Cómo crear una factura…" aria-label="Pregunta al asistente" value="{{ask}}" onChange="{{setAsk}}" style="height: 44px; background: #fff; border-radius: 10px; padding-right: 12px">
+            </label>
+            <button type="button" class="btn btn-p" style="height: 44px" onClick="{{sendAsk}}" disabled="{{noAsk}}">Preguntar</button>
+          </div>
+          <div style="display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 6px">
+            <sc-for list="{{sugs}}" as="g" hint-placeholder-count="3"><button type="button" class="chip" onClick="{{g.pick}}" style="border: 1px solid #D1E9E6; background: #fff; cursor: pointer; height: 28px">{{g.t}}</button></sc-for>
+          </div>
+        </div>
+        <sc-if value="{{answer}}" hint-placeholder-val="{{false}}">
+          <div style="margin: 16px 20px 0; border: 1px solid #B7E3DD; border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; font-size: 13.5px; color: #374151; line-height: 1.55">
+            <b style="color: #0F766E">Asistente · {{answer.q}}</b>
+            <span>{{answer.a}}</span>
+            <a href="{{answer.href}}" class="btn btn-o btn-sm" style="align-self: flex-start">{{answer.cta}}</a>
+          </div>
+        </sc-if>
+        <div style="padding: 20px; display: flex; flex-direction: column; gap: 16px">
+          <button type="button" onClick="{{needHelp}}" style="text-align: left; border: 0; background: #F6F7F9; border-radius: 12px; padding: 16px; font: inherit; cursor: pointer; display: flex; flex-direction: column; gap: 6px">
+            <span style="display: flex; justify-content: space-between; color: #111827"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 14v-2a9 9 0 0 1 18 0v2"></path><path d="M21 15a2 2 0 0 1-2 2h-1v-5h3zM3 15a2 2 0 0 0 2 2h1v-5H3z"></path></svg><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#6B7280" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></span>
+            <b style="color: #111827; font-size: 14px">¿Necesitas más ayuda?</b>
+            <span style="font-size: 13px; color: #4B5563">{{helpMsg}}</span>
+          </button>
+          <div style="display: flex; align-items: center; gap: 8px; font-weight: 600; color: #111827; font-size: 14px"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"></path></svg>Tendencias</div>
+          <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px">
+            <div style="border: 1px solid #E5E7EB; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#14B8A6" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 3v4M12 17v4M3 12h4M17 12h4"></path></svg>
+              <b style="color: #111827; font-size: 14px">Asistente IA</b><span style="font-size: 13px; color: #4B5563">Tu asistente inteligente en {{marca}}.</span>
+              <button type="button" onClick="{{tryIa}}" style="border: 0; background: none; padding: 0; text-align: left; font: inherit; font-weight: 600; color: #0F766E; cursor: pointer; margin-top: 6px">Ver resultados →</button>
+            </div>
+            <div style="border: 1px solid #E5E7EB; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 8px">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#14B8A6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="2.5" width="14" height="19" rx="2"></rect><path d="M8.5 6.5h7M8.5 11h.01M12 11h.01M15.5 11h.01"></path></svg>
+              <b style="color: #111827; font-size: 14px">e-CF y DGII</b><span style="font-size: 13px; color: #4B5563">Todo sobre la Ley 32-23 y tus formatos.</span>
+              <a href="Formatos.dc.html" style="font-weight: 600; text-decoration: none; margin-top: 6px">Ver resultados →</a>
+            </div>
+          </div>
+        </div>
+      </sc-if>
+      <sc-if value="{{isRec}}" hint-placeholder-val="{{false}}">
+        <div style="padding: 16px 20px; display: flex; flex-direction: column; gap: 4px">
+          <sc-for list="{{recursos}}" as="r" hint-placeholder-count="6">
+            <a href="{{r.href}}" class="pop-i" style="border-bottom: 1px solid #F0F1F3; border-radius: 0"><span class="app-ic" style="width: 34px; height: 34px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 19.5V5a2 2 0 0 1 2-2h14v16H6.5a2.5 2.5 0 0 0 0 5H20"></path></svg></span><span style="flex: 1"><b style="display: block; color: #111827">{{r.t}}</b><span class="hint">{{r.s}}</span></span></a>
+          </sc-for>
+        </div>
+      </sc-if>
+    </aside>
+  </sc-if>
+  <sc-if value="{{loggedOut}}" hint-placeholder-val="{{false}}">
+    <div class="scrim" style="z-index: 130; background: #F6F7F9">
+      <div class="card" style="max-width: 400px; width: 100%; padding: 32px; display: flex; flex-direction: column; gap: 14px; text-align: center; align-items: center">
+        <svg width="44" height="44" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#0F766E"></rect><path d="M10.5 7.5h8l4 4v13h-12z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"></path><path d="M13.5 17.5l2.4 2.4 4.4-4.9" fill="none" stroke="#5EEAD4" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+        <h2 style="margin: 0; font-size: 19px; color: #111827">Cerraste sesión</h2>
+        <p style="margin: 0; color: #6B7280; font-size: 14px">Tus facturas firmadas en contingencia se enviarán igual cuando vuelva la conexión.</p>
+        <button type="button" class="btn btn-p" style="width: 100%" onClick="{{login}}">Volver a iniciar sesión</button>
+      </div>
+    </div>
+  </sc-if>
+</header>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"ambiente":{"editor":"enum","options":["Producción","Certificación","Pruebas"],"default":"Producción"},"conexion":{"editor":"enum","options":["En línea","Modo contingencia"],"default":"En línea"},"$preview":{"width":1170,"height":56}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = this.state || {};
+    const amb = this.props.ambiente ?? 'Producción';
+    const con = this.props.conexion ?? 'En línea';
+    const off = con !== 'En línea';
+    const open = st.open || null;
+    const base = { nuevo: 'tb-plus', help: 'ib', bell: 'ib', eco: 'ib', apps: 'ib', co: 'co', user: 'av' };
+    const o = {}, t = {}, cls = {};
+    Object.keys(base).forEach(k => {
+      o[k] = open === k;
+      cls[k] = base[k] + (open === k ? ' act' : '');
+      t[k] = () => this.setState({ open: open === k ? null : k });
+    });
+    const IDX = [
+      ['e-CF', 'E310000000131', 'Constructora Hispaniola · RD$ 1,284,560.00', 'DetalleFactura.dc.html'],
+      ['e-CF', 'E310000000129', 'Juan Pablo Méndez Rosario · Rechazada', 'DetalleFactura.dc.html'],
+      ['Cliente', 'Constructora Hispaniola, SRL', 'RNC 1-30-45218-7', 'Contactos.dc.html'],
+      ['Cliente', 'Supermercado La Cosecha, SRL', 'RNC 1-01-78452-3', 'Contactos.dc.html'],
+      ['Proveedor', 'Cementos del Atlántico, SA', 'RNC 1-01-55678-9', 'Bandeja.dc.html'],
+      ['Producto', 'Cemento gris Portland 42.5 kg', 'CEM-425 · 18 sacos', 'Kardex.dc.html'],
+      ['Producto', 'Varilla corrugada 3/8"', 'VAR-038 · 1,250 uds', 'Kardex.dc.html'],
+      ['Reporte', 'Formato 606', 'Compras · octubre 2026', 'Formatos.dc.html'],
+      ['Reporte', 'Pre-cálculo IT-1', 'ITBIS · octubre 2026', 'PreCalculo.dc.html']
+    ];
+    const q = st.q || '';
+    const nq = q.toLowerCase().replace(/-/g, '');
+    const res = nq.length >= 2 ? IDX.filter(r => (r[1] + ' ' + r[2]).toLowerCase().replace(/-/g, '').includes(nq)).slice(0, 6).map(([k, tt, sb, href]) => ({ k, t: tt, s: sb, href })) : [];
+    const KB = [
+      ['factura', 'Para crear una factura vaya a Ingresos › Facturas de venta › Nueva factura, elija el tipo de e-CF (31 si el cliente tiene RNC, 32 para consumidor final), agregue los productos y pulse «Emitir y enviar a DGII».', 'NuevaFactura.dc.html', 'Crear factura'],
+      ['rechaz', 'Si la DGII rechaza un e-CF, abra el detalle para ver el código del error. Si la secuencia quedó utilizada, use «Corregir y emitir nueva factura»; se asignará un nuevo e-NCF.', 'DetalleFactura.dc.html', 'Ver factura rechazada'],
+      ['606', 'El 606 se genera en Impuestos › Formato 606. Pulse «Validar» para detectar errores y luego «Generar archivo TXT». Vence el día 15 del mes siguiente.', 'Formatos.dc.html', 'Ir al 606'],
+      ['retenc', 'Las retenciones se calculan al registrar una factura de compra según el tipo de proveedor y el tipo de bien o servicio. Se declaran en el mes en que se paga la factura.', 'Compra.dc.html', 'Registrar compra'],
+      ['contingencia', 'En modo contingencia las facturas se firman localmente y se envían en lotes al reconectar. Revise el Centro de sincronización.', 'Sincronizacion.dc.html', 'Abrir Centro de sincronización'],
+      ['certificado', 'Cargue el certificado .p12 en Configuración › Certificado digital. El actual vence el 14/12/2026.', 'Configuracion.dc.html', 'Ir a Configuración']
+    ];
+    const askFor = text => { const tl = (text || '').toLowerCase(); const hit = KB.find(k => tl.includes(k[0])) || KB[0]; return { q: text, a: hit[1], href: hit[2], cta: hit[3] }; };
+    const sugs = ['¿Cómo crear una factura?', '¿Qué hago si la DGII rechaza un e-CF?', '¿Cómo genero el 606?', '¿Cómo se calculan las retenciones?'].map(tt => ({ t: tt, pick: () => this.setState({ ask: tt, answer: askFor(tt) }) }));
+    const recursos = [
+      ['Guía rápida de facturación electrónica', 'Primeros pasos con e-CF · 6 min', 'NuevaFactura.dc.html'],
+      ['Tipos de comprobantes e-CF (31 al 47)', 'Cuándo usar cada tipo', 'NuevaFactura.dc.html'],
+      ['Notas de crédito y débito', 'Cómo referenciar el e-NCF afectado', 'Facturas.dc.html'],
+      ['Retenciones de ISR e ITBIS', 'Reglas y período de declaración', 'Compra.dc.html'],
+      ['Formatos 606, 607 y 608', 'Validación y envío a la DGII', 'Formatos.dc.html'],
+      ['Modo contingencia', 'Qué hacer si la DGII no responde', 'Sincronizacion.dc.html']
+    ].map(([tt, sb, href]) => ({ t: tt, s: sb, href }));
+    const hTab = st.hTab || 'ia';
+    const coAdd = !!st.addCo;
+    return {
+      ambiente: amb, conexion: con, marca: 'Kontara',
+      envCls: 'env ' + (amb === 'Producción' ? 'env-prod' : amb === 'Certificación' ? 'env-cert' : 'env-test'),
+      connCls: 'conn ' + (off ? 'conn-off' : 'conn-on'),
+      connTip: off ? 'Sin respuesta de los servicios de la DGII. Las facturas se firman localmente y se envían al reconectar.' : 'Conectado a los servicios web de la DGII. Último eco: hace 12 s.',
+      o, t, cls, anyOpen: !!open && open !== 'help', close: () => this.setState({ open: null }),
+      q, setQ: e => this.setState({ q: e.target.value }), res, showRes: nq.length >= 2, noRes: nq.length >= 2 && res.length === 0,
+      isIa: hTab === 'ia', isRec: hTab === 'rec', hTabIa: hTab === 'ia' ? 'tab on' : 'tab', hTabRec: hTab === 'rec' ? 'tab on' : 'tab',
+      showIa: () => this.setState({ hTab: 'ia' }), showRec: () => this.setState({ hTab: 'rec' }), toggleWide: () => this.setState({ hTab: hTab === 'ia' ? 'rec' : 'ia' }),
+      ask: st.ask || '', setAsk: e => this.setState({ ask: e.target.value }), noAsk: !(st.ask || '').trim(),
+      sendAsk: () => this.setState({ answer: askFor(st.ask) }), answer: st.answer || null, sugs, recursos,
+      tryIa: () => this.setState({ ask: '¿Cómo crear una factura?', answer: askFor('factura') }),
+      needHelp: () => this.setState({ helpSent: true }),
+      helpMsg: st.helpSent ? 'Listo: un asesor te contactará por WhatsApp en menos de 10 minutos. Ticket #48213.' : 'Nuestro equipo está listo para acompañarte en lo que necesites.',
+      ecoMore: !!st.ecoMore, toggleEcoMore: () => this.setState({ ecoMore: !st.ecoMore }),
+      refreshCo: () => this.setState({ coMsg: 'Lista actualizada · 1 empresa en tu cuenta' }), coMsg: st.coMsg || '',
+      addCo: coAdd, addCoLabel: coAdd ? 'Crear empresa' : '+ Agregar empresa',
+      addCoClick: () => coAdd ? this.setState({ addCo: false, coMsg: 'Solicitud creada. Te enviamos un correo para completar el alta de la empresa.' }) : this.setState({ addCo: true, coMsg: '' }),
+      unread: st.readAll ? 0 : 4, readAll: () => this.setState({ readAll: true }),
+      notifs: [
+        ['✕', '#FEE2E2', '#B91C1C', 'Factura E310000000129 rechazada', 'Código 145 · RNC del comprador no válido: la cédula 001-1456789-2 no está activa en el padrón de la DGII. La secuencia quedó utilizada.', 'Hace 2 días', 'DetalleRechazada.dc.html', '#B91C1C'],
+        ['✓', '#DCFCE7', '#166534', 'Factura E310000000131 aceptada', 'Constructora Hispaniola · RD$ 1,284,560.00. Enviada al cliente por correo.', 'Hoy 10:42 a. m.', 'DetalleFactura.dc.html', '#4B5563'],
+        ['!', '#FEF9C3', '#854D0E', 'Aceptada condicional: E450000000018', 'La DGII aceptó con observaciones: la dirección del comprador no coincide con el RNC. No requiere acción.', 'Ayer', 'Facturas.dc.html', '#4B5563'],
+        ['!', '#FFEDD5', '#C2410C', 'Secuencia E32 casi agotada', 'Quedan 1,240 de 50,000. Solicite una nueva secuencia.', 'Ayer', 'Configuracion.dc.html', '#4B5563']
+      ].map(([ic, icBg, icFg, tt, d, time, href, dColor]) => ({ ic, icBg, icFg, t: tt, d, time, href, dColor, bg: st.readAll ? 'transparent' : '#F8FAFC' })),
+      loggedOut: !!st.out, logout: () => this.setState({ out: true, open: null }), login: () => this.setState({ out: false })
+    };
+  }
+}
+</script>
+</body>
+</html>

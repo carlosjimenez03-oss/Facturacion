@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Configuración</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="config" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="{{ambLabel}}" conexion="En línea" hint-size="100%,64px"></dc-import>
+    <div class="content">
+      <div class="ph">
+        <div><h1>Configuración</h1><p>Empresa, firma digital, conexión con la DGII y envío automático de comprobantes</p></div>
+        <button type="button" class="btn btn-p" onClick="{{act.save}}">Guardar cambios</button>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+        <nav aria-label="Secciones de configuración" style="flex: 0 1 220px; display: flex; flex-direction: column; gap: 2px">
+          <a href="#empresa" class="sv on">Datos de la empresa</a>
+          <a href="#certificado" class="sv">Certificado digital</a>
+          <a href="#ambiente" class="sv">Ambiente DGII</a>
+          <a href="#secuencias" class="sv">Secuencias autorizadas</a>
+          <a href="#inventario" class="sv">Método de inventario</a>
+          <a href="#envio" class="sv">WhatsApp y correo</a>
+        </nav>
+
+        <div style="flex: 999 1 640px; min-width: 0; display: flex; flex-direction: column; gap: 20px">
+          <section id="empresa" class="card">
+            <div class="card-h"><h2>Datos de la empresa</h2></div>
+            <div class="card-b" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px">
+              <div class="fld"><label class="lbl" for="rs">Razón social</label><input id="rs" class="inp" value="Distribuidora Caribe Verde, SRL"></div>
+              <div class="fld"><label class="lbl" for="nc">Nombre comercial</label><input id="nc" class="inp" value="Caribe Verde"></div>
+              <div class="fld"><label class="lbl" for="rnc">RNC</label><input id="rnc" class="inp mono" value="1-31-89754-2" disabled></div>
+              <div class="fld"><label class="lbl" for="act">Actividad económica</label><select id="act" class="inp"><option>Venta al por mayor de materiales de construcción</option></select></div>
+              <div class="fld" style="grid-column: 1 / -1"><label class="lbl" for="dir">Dirección fiscal</label><input id="dir" class="inp" value="Av. 27 de Febrero 415, Ensanche Piantini"></div>
+              <div class="fld"><label class="lbl" for="prov">Provincia</label><select id="prov" class="inp"><option>Distrito Nacional</option><option>Santo Domingo</option><option>Santiago</option></select></div>
+              <div class="fld"><label class="lbl" for="mun">Municipio</label><select id="mun" class="inp"><option>Santo Domingo de Guzmán</option></select></div>
+              <div class="fld"><label class="lbl" for="tel">Teléfono</label><input id="tel" class="inp" value="809-555-0110"></div>
+              <div class="fld"><label class="lbl" for="em">Correo de facturación</label><input id="em" class="inp" value="facturacion@caribeverde.do"></div>
+            </div>
+          </section>
+
+          <section id="certificado" class="card">
+            <div class="card-h"><h2>Certificado digital para firma</h2><span class="{{cert.badgeCls}}">{{cert.badge}}</span></div>
+            <div class="card-b" style="display: flex; flex-wrap: wrap; gap: 20px">
+              <div style="flex: 1 1 320px; border: 1px solid #E5E7EB; border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+                <div style="display: flex; gap: 12px; align-items: center">
+                  <span style="width: 40px; height: 40px; border-radius: 10px; background: #E6F4F2; color: #0F766E; display: grid; place-items: center; flex: none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg></span>
+                  <div><div class="mono" style="font-weight: 600; color: #111827">{{cert.file}}</div><div class="hint">Certificado de persona jurídica para e-CF</div></div>
+                </div>
+                <dl class="kv">
+                  <dt>Titular</dt><dd>Distribuidora Caribe Verde, SRL</dd>
+                  <dt>Firmante</dt><dd>María Rosario · 001-1234567-8</dd>
+                  <dt>Emitido por</dt><dd>Entidad certificadora autorizada</dd>
+                  <dt>Válido desde</dt><dd>{{cert.desde}}</dd>
+                  <dt>Vence</dt><dd style="color: {{cert.venceColor}}; font-weight: 650">{{cert.vence}}</dd>
+                </dl>
+                <div class="{{cert.pb}}"><span style="width: {{cert.pct}}"></span></div>
+                <span class="hint">{{cert.pctTxt}} · Recordatorios activos a 60, 30 y 7 días</span>
+              </div>
+              <div style="flex: 1 1 280px; display: flex; flex-direction: column; gap: 12px">
+                <label onDragOver="{{dragOver}}" onDragLeave="{{dragLeave}}" onDrop="{{dropFile}}" style="border: 1.5px dashed {{up.border}}; background: {{up.bg}}; border-radius: 10px; padding: 22px 16px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 8px; cursor: pointer">
+                  <input type="file" accept=".p12,.pfx" onChange="{{pickFile}}" style="position: absolute; width: 1px; height: 1px; opacity: 0" aria-label="Seleccionar certificado .p12">
+                  <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#0F766E" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V3M7 8l5-5 5 5M5 21h14"></path></svg>
+                  <span style="font-weight: 600; color: #111827">{{up.title}}</span>
+                  <span class="hint">{{up.hint}}</span>
+                </label>
+                <div class="fld"><label class="lbl" for="pw">Contraseña del certificado</label><input id="pw" type="password" class="inp" placeholder="••••••••" value="{{pw}}" onChange="{{setPw}}"></div>
+                <sc-if value="{{up.err}}" hint-placeholder-val="{{false}}"><div class="al al-d"><span>{{up.err}}</span></div></sc-if>
+                <sc-if value="{{up.ok}}" hint-placeholder-val="{{false}}"><div class="al al-s"><span>{{up.ok}}</span></div></sc-if>
+                <div class="row">
+                  <button type="button" class="btn btn-p" onClick="{{uploadCert}}" disabled="{{up.cant}}">{{up.btn}}</button>
+                  <sc-if value="{{up.hasFile}}" hint-placeholder-val="{{false}}"><button type="button" class="btn btn-g" onClick="{{clearFile}}">Quitar archivo</button></sc-if>
+                </div>
+                <span class="hint">La contraseña se cifra y nunca se muestra. El certificado anterior seguirá activo hasta que el nuevo sea validado.</span>
+              </div>
+            </div>
+          </section>
+
+          <section id="ambiente" class="card">
+            <div class="card-h"><h2>Ambiente DGII</h2><span class="hint">Define a qué servicio web se envían los e-CF</span></div>
+            <div class="card-b" style="display: flex; flex-direction: column; gap: 14px">
+              <div role="radiogroup" aria-label="Ambiente DGII" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px">
+                <sc-for list="{{ambientes}}" as="a" hint-placeholder-count="3">
+                  <button type="button" role="radio" aria-checked="{{a.on}}" onClick="{{a.pick}}" style="text-align: left; padding: 14px 16px; border-radius: 10px; cursor: pointer; font: inherit; display: flex; flex-direction: column; gap: 4px; border: {{a.border}}; background: {{a.bg}}">
+                    <span style="display: flex; justify-content: space-between; align-items: center"><b style="color: #111827">{{a.label}}</b><span style="width: 18px; height: 18px; border-radius: 50%; border: {{a.dot}}; box-sizing: border-box"></span></span>
+                    <span style="font-size: 12.5px; color: #6B7280">{{a.desc}}</span>
+                  </button>
+                </sc-for>
+              </div>
+              <sc-if value="{{notProd}}" hint-placeholder-val="{{false}}">
+                <div class="al al-w"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4M12 17h.01"></path></svg><span><b>Los comprobantes emitidos en {{ambLabel}} no tienen validez fiscal.</b> Use este ambiente solo para pruebas o para el proceso de certificación como emisor electrónico.</span></div>
+              </sc-if>
+            </div>
+          </section>
+
+          <section id="secuencias" class="card">
+            <div class="card-h"><h2>Secuencias autorizadas</h2><button type="button" class="btn btn-o btn-sm" onClick="{{toggleReq}}">{{reqLabel}}</button></div>
+            <sc-if value="{{reqOpen}}" hint-placeholder-val="{{false}}">
+              <div style="padding: 16px 20px; border-bottom: 1px solid #EEF0F2; background: #FAFBFC; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; align-items: end">
+                <div class="fld"><label class="lbl" for="rt">Tipo de e-CF</label><select id="rt" class="inp" value="{{req.tipo}}" onChange="{{setReqTipo}}"><sc-for list="{{seqs}}" as="s" hint-placeholder-count="9"><option value="{{s.t}}">E{{s.t}} · {{s.n}}</option></sc-for></select></div>
+                <div class="fld"><label class="lbl" for="rc">Cantidad solicitada</label><input id="rc" type="number" min="1" class="inp" value="{{req.cant}}" onChange="{{setReqCant}}"></div>
+                <div class="fld"><label class="lbl" for="rj">Justificación</label><input id="rj" class="inp" value="{{req.just}}" onChange="{{setReqJust}}"></div>
+                <button type="button" class="btn btn-p" onClick="{{sendReq}}" disabled="{{req.bad}}">Enviar solicitud a la DGII</button>
+                <span class="hint" style="grid-column: 1 / -1">{{req.hint}}</span>
+              </div>
+            </sc-if>
+            <sc-if value="{{hasReqs}}" hint-placeholder-val="{{false}}">
+              <div style="padding: 12px 20px; border-bottom: 1px solid #EEF0F2; display: flex; flex-direction: column; gap: 8px">
+                <b style="font-size: 13.5px; color: #111827">Solicitudes enviadas</b>
+                <sc-for list="{{reqs}}" as="q" hint-placeholder-count="1">
+                  <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; font-size: 13.5px">
+                    <span class="mono">{{q.id}}</span><span>E{{q.tipo}} · {{q.cant}} comprobantes</span><span class="{{q.cls}}">{{q.estado}}</span><span class="hint">{{q.fecha}}</span>
+                    <sc-if value="{{q.pending}}" hint-placeholder-val="{{true}}"><button type="button" class="btn btn-g btn-sm" onClick="{{q.check}}">Consultar estado</button></sc-if>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+            <div class="tw">
+              <table class="tbl" style="min-width: 760px">
+                <thead><tr><th>Tipo de e-CF</th><th>Rango autorizado</th><th class="num">Usados</th><th class="num">Disponibles</th><th style="width: 22%">Consumo</th><th>Vence</th></tr></thead>
+                <tbody>
+                  <sc-for list="{{seqs}}" as="s" hint-placeholder-count="9">
+                    <tr>
+                      <td><span class="chip mono" style="margin-right: 8px">E{{s.t}}</span>{{s.n}}</td>
+                      <td class="mono mut">{{s.r}}</td>
+                      <td class="num">{{s.u}}</td>
+                      <td class="num" style="font-weight: 600; color: {{s.color}}">{{s.d}}</td>
+                      <td><div style="display: flex; align-items: center; gap: 8px"><div class="{{s.pb}}" style="flex: 1"><span style="width: {{s.pct}}"></span></div><span class="hint" style="width: 42px; text-align: right">{{s.pct}}</span></div></td>
+                      <td class="mut">{{s.v}}</td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section id="inventario" class="card">
+            <div class="card-h"><h2>Método de valuación de inventario</h2></div>
+            <div class="card-b" style="display: flex; flex-direction: column; gap: 12px">
+              <div class="seg" role="group" aria-label="Método de inventario">
+                <button type="button" class="{{invProm}}" onClick="{{setProm}}">Promedio ponderado</button>
+                <button type="button" class="{{invPeps}}" onClick="{{setPeps}}">PEPS (primeras entradas, primeras salidas)</button>
+              </div>
+              <span class="hint">El método debe aplicarse de forma consistente en todo el ejercicio fiscal. Un cambio aplica a partir del próximo ejercicio y requiere autorización de la DGII.</span>
+            </div>
+          </section>
+
+          <section id="envio" class="card">
+            <div class="card-h"><h2>Envío automático al cliente</h2><span class="hint">Solo se envían comprobantes Aceptados o Aceptados condicional</span></div>
+            <div class="card-b" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px">
+              <div style="border: 1px solid #E5E7EB; border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+                <div style="display: flex; justify-content: space-between; align-items: center">
+                  <div style="display: flex; gap: 10px; align-items: center"><span style="width: 34px; height: 34px; border-radius: 9px; background: #DCFCE7; color: #15803D; display: grid; place-items: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 11.5a8.5 8.5 0 0 1-12.6 7.4L3 20.5l1.6-4.7a8.5 8.5 0 1 1 15.9-4.3z"></path></svg></span><b style="color: #111827">WhatsApp Business</b></div>
+                  <span class="bd b-acep">Conectado</span>
+                </div>
+                <dl class="kv"><dt>Número</dt><dd>+1 809-555-0142</dd><dt>Enviados este mes</dt><dd>1,326</dd></dl>
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px"><span style="font-size: 13.5px">Enviar al ser aceptada por la DGII</span><button type="button" class="{{waCls}}" onClick="{{toggleWa}}" aria-pressed="{{wa}}" aria-label="Envío automático por WhatsApp"></button></div>
+                <div style="background: #F0FDF4; border-radius: 10px 10px 10px 2px; padding: 10px 12px; font-size: 13px; color: #14532D; line-height: 1.5">Hola, Constructora Hispaniola. Le compartimos su factura <b>E310000000131</b> por RD$ 1,284,560.00. PDF adjunto. — Caribe Verde</div>
+                <button type="button" class="btn btn-o btn-sm" onClick="{{act.wa}}">Desconectar</button>
+              </div>
+              <div style="border: 1px solid #E5E7EB; border-radius: 10px; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+                <div style="display: flex; justify-content: space-between; align-items: center">
+                  <div style="display: flex; gap: 10px; align-items: center"><span style="width: 34px; height: 34px; border-radius: 9px; background: #EFF6FF; color: #1D4ED8; display: grid; place-items: center"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 7 9 6 9-6"></path></svg></span><b style="color: #111827">Correo electrónico</b></div>
+                  <span class="bd b-acep">Dominio verificado</span>
+                </div>
+                <div class="fld"><label class="lbl" for="from">Remitente</label><input id="from" class="inp" value="facturacion@caribeverde.do"></div>
+                <div class="fld"><label class="lbl" for="cc">Copia oculta (CCO)</label><input id="cc" class="inp" value="contabilidad@caribeverde.do"></div>
+                <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px"><span style="font-size: 13.5px">Adjuntar PDF y XML firmado</span><button type="button" class="{{mailCls}}" onClick="{{toggleMail}}" aria-pressed="{{mail}}" aria-label="Envío automático por correo"></button></div>
+                <button type="button" class="btn btn-o btn-sm" onClick="{{act.mail}}">Enviar correo de prueba</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+  <sc-if value="{{fxOn}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite" style="top: 150px"><div class="toast">
+      <span class="ti" style="background: #E6F4F2; color: #0F766E"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+      <div style="flex: 1; min-width: 0"><b>{{fxMsg}}</b></div>
+      <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{fxClose}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div></div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1800}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = this.state || {};
+    const amb = st.amb || 'Producción';
+    const A = [['Pruebas', 'TesteCF · simulación sin validez fiscal'], ['Certificación', 'CerteCF · proceso para ser emisor electrónico'], ['Producción', 'eCF · comprobantes con validez fiscal']];
+    const ambientes = A.map(([label, desc]) => { const on = label === amb; return { label, desc, on,
+      border: on ? '1px solid #0F766E' : '1px solid #E5E7EB', bg: on ? '#F0FAF9' : '#fff', dot: on ? '5px solid #0F766E' : '1.5px solid #D1D5DB',
+      pick: () => this.setState({ amb: label }) }; });
+    const S = [
+      ['31', 'Crédito fiscal', 'E310000000001 – E310000005000', 131, 5000, '31/12/2027'],
+      ['32', 'Consumo', 'E320000000001 – E320000050000', 48760, 50000, '31/12/2027'],
+      ['33', 'Nota de débito', 'E330000000001 – E330000000500', 6, 500, '31/12/2027'],
+      ['34', 'Nota de crédito', 'E340000000001 – E340000001000', 27, 1000, '31/12/2027'],
+      ['41', 'Compras', 'E410000000001 – E410000000500', 57, 500, '31/12/2027'],
+      ['43', 'Gastos menores', 'E430000000001 – E430000000500', 412, 500, '31/12/2027'],
+      ['44', 'Regímenes especiales', 'E440000000001 – E440000000200', 14, 200, '31/12/2027'],
+      ['45', 'Gubernamental', 'E450000000001 – E450000000200', 18, 200, '31/12/2027'],
+      ['46', 'Exportaciones', 'E460000000001 – E460000000200', 9, 200, '31/12/2027']
+    ];
+    const extra = st.extra || {};
+    const seqs = S.map(([t, n, r0, u, tot0, v]) => { const tot = tot0 + (extra[t] || 0); const r = 'E' + t + '0000000001 – E' + t + String(tot).padStart(10, '0'); const p = u / tot * 100; return { t, n, r, v,
+      u: u.toLocaleString('en-US'), avail: tot - u, d: (tot - u).toLocaleString('en-US'), pct: (p < 10 ? p.toFixed(1) : Math.round(p)) + '%',
+      pb: p >= 90 ? 'pb bad' : p >= 75 ? 'pb warn' : 'pb', color: p >= 90 ? '#B91C1C' : p >= 75 ? '#B45309' : '#111827' }; });
+    const peps = st.inv === 'peps';
+    const wa = st.wa !== false, mail = st.mail !== false;
+    const FX = {"save": "Configuración guardada", "seq": "Solicitud de secuencias enviada a la DGII · respuesta en 24-48 horas", "wa": "WhatsApp Business desconectado", "mail": "Correo de prueba enviado a facturacion@caribeverde.do", "file": "Selector de archivos abierto (simulado): elija un archivo .p12"};
+    const act = {};
+    Object.keys(FX).forEach(k => { act[k] = () => this.setState({ fx: FX[k] }); });
+    // --- secuencias
+    const reqs = st.reqs || [];
+    const rq = { tipo: st.rTipo || '32', cant: st.rCant ?? 50000, just: st.rJust ?? 'Secuencia de consumo próxima a agotarse' };
+    const rs = seqs.find(x => x.t === rq.tipo);
+    // --- certificado
+    const up = st.up || null;
+    const pw = st.pw || '';
+    const cert = st.newCert ? { file: st.newCert, desde: '23/10/2026', vence: '23/10/2028', venceColor: '#166534', badge: 'Vigente · vence en 731 días', badgeCls: 'bd b-acep', pb: 'pb', pct: '0%', pctTxt: '0% de la vigencia consumida' }
+      : { file: 'caribeverde_firma_2025.p12', desde: '15/12/2025', vence: '14/12/2026', venceColor: '#92400E', badge: 'Vence en 52 días', badgeCls: 'bd b-proc', pb: 'pb warn', pct: '86%', pctTxt: '86% de la vigencia consumida' };
+    const takeFile = file => {
+      if (!file) return;
+      if (!/\.(p12|pfx)$/i.test(file.name)) { this.setState({ up: null, upErr: 'El archivo «' + file.name + '» no es un certificado. Seleccione un archivo .p12 o .pfx.', upOk: '' }); return; }
+      this.setState({ up: { name: file.name, size: (file.size / 1024).toFixed(1) + ' KB' }, upErr: '', upOk: '' });
+    };
+    const busy = !!st.validating;
+    return {
+      cert, pw, setPw: e => this.setState({ pw: e.target.value, upErr: '' }),
+      up: { title: up ? up.name : 'Cargar nuevo certificado .p12', hint: up ? up.size + ' · listo para validar' : 'Arrastre el archivo aquí o haga clic para seleccionarlo',
+        border: st.drag ? '#0F766E' : up ? '#14B8A6' : '#CBD5E1', bg: st.drag ? '#E6F4F2' : up ? '#F0FAF9' : 'transparent',
+        err: st.upErr || '', ok: st.upOk || '', hasFile: !!up, cant: !up || busy, btn: busy ? 'Validando con la DGII…' : 'Validar y cargar certificado' },
+      pickFile: e => takeFile(e.target.files && e.target.files[0]),
+      dragOver: e => { e.preventDefault(); if (!st.drag) this.setState({ drag: true }); },
+      dragLeave: () => this.setState({ drag: false }),
+      dropFile: e => { e.preventDefault(); this.setState({ drag: false }); takeFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]); },
+      clearFile: () => this.setState({ up: null, upErr: '', upOk: '' }),
+      uploadCert: () => {
+        if (pw.length < 4) { this.setState({ upErr: 'Escriba la contraseña del certificado (mínimo 4 caracteres).' }); return; }
+        this.setState({ validating: true, upErr: '' });
+        setTimeout(() => this.setState({ validating: false, newCert: up.name, up: null, pw: '', upOk: 'Certificado validado: titular Distribuidora Caribe Verde, SRL (RNC 131897542). Ya se usa para firmar los nuevos e-CF.', fx: 'Nuevo certificado cargado y activo' }), 1600);
+      },
+      reqOpen: !!st.reqOpen, reqLabel: st.reqOpen ? 'Cerrar' : 'Solicitar secuencias', toggleReq: () => this.setState({ reqOpen: !st.reqOpen }),
+      req: { tipo: rq.tipo, cant: rq.cant, just: rq.just, bad: !(rq.cant > 0) || !rq.just.trim(),
+        hint: rs ? 'E' + rs.t + ' tiene ' + rs.d + ' disponibles (' + rs.pct + ' usado). La DGII responde en 24 a 48 horas por la Oficina Virtual.' : '' },
+      setReqTipo: e => this.setState({ rTipo: e.target.value }), setReqCant: e => this.setState({ rCant: Number(e.target.value) || 0 }), setReqJust: e => this.setState({ rJust: e.target.value }),
+      sendReq: () => this.setState({ reqOpen: false, reqs: [{ id: 'SOL-2026-' + String(1041 + reqs.length), tipo: rq.tipo, cant: rq.cant, estado: 'En revisión', fecha: 'Enviada 23/10/2026' }].concat(reqs), fx: 'Solicitud de ' + rq.cant.toLocaleString('en-US') + ' secuencias E' + rq.tipo + ' enviada a la DGII' }),
+      hasReqs: reqs.length > 0,
+      reqs: reqs.map((q, i) => ({ ...q, cant: q.cant.toLocaleString('en-US'), pending: q.estado === 'En revisión', cls: q.estado === 'Aprobada' ? 'bd b-acep' : 'bd b-proc',
+        check: () => this.setState({ reqs: reqs.map((x, j) => j === i ? { ...x, estado: 'Aprobada', fecha: 'Aprobada 23/10/2026 · vence 31/12/2027' } : x), extra: { ...extra, [q.tipo]: (extra[q.tipo] || 0) + q.cant }, fx: 'DGII aprobó ' + q.cant.toLocaleString('en-US') + ' secuencias E' + q.tipo + ' · rango ampliado' }) })),
+      act, fxOn: !!(this.state || {}).fx, fxMsg: (this.state || {}).fx || '', fxClose: () => this.setState({ fx: '' }),
+      ambientes, ambLabel: amb, notProd: amb !== 'Producción', seqs,
+      invProm: peps ? '' : 'on', invPeps: peps ? 'on' : '',
+      setProm: () => this.setState({ inv: 'prom' }), setPeps: () => this.setState({ inv: 'peps' }),
+      wa, mail, waCls: wa ? 'sw on' : 'sw', mailCls: mail ? 'sw on' : 'sw',
+      toggleWa: () => this.setState({ wa: !wa }), toggleMail: () => this.setState({ mail: !mail })
+    };
+  }
+}
+</script>
+</body>
+</html>

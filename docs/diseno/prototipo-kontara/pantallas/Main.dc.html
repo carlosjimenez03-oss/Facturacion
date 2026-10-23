@@ -1,0 +1,316 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Inicio · Dashboard</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="inicio" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,64px"></dc-import>
+    <div class="content">
+      <div class="ph">
+        <div>
+          <h1>Buenos días, María</h1>
+          <p>Resumen de Distribuidora Caribe Verde · octubre 2026 (al viernes 23)</p>
+        </div>
+        <div class="row">
+          <a href="Compra.dc.html" class="btn btn-o">Registrar compra</a>
+          <a href="NuevaFactura.dc.html" class="btn btn-p"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Nueva factura</a>
+        </div>
+      </div>
+
+      <sc-if value="{{obShow}}" hint-placeholder-val="{{true}}">
+        <div style="display: flex; flex-direction: column; gap: 12px">
+          <div><h2 style="margin: 0; font-size: 18px; font-weight: 650; color: #111827">Funciones sugeridas</h2><p style="margin: 4px 0 0; color: #6B7280; font-size: 14px">Basados en tus necesidades, hemos preparado estas funciones ideales para ti.</p></div>
+          <section class="card" style="display: flex; flex-wrap: wrap; overflow: hidden">
+            <div style="flex: 0 1 280px; min-width: 240px; padding: 14px; border-right: 1px solid #E5E7EB; display: flex; flex-direction: column; gap: 4px">
+              <sc-for list="{{steps}}" as="s" hint-placeholder-count="5">
+                <button type="button" onClick="{{s.pick}}" aria-pressed="{{s.on}}" style="display: flex; align-items: flex-start; gap: 12px; padding: 11px 12px; border: 0; border-radius: 8px; background: {{s.bg}}; font: inherit; text-align: left; cursor: pointer">
+                  <sc-if value="{{s.done}}" hint-placeholder-val="{{false}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#15803D" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex: none; margin-top: 1px"><circle cx="12" cy="12" r="9"></circle><path d="m8.5 12 2.5 2.5 4.5-5"></path></svg></sc-if>
+                  <sc-if value="{{s.todo}}" hint-placeholder-val="{{true}}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{{s.ring}}" stroke-width="2" stroke-dasharray="3 3" aria-hidden="true" style="flex: none; margin-top: 1px"><circle cx="12" cy="12" r="9"></circle></svg></sc-if>
+                  <span style="font-size: 14px; font-weight: 500; color: {{s.color}}; text-decoration: {{s.deco}}">{{s.label}}</span>
+                </button>
+              </sc-for>
+              <span class="hint" style="padding: 8px 12px 2px"><b style="color: #0F766E">{{doneCount}}</b> de 5 funcionalidades completadas</span>
+            </div>
+            <div style="flex: 1 1 420px; padding: 24px 32px; position: relative; display: flex; flex-direction: column; justify-content: center; gap: 10px; min-height: 230px">
+              <button type="button" onClick="{{hideOb}}" style="position: absolute; top: 12px; right: 16px; border: 0; background: none; color: #6B7280; font: inherit; font-size: 12.5px; text-decoration: underline; cursor: pointer">Ocultar</button>
+              <span style="color: #0F766E"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6M12 11v7M10 13h3a1 1 0 0 1 0 2h-2a1 1 0 0 0 0 2h3"></path></svg></span>
+              <h3 style="margin: 0; font-size: 19px; font-weight: 650; color: #111827">{{step.title}}</h3>
+              <p style="margin: 0; color: #374151; font-size: 14px">{{step.desc}}</p>
+              <div class="row" style="margin-top: 8px">
+                <a href="{{step.href}}" class="btn" style="background: #2BA89D; color: #fff; height: 44px; padding: 0 22px">{{step.cta}} <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></a>
+                <sc-if value="{{step.todo}}" hint-placeholder-val="{{true}}"><button type="button" class="btn btn-g" onClick="{{markDone}}">Marcar como completada</button></sc-if>
+              </div>
+            </div>
+          </section>
+        </div>
+      </sc-if>
+      <sc-if value="{{obHidden}}" hint-placeholder-val="{{false}}">
+        <button type="button" onClick="{{showOb}}" class="btn btn-o btn-sm" style="align-self: flex-start">Mostrar funciones sugeridas ({{doneCount}} de 5)</button>
+      </sc-if>
+
+      <div class="ph" style="align-items: center">
+        <h2 style="margin: 0; font-size: 18px; font-weight: 650; color: #111827">Resumen del negocio</h2>
+        <div class="row">
+          <select class="inp" aria-label="Período del resumen" value="{{periodo}}" onChange="{{setPeriodo}}" style="width: auto; min-width: 150px"><option>Mes actual</option><option>Mes anterior</option><option>Últimos 3 meses</option><option>Año en curso</option></select>
+          <div class="pw">
+            <button type="button" class="btn" style="background: #2BA89D; color: #fff" onClick="{{toggleAdd}}" aria-expanded="{{addOpen}}">Agregar gráfica <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
+            <sc-if value="{{addOpen}}" hint-placeholder-val="{{false}}">
+              <div class="pop" style="width: 260px"><div class="pop-sec">
+                <sc-for list="{{extras}}" as="x" hint-placeholder-count="3"><button type="button" class="pop-i" onClick="{{x.toggle}}"><span style="width: 18px; height: 18px; border-radius: 5px; border: 1.5px solid #0F766E; background: {{x.bg}}; display: grid; place-items: center; flex: none; color: #fff; font-size: 12px">{{x.mark}}</span>{{x.label}}</button></sc-for>
+              </div></div>
+            </sc-if>
+          </div>
+        </div>
+      </div>
+      <sc-if value="{{periodNote}}" hint-placeholder-val="{{false}}"><div class="al al-i"><span>Mostrando datos de <b>{{periodo}}</b>. Las cifras de ejemplo se mantienen para el prototipo.</span></div></sc-if>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px">
+        <div class="card stat">
+          <span class="k">Ventas del mes</span>
+          <span class="v">RD$ 4,872,350.00</span>
+          <span class="s"><span class="up">▲ 12.4%</span> vs. septiembre</span>
+        </div>
+        <div class="card stat">
+          <span class="k">ITBIS por pagar <span class="tip" data-tip="Impuesto a las Transferencias de Bienes Industrializados y Servicios: ITBIS facturado menos ITBIS adelantado en compras. Se declara en el IT-1 antes del día 20."><button type="button" class="info" aria-label="Qué es el ITBIS por pagar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></button></span></span>
+          <span class="v">RD$ 163,235.34</span>
+          <span class="s">Pre-cálculo IT-1 · vence 20 nov</span>
+        </div>
+        <div class="card stat">
+          <span class="k">Retenciones por pagar <span class="tip" data-tip="ISR e ITBIS retenidos a proveedores. El ISR se paga en el IR-17 (día 10) y el ITBIS retenido en el IT-1 (día 20)."><button type="button" class="info" aria-label="Qué son las retenciones por pagar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></button></span></span>
+          <span class="v">RD$ 96,480.00</span>
+          <span class="s">ISR 58,030.00 · ITBIS 38,450.00</span>
+        </div>
+        <div class="card stat">
+          <span class="k">Cuentas por cobrar</span>
+          <span class="v">RD$ 2,315,780.45</span>
+          <span class="s">38 facturas · <span class="down">6 vencidas</span></span>
+        </div>
+        <div class="card stat">
+          <span class="k">Cuentas por pagar</span>
+          <span class="v">RD$ 1,104,920.10</span>
+          <span class="s">21 facturas · 4 vencen esta semana</span>
+        </div>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: stretch">
+        <section class="card" style="flex: 2 1 560px">
+          <div class="card-h">
+            <div>
+              <h2>Ventas de los últimos 6 meses</h2>
+              <span class="hint">Total facturado con ITBIS incluido, en millones de RD$</span>
+            </div>
+            <div class="seg" role="group" aria-label="Agrupar ventas">
+              <button type="button" class="{{segMes}}" onClick="{{viewMes}}">Mensual</button>
+              <button type="button" class="{{segTipo}}" onClick="{{viewTipo}}">Por tipo de e-CF</button>
+            </div>
+          </div>
+          <sc-if value="{{chartTipo}}" hint-placeholder-val="{{false}}">
+            <div class="card-b" style="display: flex; flex-direction: column; gap: 14px; min-height: 300px; justify-content: center">
+              <sc-for list="{{porTipo}}" as="p" hint-placeholder-count="5">
+                <div style="display: flex; align-items: center; gap: 12px; font-size: 13.5px"><span style="width: 150px; flex: none">{{p.t}}</span><div class="pb" style="flex: 1; height: 14px"><span style="width: {{p.w}}"></span></div><span class="num" style="width: 120px; font-weight: 600">{{p.v}}</span></div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{chartMes}}" hint-placeholder-val="{{true}}">
+          <div class="card-b">
+            <div role="img" aria-label="Ventas mensuales de mayo a octubre de 2026: de 3.62 a 4.87 millones de pesos" style="display: flex; gap: 18px; height: 260px; align-items: stretch; padding-top: 8px; border-bottom: 1px solid #E5E7EB">
+              <sc-for list="{{months}}" as="m" hint-placeholder-count="6">
+                <div style="flex: 1 1 0; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 8px; min-width: 0">
+                  <span style="font-size: 12.5px; font-weight: 600; color: #111827; font-variant-numeric: tabular-nums">{{m.label}}</span>
+                  <div style="width: 100%; max-width: 64px; height: {{m.h}}; background: {{m.color}}; border-radius: 6px 6px 0 0"></div>
+                </div>
+              </sc-for>
+            </div>
+            <div style="display: flex; gap: 18px; padding-top: 10px">
+              <sc-for list="{{months}}" as="m" hint-placeholder-count="6">
+                <span style="flex: 1 1 0; text-align: center; font-size: 12.5px; color: #6B7280">{{m.name}}</span>
+              </sc-for>
+            </div>
+          </div>
+          </sc-if>
+        </section>
+
+        <section class="card" style="flex: 1 1 320px">
+          <div class="card-h"><h2>Fechas límite fiscales</h2><span class="chip">Noviembre 2026</span></div>
+          <div class="card-b" style="display: flex; flex-direction: column; gap: 14px">
+            <sc-for list="{{fechas}}" as="f" hint-placeholder-count="4">
+              <div style="display: flex; gap: 14px; align-items: center">
+                <div style="width: 48px; height: 52px; border-radius: 10px; border: 1px solid #E5E7EB; display: flex; flex-direction: column; align-items: center; justify-content: center; flex: none">
+                  <span style="font-size: 10.5px; font-weight: 600; color: #6B7280; text-transform: uppercase">{{f.mes}}</span>
+                  <span style="font-size: 19px; font-weight: 700; color: #111827; line-height: 1.1">{{f.dia}}</span>
+                </div>
+                <div style="flex: 1; min-width: 0">
+                  <div style="font-weight: 600; color: #111827; font-size: 14px">{{f.form}}</div>
+                  <div class="hint">{{f.desc}}</div>
+                </div>
+                <span class="{{f.cls}}">{{f.estado}}</span>
+              </div>
+            </sc-for>
+            <div class="al al-s" style="padding: 10px 12px; font-size: 12.5px">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>
+              <span>Período septiembre: IR-17, 606, 607, 608 e IT-1 presentados a tiempo.</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+        <section class="card" style="flex: 2 1 560px">
+          <div class="card-h"><h2>Últimas facturas</h2><a href="Facturas.dc.html" style="font-size: 13.5px; font-weight: 600; text-decoration: none">Ver todas →</a></div>
+          <div class="tw">
+            <table class="tbl">
+              <thead><tr><th>e-NCF</th><th>Cliente</th><th>Fecha</th><th class="num">Total (RD$)</th><th>Estado DGII</th></tr></thead>
+              <tbody>
+                <sc-for list="{{facturas}}" as="r" hint-placeholder-count="6">
+                  <tr>
+                    <td><a href="{{r.href}}" class="mono" style="text-decoration: none; font-weight: 500">{{r.encf}}</a></td>
+                    <td style="color: #111827">{{r.cliente}}</td>
+                    <td class="mut">{{r.fecha}}</td>
+                    <td class="num" style="font-weight: 600; color: #111827">{{r.total}}</td>
+                    <td><span class="{{r.cls}}">{{r.estado}}</span><sc-if value="{{r.motivo}}" hint-placeholder-val="{{false}}"><div style="margin-top: 4px; font-size: 12px; color: #B91C1C">{{r.motivo}}</div></sc-if></td>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="card" style="flex: 1 1 320px">
+          <div class="card-h"><h2>Alertas</h2><span class="chip" style="background: #FEE2E2; color: #B91C1C">5 activas</span></div>
+          <div class="card-b" style="display: flex; flex-direction: column; gap: 12px">
+            <div class="al al-w">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+              <div><b>Certificado digital vence en 52 días</b><br>El certificado .p12 de firma vence el 14 dic 2026. Renuévelo para no detener la emisión. <a href="Configuracion.dc.html">Renovar</a></div>
+            </div>
+            <div class="al al-d">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M4 12h10M4 17h6"></path></svg>
+              <div><b>Secuencia E32 casi agotada</b><br>Quedan 1,240 de 50,000 e-NCF de Consumo (97.5% usado). <a href="Configuracion.dc.html">Solicitar nueva secuencia</a></div>
+            </div>
+            <div style="border: 1px solid #E5E7EB; border-radius: 10px">
+              <div style="padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #F0F1F3">
+                <b style="font-size: 13.5px; color: #111827">Bajo stock</b><a href="Kardex.dc.html" style="font-size: 12.5px; font-weight: 600; text-decoration: none">Ver inventario</a>
+              </div>
+              <sc-for list="{{stock}}" as="s" hint-placeholder-count="3">
+                <div style="padding: 10px 14px; display: flex; flex-direction: column; gap: 6px; border-bottom: 1px solid #F5F6F7">
+                  <div style="display: flex; justify-content: space-between; gap: 8px; font-size: 13px"><span style="color: #111827">{{s.prod}}</span><span style="font-weight: 600; color: #B91C1C; white-space: nowrap">{{s.qty}}</span></div>
+                  <div class="pb bad"><span style="width: {{s.pct}}"></span></div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </section>
+      </div>
+      <sc-if value="{{showTipo}}" hint-placeholder-val="{{false}}">
+        <section class="card">
+          <div class="card-h"><h2>Ventas por tipo de e-CF</h2><span class="hint">Octubre 2026</span></div>
+          <div class="card-b" style="display: flex; flex-direction: column; gap: 12px">
+            <sc-for list="{{porTipo}}" as="p" hint-placeholder-count="5">
+              <div style="display: flex; align-items: center; gap: 12px; font-size: 13.5px"><span style="width: 160px; flex: none">{{p.t}}</span><div class="pb" style="flex: 1; height: 10px"><span style="width: {{p.w}}"></span></div><span class="num" style="width: 130px; font-weight: 600">{{p.v}}</span></div>
+            </sc-for>
+          </div>
+        </section>
+      </sc-if>
+      <sc-if value="{{showTop}}" hint-placeholder-val="{{false}}">
+        <section class="card">
+          <div class="card-h"><h2>Productos más vendidos</h2><a href="Kardex.dc.html" style="font-size: 13.5px; font-weight: 600; text-decoration: none">Ver inventario →</a></div>
+          <div class="tw"><table class="tbl"><thead><tr><th>Producto</th><th class="num">Unidades</th><th class="num">Ventas (RD$)</th></tr></thead><tbody>
+            <tr><td>Cemento gris Portland 42.5 kg</td><td class="num">2,290</td><td class="num">1,186,330.00</td></tr>
+            <tr><td>Varilla corrugada 3/8" × 20'</td><td class="num">3,140</td><td class="num">894,900.00</td></tr>
+            <tr><td>Block de hormigón 6"</td><td class="num">9,800</td><td class="num">539,000.00</td></tr>
+          </tbody></table></div>
+        </section>
+      </sc-if>
+    </div>
+  </main>
+  <sc-if value="{{showToast}}" hint-placeholder-val="{{true}}">
+    <div class="toasts" role="status" aria-live="polite">
+      <div class="toast">
+        <span class="ti" style="background: #DCFCE7; color: #166534"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+        <div style="flex: 1; min-width: 0"><b>Factura aceptada por la DGII</b><span class="mut">E310000000131 · Constructora Hispaniola · RD$ 1,284,560.00. Enviada al cliente por correo.</span></div>
+        <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{closeToast}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1320}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = this.state || {};
+    const data = [['May', 3.62], ['Jun', 3.95], ['Jul', 3.48], ['Ago', 4.21], ['Sep', 4.33], ['Oct', 4.87]];
+    const max = 5.2;
+    const months = data.map(([name, v], i) => ({
+      name, label: v.toFixed(2) + 'M',
+      h: Math.round((v / max) * 210) + 'px',
+      color: i === data.length - 1 ? '#0F766E' : '#99D5CE'
+    }));
+    const OB = [
+      ['Facturación electrónica', 'Facturación electrónica activa', 'Tu empresa ya emite e-CF en Producción. Revisa el certificado, el ambiente y tus secuencias cuando lo necesites.', 'Configuracion.dc.html', 'Revisar configuración', true],
+      ['Crea tu primera factura', 'Crea tu primera factura', 'Emite un e-CF de crédito fiscal o consumo y envíalo a la DGII en segundos.', 'NuevaFactura.dc.html', 'Crear factura', true],
+      ['Organiza tu inventario', 'Organiza tu inventario', 'Controla existencias y costos con el Kardex valorizado por promedio ponderado o PEPS.', 'Kardex.dc.html', 'Ver inventario', true],
+      ['Añade tus contactos', 'Añade tus contactos', 'Registra clientes y proveedores con su RNC o cédula y verifica su estado en el padrón de la DGII.', 'Contactos.dc.html', 'Agregar contactos', false],
+      ['Administra usuarios y roles', 'Administra usuarios y roles', 'Invita a tu contador y a tu equipo con permisos por módulo: facturación, compras, impuestos.', 'Configuracion.dc.html', 'Invitar usuarios', false]
+    ];
+    const doneMap = st.done || {};
+    const sel = st.step ?? 3;
+    const steps = OB.map(([label, , , , , d0], i) => { const done = d0 || !!doneMap[i]; const on = i === sel; return { label, done, todo: !done, on,
+      bg: on ? '#E6F4F2' : 'transparent', color: done ? '#6B7280' : on ? '#0F766E' : '#374151', deco: done ? 'line-through' : 'none', ring: on ? '#0F766E' : '#6B7280',
+      pick: () => this.setState({ step: i }) }; });
+    const so = OB[sel];
+    const per = st.periodo || 'Mes actual';
+    const ex = st.extras || {};
+    const extras = [['tipo', 'Ventas por tipo de e-CF'], ['top', 'Productos más vendidos']].map(([k, label]) => ({ label, mark: ex[k] ? '✓' : '', bg: ex[k] ? '#0F766E' : '#fff', toggle: () => this.setState({ extras: { ...ex, [k]: !ex[k] } }) }));
+    const PT = [['31 · Crédito fiscal', 2412540], ['32 · Consumo', 612480.25], ['45 · Gubernamental', 812300], ['46 · Exportaciones', 766279.75], ['Otros (33, 34, 44)', 268750]];
+    const porTipo = PT.map(([t, v]) => ({ t, v: v.toLocaleString('en-US', { minimumFractionDigits: 2 }), w: Math.round(v / 2412540 * 100) + '%' }));
+    const tipoView = st.view === 'tipo';
+    const B = { acep: 'bd b-acep', proc: 'bd b-proc', rech: 'bd b-rech', pend: 'bd b-pend', env: 'bd b-env', cond: 'bd b-cond' };
+    return {
+      months,
+      steps, step: { title: so[1], desc: so[2], href: so[3], cta: so[4], todo: !(so[5] || doneMap[sel]) },
+      doneCount: steps.filter(x => x.done).length, obShow: !st.obHide, obHidden: !!st.obHide,
+      hideOb: () => this.setState({ obHide: true }), showOb: () => this.setState({ obHide: false }),
+      markDone: () => this.setState({ done: { ...doneMap, [sel]: true } }),
+      periodo: per, setPeriodo: e => this.setState({ periodo: e.target.value }), periodNote: per !== 'Mes actual',
+      addOpen: !!st.addOpen, toggleAdd: () => this.setState({ addOpen: !st.addOpen }), extras, porTipo,
+      showTipo: !!ex.tipo, showTop: !!ex.top,
+      chartTipo: tipoView, chartMes: !tipoView, segMes: tipoView ? '' : 'on', segTipo: tipoView ? 'on' : '',
+      viewMes: () => this.setState({ view: 'mes' }), viewTipo: () => this.setState({ view: 'tipo' }),
+      fechas: [
+        { mes: 'Nov', dia: '10', form: 'IR-17', desc: 'Retenciones de ISR de octubre', estado: 'En 18 días', cls: 'chip' },
+        { mes: 'Nov', dia: '16', form: 'Formatos 606 · 607 · 608', desc: 'El 15 cae domingo: se traslada al lunes', estado: 'En 24 días', cls: 'chip' },
+        { mes: 'Nov', dia: '20', form: 'IT-1', desc: 'Declaración y pago de ITBIS', estado: 'En 28 días', cls: 'chip' },
+        { mes: 'Dic', dia: '14', form: 'Certificado digital', desc: 'Vencimiento del .p12 de firma', estado: 'Renovar', cls: 'bd b-proc nodot' }
+      ],
+      facturas: [
+        { encf: 'E310000000131', cliente: 'Constructora Hispaniola, SRL', fecha: '23/10/2026', total: '1,284,560.00', estado: 'Aceptada', cls: B.acep, motivo: '', href: 'DetalleFactura.dc.html' },
+        { encf: 'E320000004587', cliente: 'Consumidor final', fecha: '23/10/2026', total: '4,850.00', estado: 'Pendiente de sincronizar', cls: B.pend, motivo: '', href: 'DetalleFactura.dc.html' },
+        { encf: 'E310000000130', cliente: 'Supermercado La Cosecha, SRL', fecha: '22/10/2026', total: '356,920.40', estado: 'En proceso', cls: B.proc, motivo: '', href: 'DetalleFactura.dc.html' },
+        { encf: 'E450000000018', cliente: 'Ayuntamiento Municipal de Moca', fecha: '22/10/2026', total: '812,300.00', estado: 'Aceptada condicional', cls: B.cond, motivo: '', href: 'DetalleFactura.dc.html' },
+        { encf: 'E310000000129', cliente: 'Juan Pablo Méndez Rosario', fecha: '21/10/2026', total: '98,412.00', estado: 'Rechazada', cls: B.rech, motivo: 'Código 145 · RNC del comprador no válido', href: 'DetalleRechazada.dc.html' },
+        { encf: 'E460000000009', cliente: 'Caribbean Fresh Imports LLC', fecha: '20/10/2026', total: '2,145,000.00', estado: 'Enviada', cls: B.env, motivo: '', href: 'DetalleFactura.dc.html' }
+      ],
+      stock: [
+        { prod: 'Cemento gris Portland 42.5 kg', qty: '18 / mín. 50 sacos', pct: '36%' },
+        { prod: 'Varilla corrugada 3/8" × 20\'', qty: '120 / mín. 300', pct: '40%' },
+        { prod: 'Pintura acrílica blanca (galón)', qty: '6 / mín. 24', pct: '25%' }
+      ],
+      showToast: !st.hide,
+      closeToast: () => this.setState({ hide: true })
+    };
+  }
+}
+</script>
+</body>
+</html>

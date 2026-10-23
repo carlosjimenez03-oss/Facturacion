@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Detalle de factura</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="facturas" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,64px"></dc-import>
+    <div class="content">
+      <div class="ph">
+        <div>
+          <div class="crumb"><a href="Facturas.dc.html">Facturas de venta</a><span>/</span><span>{{d.encf}}</span></div>
+          <div class="row" style="gap: 12px">
+            <h1 class="mono" style="font-size: 24px; letter-spacing: -.02em">{{d.encf}}</h1>
+            <span class="{{d.cls}}">{{d.estado}}</span>
+            <span class="chip">31 · Crédito fiscal</span>
+          </div>
+          <p>{{d.cliente}} · Emitida el {{d.fecha}}</p>
+        </div>
+        <div class="row">
+          <button type="button" class="btn btn-o btn-sm" onClick="{{act.pdf}}">PDF</button>
+          <button type="button" class="btn btn-o btn-sm" onClick="{{act.xml}}">XML</button>
+          <sc-if value="{{ok}}" hint-placeholder-val="{{true}}">
+            <button type="button" class="btn btn-o btn-sm" onClick="{{act.wa}}">Enviar por WhatsApp</button>
+            <button type="button" class="btn btn-p btn-sm" onClick="{{act.mail}}">Enviar por correo</button>
+          </sc-if>
+          <sc-if value="{{bad}}" hint-placeholder-val="{{false}}">
+            <span class="tip r" data-tip="Una factura rechazada no tiene validez fiscal y no puede enviarse al cliente."><button type="button" class="btn btn-o btn-sm" disabled>Enviar al cliente</button></span>
+          </sc-if>
+        </div>
+      </div>
+
+      <sc-if value="{{bad}}" hint-placeholder-val="{{false}}">
+        <section class="card" style="border-color: #FECACA; background: #FEF2F2">
+          <div style="padding: 20px 22px; display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start">
+            <span style="width: 40px; height: 40px; border-radius: 10px; background: #FEE2E2; color: #B91C1C; display: grid; place-items: center; flex: none"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M15 9l-6 6M9 9l6 6"></path></svg></span>
+            <div style="flex: 1 1 420px; min-width: 0; display: flex; flex-direction: column; gap: 10px">
+              <div>
+                <h2 style="margin: 0; font-size: 17px; color: #7F1D1D; font-weight: 650">La DGII rechazó este comprobante</h2>
+                <p style="margin: 4px 0 0; color: #991B1B; font-size: 13.5px">Respuesta recibida el 21/10/2026 a las 15:07:44 · Estado 2 (Rechazado)</p>
+              </div>
+              <div style="background: #fff; border: 1px solid #FECACA; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px">
+                <div class="row" style="gap: 10px"><span class="mono" style="font-weight: 600; color: #B91C1C; background: #FEE2E2; padding: 2px 8px; border-radius: 5px">Código 145</span><b style="font-size: 13.5px; color: #111827">RNCComprador no válido</b></div>
+                <span style="font-size: 13.5px; color: #4B5563; line-height: 1.5">La cédula 001-1456789-2 no figura como contribuyente activo en el Registro Nacional de Contribuyentes. Un e-CF tipo 31 (Crédito fiscal) exige un comprador con RNC o cédula activa. Si el cliente no está registrado, emita una factura de Consumo (E32).</span>
+              </div>
+              <div class="row" style="gap: 10px; font-size: 13.5px; color: #7F1D1D">
+                <span class="bd b-rech nodot">Secuencia utilizada</span>
+                <span>La DGII registró <span class="mono">E310000000129</span> como consumido: no puede reutilizarse y se reportará en el 608 con motivo 04.</span>
+              </div>
+            </div>
+            <div style="flex: 0 1 300px; display: flex; flex-direction: column; gap: 8px">
+              <a href="NuevaFactura.dc.html" class="btn btn-p">Corregir y emitir nueva factura</a>
+              <span class="hint" style="text-align: center">Se copiarán los datos y se asignará el e-NCF <span class="mono">E310000000132</span></span>
+              <span class="tip" data-tip="Disponible solo cuando la DGII no registró la secuencia, por ejemplo por un error de firma o de estructura del XML. En este caso la secuencia ya se consumió." style="display: flex"><button type="button" class="btn btn-o" disabled style="width: 100%">Reintentar con la misma secuencia</button></span>
+            </div>
+          </div>
+        </section>
+      </sc-if>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+        <div style="flex: 2 1 600px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+          <section class="card">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr))">
+              <div style="padding: 20px; border-right: 1px solid #EEF0F2">
+                <div class="hint" style="font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px">Emisor</div>
+                <div style="font-weight: 650; color: #111827">Distribuidora Caribe Verde, SRL</div>
+                <div class="mut" style="font-size: 13px; line-height: 1.6">RNC 1-31-89754-2<br>Av. 27 de Febrero 415, Piantini, Santo Domingo, D.N.<br>809-555-0110 · facturacion@caribeverde.do</div>
+              </div>
+              <div style="padding: 20px">
+                <div class="hint" style="font-weight: 600; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px">Cliente</div>
+                <div style="font-weight: 650; color: #111827">{{d.cliente}}</div>
+                <div class="mut" style="font-size: 13px; line-height: 1.6">{{d.idLabel}} {{d.rnc}}<br>{{d.dir}}<br>{{d.contacto}}</div>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-h"><h2>Detalle</h2><span class="hint">Condición: {{d.pago}}</span></div>
+            <div class="tw">
+              <table class="tbl" style="min-width: 640px">
+                <thead><tr><th>Descripción</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Desc.</th><th>ITBIS</th><th class="num">Importe (RD$)</th></tr></thead>
+                <tbody>
+                  <sc-for list="{{d.items}}" as="it" hint-placeholder-count="3">
+                    <tr><td style="color: #111827">{{it.desc}}</td><td class="num">{{it.qty}}</td><td class="num">{{it.price}}</td><td class="num mut">{{it.disc}}</td><td><span class="chip">{{it.tax}}</span></td><td class="num" style="font-weight: 600; color: #111827">{{it.amount}}</td></tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+            <div style="display: flex; justify-content: flex-end; padding: 16px 20px; border-top: 1px solid #EEF0F2">
+              <dl class="kv" style="min-width: 300px; grid-template-columns: 1fr auto">
+                <dt>Subtotal gravado</dt><dd class="num">{{d.gravado}}</dd>
+                <dt>Subtotal exento</dt><dd class="num">{{d.exento}}</dd>
+                <dt>Descuentos</dt><dd class="num">{{d.descuento}}</dd>
+                <dt>ITBIS 18%</dt><dd class="num">{{d.itbis}}</dd>
+                <dt style="font-weight: 650; color: #111827; font-size: 15px; padding-top: 8px; border-top: 1px solid #E5E7EB">Total</dt><dd class="num" style="font-weight: 700; font-size: 17px; padding-top: 8px; border-top: 1px solid #E5E7EB">RD$ {{d.total}}</dd>
+              </dl>
+            </div>
+          </section>
+        </div>
+
+        <div style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+          <section class="card">
+            <div class="card-h"><h2>Proceso DGII</h2><span class="{{d.cls}}">{{d.estado}}</span></div>
+            <ol style="list-style: none; margin: 0; padding: 20px 20px 8px">
+              <sc-for list="{{d.steps}}" as="s" hint-placeholder-count="5">
+                <li style="display: flex; gap: 14px">
+                  <div style="display: flex; flex-direction: column; align-items: center">
+                    <span style="width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; flex: none; background: {{s.bg}}; color: {{s.fg}}">
+                      <sc-if value="{{s.done}}" hint-placeholder-val="{{true}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></sc-if>
+                      <sc-if value="{{s.fail}}" hint-placeholder-val="{{false}}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></sc-if>
+                    </span>
+                    <sc-if value="{{s.line}}" hint-placeholder-val="{{true}}"><span style="width: 2px; flex: 1; min-height: 28px; background: {{s.lineColor}}; margin: 4px 0"></span></sc-if>
+                  </div>
+                  <div style="padding-bottom: 18px; min-width: 0">
+                    <div style="font-weight: 600; color: #111827; font-size: 14px">{{s.title}}</div>
+                    <div class="hint">{{s.time}}</div>
+                    <div style="font-size: 12.5px; color: #4B5563; margin-top: 4px; overflow-wrap: anywhere">{{s.detail}}</div>
+                  </div>
+                </li>
+              </sc-for>
+            </ol>
+          </section>
+          <section class="card">
+            <div class="card-h"><h2>Datos fiscales</h2></div>
+            <dl class="kv card-b">
+              <dt>Track ID</dt><dd class="mono">{{d.track}}</dd>
+              <dt><span class="tip" data-tip="Primeros 6 caracteres del hash de la firma digital. Aparece en la representación impresa junto al QR.">Código de seguridad ⓘ</span></dt><dd class="mono">{{d.codigo}}</dd>
+              <dt>Fecha de firma</dt><dd>{{d.firma}}</dd>
+              <dt>Venc. secuencia</dt><dd>31/12/2027</dd>
+              <dt>Tipo de ingreso</dt><dd>01 · Ingresos por operaciones</dd>
+              <dt>Ambiente</dt><dd><span class="env env-prod" style="height: 22px">Producción</span></dd>
+            </dl>
+          </section>
+        </div>
+      </div>
+    </div>
+  </main>
+  <sc-if value="{{fxOn}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite" style="top: 150px"><div class="toast">
+      <span class="ti" style="background: #E6F4F2; color: #0F766E"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+      <div style="flex: 1; min-width: 0"><b>{{fxMsg}}</b></div>
+      <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{fxClose}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div></div>
+  </sc-if>
+  <sc-if value="{{dlOn}}" hint-placeholder-val="{{false}}">
+    <div class="scrim" style="z-index: 140">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dl-t" style="max-width: 640px">
+        <div class="modal-h"><h3 id="dl-t">{{dlTitle}}</h3></div>
+        <div class="modal-b">
+          <span>{{dlMsg}}</span>
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}">
+            <textarea class="inp mono" readonly rows="10" style="font-size: 12px; white-space: pre" aria-label="Contenido del archivo" value="{{dlText}}"></textarea>
+            <span class="hint">Seleccione el texto (Ctrl+A) y cópielo (Ctrl+C). Para Excel, péguelo en un archivo de texto y guárdelo con la extensión indicada.</span>
+          </sc-if>
+        </div>
+        <div class="modal-f">
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}"><button type="button" class="btn btn-o" onClick="{{dlCopy}}">Copiar contenido</button></sc-if>
+          <button type="button" class="btn btn-p" onClick="{{dlClose}}">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"estado":{"editor":"enum","options":["Aceptada","Rechazada"],"default":"Aceptada"},"$preview":{"width":1440,"height":1320}}'>
+class Component extends DCLogic {
+  ecfNote(msg) {
+    this.setState({ fx: msg, flash: msg });
+  }
+  ecfWins() {
+    const out = [];
+    try { let w = window; for (let i = 0; i < 5 && w; i++) { out.push(w); if (w === w.parent) break; w = w.parent; } } catch (e) {}
+    return out;
+  }
+  async ecfCap(name) {
+    for (const w of this.ecfWins()) {
+      try {
+        if (w.claude && typeof w.claude.use === 'function') {
+          const cap = await Promise.race([w.claude.use(name), new Promise(r => setTimeout(() => r(null), 4000))]);
+          if (cap) return cap;
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+  async ecfSave(filename, data) {
+    this.ecfNote('Preparando ' + filename + '…');
+    const cap = await this.ecfCap('downloads');
+    if (cap) {
+      try {
+        await cap.save({ filename, data: typeof data === 'string' ? data : data });
+        this.ecfNote('Archivo guardado: ' + filename);
+        return true;
+      } catch (e) {
+        const code = e && e.code;
+        if (code === 'declined') { this.ecfNote('Descarga cancelada'); return false; }
+        if (code === 'rate_limited') { this.ecfNote('Ya hay una descarga esperando confirmación'); return false; }
+        if (code === 'rejected_extension' && !/\.txt$/.test(filename)) return this.ecfSave(filename + '.txt', data);
+      }
+    }
+    // Sin capacidad de descarga en este visor: intento directo en la ventana accesible más alta
+    let tried = false;
+    const wins = this.ecfWins().reverse();
+    for (const w of wins) {
+      try {
+        const doc = w.document;
+        const blob = new w.Blob([data], { type: /\.pdf$/.test(filename) ? 'application/pdf' : 'text/plain;charset=utf-8' });
+        const url = w.URL.createObjectURL(blob);
+        const a = doc.createElement('a');
+        a.href = url; a.download = filename; a.style.display = 'none';
+        doc.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => { try { w.URL.revokeObjectURL(url); } catch (e) {} }, 8000);
+        tried = true; break;
+      } catch (e) {}
+    }
+    this.setState({ dl: { name: filename, text: typeof data === 'string' && !/\.pdf$/.test(filename) ? data.replace(/^﻿/, '') : '', tried }, fx: '', flash: '' });
+    return false;
+  }
+  async ecfCopy(text, label) {
+    let ok = false;
+    for (const w of this.ecfWins()) {
+      try { await w.navigator.clipboard.writeText(text); ok = true; break; } catch (e) {}
+    }
+    if (!ok) {
+      for (const w of this.ecfWins()) {
+        try {
+          const d = w.document; const t = d.createElement('textarea');
+          t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.top = '-1000px';
+          d.body.appendChild(t); t.select(); ok = d.execCommand('copy'); t.remove();
+          if (ok) break;
+        } catch (e) {}
+      }
+    }
+    if (ok) this.ecfNote(label || 'Copiado al portapapeles');
+    else this.setState({ dl: { name: 'Copiar manualmente', text, tried: false, copy: true }, fx: '', flash: '' });
+    return ok;
+  }
+  ecfCsv(rows) {
+    const q = v => { const s = v == null ? '' : String(v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    return '﻿' + rows.map(r => r.map(q).join(',')).join('\r\n');
+  }
+  ecfNum(v) {
+    const n = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? String(v) : n.toFixed(2);
+  }
+  ecfPad(cols, widths) {
+    return cols.map((c, i) => { const w = widths[i] || 12; let s = String(c == null ? '' : c); if (s.length > w) s = s.slice(0, w - 1) + '.'; return w < 0 ? s : (i > 0 && /^[-(]?[\d,]+\.\d\d\)?$/.test(s) ? s.padStart(w) : s.padEnd(w)); }).join(' ');
+  }
+  ecfPdf(title, lines, subtitle) {
+    const map = { '−': '-', '–': '-', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'", '…': '...', '→': '->', '›': '>', '≥': '>=', '✓': 'v', '★': '*' };
+    const esc = s => String(s).replace(/[−–—“”‘’…→›≥✓★]/g, ch => map[ch]).replace(/[\\()]/g, m => '\\' + m)
+      .replace(/[^\x20-\x7e]/g, ch => { const c = ch.charCodeAt(0); return c < 256 ? '\\' + c.toString(8).padStart(3, '0') : '?'; });
+    const per = 50, pages = [];
+    for (let i = 0; i < Math.max(lines.length, 1); i += per) pages.push(lines.slice(i, i + per));
+    const objs = [];
+    objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+    objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>';
+    objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+    objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>';
+    objs[6] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+    const kids = [];
+    pages.forEach((pl, p) => {
+      const po = 7 + p * 2, co = po + 1;
+      kids.push(po + ' 0 R');
+      let s = '0.06 0.46 0.43 rg 40 806 515 3 re f\n';
+      s += 'BT /F2 15 Tf 40 784 Td (' + esc(title) + ') Tj ET\n';
+      s += 'BT /F4 8.5 Tf 40 770 Td (' + esc((subtitle ? subtitle + '  |  ' : '') + 'Distribuidora Caribe Verde, SRL  |  RNC 1-31-89754-2  |  Pag. ' + (p + 1) + '/' + pages.length) + ') Tj ET\n';
+      s += '0.8 0.8 0.8 RG 0.5 w 40 762 m 555 762 l S\n';
+      s += 'BT /F1 8.5 Tf 40 746 Td 13.5 TL\n';
+      pl.forEach(l => {
+        const o = typeof l === 'object' && l !== null ? l : { t: l };
+        s += (o.b ? '/F3 8.5 Tf (' + esc(o.t) + ") ' /F1 8.5 Tf\n" : '(' + esc(o.t) + ") '\n");
+      });
+      s += 'ET\nBT /F4 7 Tf 40 30 Td (' + esc('Generado por Kontara el 23/10/2026 - Documento de referencia') + ') Tj ET';
+      objs[co] = '<< /Length ' + s.length + ' >>\nstream\n' + s + '\nendstream';
+      objs[po] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents ' + co + ' 0 R >>';
+    });
+    objs[2] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>';
+    let out = '%PDF-1.4\n';
+    const off = [];
+    for (let i = 1; i < objs.length; i++) { off[i] = out.length; out += i + ' 0 obj\n' + objs[i] + '\nendobj\n'; }
+    const x = out.length;
+    out += 'xref\n0 ' + objs.length + '\n0000000000 65535 f \n';
+    for (let i = 1; i < objs.length; i++) out += String(off[i]).padStart(10, '0') + ' 00000 n \n';
+    out += 'trailer\n<< /Size ' + objs.length + ' /Root 1 0 R >>\nstartxref\n' + x + '\n%%EOF\n';
+    return out;
+  }
+  ecfXml(tipo, encf, fecha, rncComprador, comprador, total, itbis) {
+    const e = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<?xml version="1.0" encoding="UTF-8"?>\n<ECF>\n  <Encabezado>\n    <Version>1.0</Version>\n    <IdDoc>\n      <TipoeCF>' + tipo + '</TipoeCF>\n      <eNCF>' + e(encf) + '</eNCF>\n      <FechaVencimientoSecuencia>31-12-2027</FechaVencimientoSecuencia>\n      <TipoIngresos>01</TipoIngresos>\n    </IdDoc>\n    <Emisor>\n      <RNCEmisor>131897542</RNCEmisor>\n      <RazonSocialEmisor>Distribuidora Caribe Verde, SRL</RazonSocialEmisor>\n      <DireccionEmisor>Av. 27 de Febrero 415, Piantini, Santo Domingo</DireccionEmisor>\n      <FechaEmision>' + e(fecha) + '</FechaEmision>\n    </Emisor>\n    <Comprador>\n      <RNCComprador>' + e(String(rncComprador).replace(/\D/g, '')) + '</RNCComprador>\n      <RazonSocialComprador>' + e(comprador) + '</RazonSocialComprador>\n    </Comprador>\n    <Totales>\n      <MontoTotal>' + this.ecfNum(total) + '</MontoTotal>\n      <TotalITBIS>' + this.ecfNum(itbis) + '</TotalITBIS>\n    </Totales>\n  </Encabezado>\n  <FechaHoraFirma>' + e(fecha) + ' 10:42:18</FechaHoraFirma>\n  <!-- Firma digital XAdES omitida en el prototipo -->\n</ECF>\n';
+  }
+  renderVals() {
+    const fmt = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const rej = (this.props.estado ?? 'Aceptada') === 'Rechazada';
+    const mk = list => {
+      let grav = 0, ex = 0, disc = 0, tax = 0;
+      const items = list.map(([desc, q, p, dpct, rate]) => {
+        const gross = q * p, dv = gross * dpct / 100, net = gross - dv;
+        disc += dv; if (rate) { grav += net; tax += net * rate / 100; } else ex += net;
+        return { desc, qty: q.toLocaleString('en-US'), price: fmt(p), disc: dpct ? dpct + '%' : '—', tax: rate ? rate + '%' : 'Exento', amount: fmt(net) };
+      });
+      return { items, gravado: fmt(grav), exento: fmt(ex), descuento: '-' + fmt(disc), itbis: fmt(tax), total: fmt(grav + ex + tax) };
+    };
+    const step = (title, time, detail, kind, last) => ({
+      title, time, detail, done: kind === 'done', fail: kind === 'fail', line: !last,
+      bg: kind === 'fail' ? '#FEE2E2' : '#0F766E', fg: kind === 'fail' ? '#B91C1C' : '#fff', lineColor: '#99D5CE'
+    });
+    const d = rej ? {
+      encf: 'E310000000129', estado: 'Rechazada', cls: 'bd b-rech', cliente: 'Juan Pablo Méndez Rosario', fecha: '21/10/2026',
+      idLabel: 'Cédula', rnc: '001-1456789-2', dir: 'C/ Duarte 58, Santiago de los Caballeros', contacto: '829-555-0178 · jpmendez@correo.do',
+      pago: 'Crédito 30 días', track: 'e2f60b13-7a8d-4e95-b3c0-4d1a9e7f2c68', codigo: 'K4p9Wd', firma: '21/10/2026 15:07:31',
+      ...mk([['Pintura acrílica blanca (galón)', 60, 1150, 0, 18], ['Kit rodillo 9" y bandeja', 40, 360, 0, 18]]),
+      steps: [
+        step('Creada', '21/10/2026 · 15:02:10', 'Por María Rosario desde Facturas de venta', 'done'),
+        step('Firmada', '21/10/2026 · 15:07:31', 'Firma XAdES con certificado de Distribuidora Caribe Verde', 'done'),
+        step('Enviada a la DGII', '21/10/2026 · 15:07:32', 'Track ID e2f60b13-7a8d-4e95-b3c0-4d1a9e7f2c68', 'done'),
+        step('En proceso', '21/10/2026 · 15:07:33', 'Validación de estructura, firma y datos del comprador', 'done'),
+        step('Rechazada', '21/10/2026 · 15:07:44', 'Código 145 · RNCComprador no válido', 'fail', true)
+      ]
+    } : {
+      encf: 'E310000000131', estado: 'Aceptada', cls: 'bd b-acep', cliente: 'Constructora Hispaniola, SRL', fecha: '23/10/2026',
+      idLabel: 'RNC', rnc: '1-30-45218-7', dir: 'Av. Estrella Sadhalá 1204, Santiago de los Caballeros', contacto: '809-555-0193 · compras@hispaniola.com.do',
+      pago: 'Crédito 30 días · vence 22/11/2026', track: '8f2c4e1a-6b7d-4c3e-9a21-5d0e7f3ba91e', codigo: 'Q7m2Xa', firma: '23/10/2026 10:42:18',
+      ...mk([['Cemento gris Portland 42.5 kg', 1200, 545, 5, 18], ['Varilla corrugada 3/8" × 20\'', 800, 285, 0, 18], ['Block de hormigón 6"', 2740, 55, 0, 18], ['Transporte de carga a obra (viaje)', 4, 26140, 0, 0]]),
+      steps: [
+        step('Creada', '23/10/2026 · 10:38:05', 'Por María Rosario desde Nueva factura', 'done'),
+        step('Firmada', '23/10/2026 · 10:42:18', 'Firma XAdES con certificado de Distribuidora Caribe Verde', 'done'),
+        step('Enviada a la DGII', '23/10/2026 · 10:42:19', 'Track ID 8f2c4e1a-6b7d-4c3e-9a21-5d0e7f3ba91e', 'done'),
+        step('En proceso', '23/10/2026 · 10:42:20', 'Validación de estructura, firma y datos del comprador', 'done'),
+        step('Aceptada', '23/10/2026 · 10:42:31', 'Código de aprobación 1 · Aceptado. Enviada al cliente por correo a las 10:42:40', 'done', true)
+      ]
+    };
+    const FX = {"xml": "XML firmado descargado: E310000000131.xml", "wa": "Factura enviada por WhatsApp al +1 809-555-0193", "mail": "Factura enviada a compras@hispaniola.com.do (PDF + XML)"};
+    const act = {};
+    Object.keys(FX).forEach(k => { act[k] = () => this.setState({ fx: FX[k] }); });
+    const dPdf = () => this.ecfPdf('Factura de Credito Fiscal Electronica', [{ t: 'e-NCF: ' + d.encf + '   Estado: ' + d.estado, b: true }, 'Fecha: ' + d.fecha + '   Condicion: ' + d.pago, 'Cliente: ' + d.cliente, d.idLabel + ': ' + d.rnc, d.dir, '',
+      { t: this.ecfPad(['Descripcion', 'Cant.', 'Precio', 'Desc.', 'ITBIS', 'Importe'], [36, 8, 11, 6, 7, 14]), b: true }].concat(d.items.map(it => this.ecfPad([it.desc, it.qty, it.price, it.disc, it.tax, it.amount], [36, 8, 11, 6, 7, 14])))
+      .concat(['', this.ecfPad(['Subtotal gravado', d.gravado], [70, 14]), this.ecfPad(['Subtotal exento', d.exento], [70, 14]), this.ecfPad(['Descuentos', d.descuento], [70, 14]), this.ecfPad(['ITBIS 18%', d.itbis], [70, 14]), { t: this.ecfPad(['TOTAL RD$', d.total], [70, 14]), b: true }, '',
+        'Track ID: ' + d.track, 'Codigo de seguridad: ' + d.codigo + '   Fecha de firma: ' + d.firma]), 'Representacion impresa');
+    act.pdf = () => this.ecfSave(d.encf + '.pdf', dPdf());
+    act.xml = () => this.ecfSave(d.encf + '.xml', this.ecfXml('31', d.encf, d.fecha.replace(/\//g, '-'), d.rnc, d.cliente, d.total, d.itbis));
+    return {
+      dlOn: !!(this.state || {}).dl, dlHasText: !!((this.state || {}).dl && (this.state || {}).dl.text), dlText: ((this.state || {}).dl || {}).text || '',
+      dlTitle: ((this.state || {}).dl || {}).copy ? 'Copie el contenido manualmente' : 'Este visor no permitió descargar «' + (((this.state || {}).dl || {}).name || '') + '»',
+      dlMsg: ((this.state || {}).dl || {}).copy ? 'El navegador bloqueó el portapapeles dentro del lienzo. Puede copiar el texto desde aquí.' : (((this.state || {}).dl || {}).tried ? 'Intentamos descargarlo directamente; si no aparece en su carpeta de Descargas es porque el lienzo bloquea descargas. ' : '') + 'Abra el prototipo en pantalla completa (Play) o use el contenido de abajo.',
+      dlClose: () => this.setState({ dl: null }),
+      dlCopy: () => { const t = ((this.state || {}).dl || {}).text || ''; try { navigator.clipboard.writeText(t).then(() => this.setState({ dl: null, fx: 'Copiado al portapapeles', flash: 'Copiado al portapapeles' }), () => {}); } catch (e) {} },
+      act, fxOn: !!(this.state || {}).fx, fxMsg: (this.state || {}).fx || '', fxClose: () => this.setState({ fx: '' }), d, ok: !rej, bad: rej };
+  }
+}
+</script>
+</body>
+</html>

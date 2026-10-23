@@ -1,0 +1,69 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [7 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>
+endobj
+6 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 1746 >>
+stream
+0.06 0.46 0.43 rg 40 806 515 3 re f
+BT /F2 15 Tf 40 784 Td (Factura de Credito Fiscal Electronica) Tj ET
+BT /F4 8.5 Tf 40 770 Td (Formato carta  |  Distribuidora Caribe Verde, SRL  |  RNC 1-31-89754-2  |  Pag. 1/1) Tj ET
+0.8 0.8 0.8 RG 0.5 w 40 762 m 555 762 l S
+BT /F1 8.5 Tf 40 746 Td 13.5 TL
+/F3 8.5 Tf (e-NCF: E310000000131) ' /F1 8.5 Tf
+(Fecha de emision: 23/10/2026   Vencimiento secuencia: 31/12/2027) '
+(Cliente: Constructora Hispaniola, SRL  -  RNC 1-30-45218-7) '
+(Condicion: Credito 30 dias  -  Vence 22/11/2026) '
+() '
+/F3 8.5 Tf (Cant.   Descripcion                        Precio     Desc.      ITBIS       Valor         ) ' /F1 8.5 Tf
+(1,200   Cemento gris Portland 42.5 kg          545.00  32,700.00  111,834.00     621,300.00) '
+(800     Varilla corrugada 3/8" \327 20'           285.00 -            41,040.00     228,000.00) '
+(2,740   Block de hormig\363n 6"                    55.00 -            27,126.00     150,700.00) '
+(4       Transporte de carga a obra \(viaje\)  26,140.00 -          E               104,560.00) '
+() '
+(Subtotal gravado                                                         1,000,000.00) '
+(Subtotal exento                                                            104,560.00) '
+(Total descuentos                                                            32,700.00) '
+(ITBIS 18%                                                                  180,000.00) '
+/F3 8.5 Tf (TOTAL RD$                                                                1,284,560.00) ' /F1 8.5 Tf
+() '
+(Codigo de seguridad: Q7m2Xa   Fecha de firma digital: 23-10-2026 10:42:18) '
+(Valide este comprobante en el portal de la DGII.) '
+ET
+BT /F4 7 Tf 40 30 Td (Generado por Kontara el 23/10/2026 - Documento de referencia) Tj ET
+endstream
+endobj
+xref
+0 9
+0000000000 65535 f 
+0000000009 00000 n 
+0000000058 00000 n 
+0000000115 00000 n 
+0000000210 00000 n 
+0000000312 00000 n 
+0000000412 00000 n 
+0000000509 00000 n 
+0000000665 00000 n 
+trailer
+<< /Size 9 /Root 1 0 R >>
+startxref
+2463
+%%EOF

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ECF>
+  <Encabezado>
+    <Version>1.0</Version>
+    <IdDoc>
+      <TipoeCF>31</TipoeCF>
+      <eNCF>E310000000131</eNCF>
+      <FechaVencimientoSecuencia>31-12-2027</FechaVencimientoSecuencia>
+      <TipoIngresos>01</TipoIngresos>
+    </IdDoc>
+    <Emisor>
+      <RNCEmisor>131897542</RNCEmisor>
+      <RazonSocialEmisor>Distribuidora Caribe Verde, SRL</RazonSocialEmisor>
+      <DireccionEmisor>Av. 27 de Febrero 415, Piantini, Santo Domingo</DireccionEmisor>
+      <FechaEmision>23-10-2026</FechaEmision>
+    </Emisor>
+    <Comprador>
+      <RNCComprador>130452187</RNCComprador>
+      <RazonSocialComprador>Constructora Hispaniola, SRL</RazonSocialComprador>
+    </Comprador>
+    <Totales>
+      <MontoTotal>1284560.00</MontoTotal>
+      <TotalITBIS>195949.83</TotalITBIS>
+    </Totales>
+  </Encabezado>
+  <FechaHoraFirma>23-10-2026 10:42:18</FechaHoraFirma>
+  <!-- Firma digital XAdES omitida en el prototipo -->
+</ECF>

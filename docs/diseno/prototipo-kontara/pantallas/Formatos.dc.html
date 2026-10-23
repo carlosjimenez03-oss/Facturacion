@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Formatos 606, 607 y 608</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="{{sbActive}}" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,64px"></dc-import>
+    <div class="content">
+      <div class="ph">
+        <div>
+          <div class="crumb"><a href="Formatos.dc.html">Impuestos</a><span>/</span><span>Formatos de envío de datos</span></div>
+          <h1>Formatos 606 · 607 · 608</h1>
+          <p>Prepare, valide y genere los archivos TXT para la Oficina Virtual de la DGII</p>
+        </div>
+        <div class="row">
+          <div class="fld"><label class="lbl" for="per">Período</label><select id="per" class="inp" style="min-width: 200px"><option>Octubre 2026 · vence 16/11</option><option>Septiembre 2026 · presentado</option><option>Agosto 2026 · presentado</option></select></div>
+        </div>
+      </div>
+
+      <div class="tabs" role="tablist" aria-label="Formato">
+        <sc-for list="{{tabs}}" as="t" hint-placeholder-count="3">
+          <button type="button" role="tab" class="{{t.cls}}" aria-selected="{{t.on}}" onClick="{{t.pick}}"><span>{{t.label}}</span><span class="hint">{{t.sub}}</span></button>
+        </sc-for>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 16px">
+        <sc-for list="{{cur.cards}}" as="c" hint-placeholder-count="4">
+          <div class="card stat"><span class="k">{{c.k}}</span><span class="v" style="font-size: 21px">{{c.v}}</span><span class="s">{{c.s}}</span></div>
+        </sc-for>
+      </div>
+
+      <sc-if value="{{is608}}" hint-placeholder-val="{{false}}">
+        <div class="card" style="padding: 14px 18px; display: flex; align-items: center; gap: 12px">
+          <button type="button" class="{{blankCls}}" onClick="{{toggleBlank}}" aria-pressed="{{blank}}" aria-label="No hubo anulaciones en el período"></button>
+          <div><div style="font-weight: 600; color: #111827">No hubo anulaciones en el período</div><div class="hint">El 608 debe presentarse igual: se generará un reporte en blanco (sin registros).</div></div>
+        </div>
+      </sc-if>
+
+      <section class="card">
+        <div class="card-h">
+          <div><h2>{{cur.title}}</h2><span class="hint">{{cur.sub}}</span></div>
+          <div class="row">
+            <button type="button" class="btn btn-o btn-sm" onClick="{{validate}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"></path><path d="m9 12 2 2 4-4"></path></svg>Validar</button>
+            <sc-if value="{{canGen}}" hint-placeholder-val="{{false}}">
+              <button type="button" class="btn btn-p btn-sm" onClick="{{generate}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"></path></svg>{{genLabel}}</button>
+            </sc-if>
+            <sc-if value="{{cantGen}}" hint-placeholder-val="{{true}}">
+              <span class="tip r" data-tip="{{genWhy}}"><button type="button" class="btn btn-p btn-sm" disabled>{{genLabel}}</button></span>
+            </sc-if>
+          </div>
+        </div>
+
+        <sc-if value="{{showErrors}}" hint-placeholder-val="{{false}}">
+          <div style="padding: 16px 20px 0">
+            <div class="al al-d" style="flex-direction: column; gap: 10px">
+              <b>Se encontraron {{errCount}} errores. Corríjalos antes de generar el archivo.</b>
+              <sc-for list="{{errors}}" as="e" hint-placeholder-count="2">
+                <div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; background: #fff; border: 1px solid #FECACA; border-radius: 8px; padding: 10px 12px">
+                  <span class="mono" style="font-weight: 600; color: #B91C1C">Línea {{e.line}}</span>
+                  <span style="flex: 1 1 300px; color: #374151">{{e.msg}}</span>
+                  <button type="button" class="btn btn-o btn-sm" onClick="{{e.fix}}">{{e.action}}</button>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </sc-if>
+        <sc-if value="{{showOk}}" hint-placeholder-val="{{false}}">
+          <div style="padding: 16px 20px 0"><div class="al al-s"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg><span><b>Validación correcta.</b> {{okMsg}}</span></div></div>
+        </sc-if>
+
+        <sc-if value="{{showTable}}" hint-placeholder-val="{{true}}">
+          <div class="tw" style="margin-top: 12px">
+            <table class="tbl" style="min-width: 1100px">
+              <thead><tr><sc-for list="{{cur.cols}}" as="h" hint-placeholder-count="8"><th class="{{h.cls}}">{{h.t}}</th></sc-for></tr></thead>
+              <tbody>
+                <sc-for list="{{cur.rows}}" as="r" hint-placeholder-count="6">
+                  <tr style="background: {{r.bg}}">
+                    <sc-for list="{{r.cells}}" as="c" hint-placeholder-count="8"><td class="{{c.cls}}">{{c.t}}</td></sc-for>
+                    <sc-if value="{{is608}}" hint-placeholder-val="{{false}}">
+                      <td><select class="inp inp-sm" aria-label="Motivo de anulación" style="min-width: 260px"><option>{{r.motivo}}</option><option>01 · Deterioro de factura preimpresa</option><option>02 · Errores de impresión (factura preimpresa)</option><option>03 · Impresión defectuosa</option><option>04 · Corrección de la información</option><option>05 · Cambio de productos</option><option>06 · Devolución de productos</option><option>07 · Omisión de productos</option><option>08 · Errores en secuencia de NCF</option><option>09 · Por cese de operaciones</option><option>10 · Pérdida o hurto de talonarios</option></select></td>
+                    </sc-if>
+                  </tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+          <div style="padding: 12px 16px; border-top: 1px solid #EEF0F2; font-size: 13px; color: #6B7280">{{cur.foot}}</div>
+        </sc-if>
+        <sc-if value="{{showBlank}}" hint-placeholder-val="{{false}}">
+          <div class="empty">
+            <span class="ei"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6M9 15l2 2 4-4"></path></svg></span>
+            <h3>Sin anulaciones en octubre 2026</h3>
+            <p>No se anuló ningún comprobante en el período. Genere el 608 en blanco y envíelo desde la Oficina Virtual para cumplir con la obligación.</p>
+          </div>
+        </sc-if>
+      </section>
+    </div>
+  </main>
+  <sc-if value="{{toast}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite">
+      <div class="toast">
+        <span class="ti" style="background: #DCFCE7; color: #166534"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+        <div style="flex: 1; min-width: 0"><b>Archivo generado</b><span class="mono mut">{{fileName}}</span></div>
+        <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{closeToast}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{dlOn}}" hint-placeholder-val="{{false}}">
+    <div class="scrim" style="z-index: 140">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dl-t" style="max-width: 640px">
+        <div class="modal-h"><h3 id="dl-t">{{dlTitle}}</h3></div>
+        <div class="modal-b">
+          <span>{{dlMsg}}</span>
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}">
+            <textarea class="inp mono" readonly rows="10" style="font-size: 12px; white-space: pre" aria-label="Contenido del archivo" value="{{dlText}}"></textarea>
+            <span class="hint">Seleccione el texto (Ctrl+A) y cópielo (Ctrl+C). Para Excel, péguelo en un archivo de texto y guárdelo con la extensión indicada.</span>
+          </sc-if>
+        </div>
+        <div class="modal-f">
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}"><button type="button" class="btn btn-o" onClick="{{dlCopy}}">Copiar contenido</button></sc-if>
+          <button type="button" class="btn btn-p" onClick="{{dlClose}}">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"tab":{"editor":"enum","options":["606","607","608"],"default":"606"},"$preview":{"width":1440,"height":1240}}'>
+class Component extends DCLogic {
+  ecfNote(msg) {
+    this.setState({ fx: msg, flash: msg });
+  }
+  ecfWins() {
+    const out = [];
+    try { let w = window; for (let i = 0; i < 5 && w; i++) { out.push(w); if (w === w.parent) break; w = w.parent; } } catch (e) {}
+    return out;
+  }
+  async ecfCap(name) {
+    for (const w of this.ecfWins()) {
+      try {
+        if (w.claude && typeof w.claude.use === 'function') {
+          const cap = await Promise.race([w.claude.use(name), new Promise(r => setTimeout(() => r(null), 4000))]);
+          if (cap) return cap;
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+  async ecfSave(filename, data) {
+    this.ecfNote('Preparando ' + filename + '…');
+    const cap = await this.ecfCap('downloads');
+    if (cap) {
+      try {
+        await cap.save({ filename, data: typeof data === 'string' ? data : data });
+        this.ecfNote('Archivo guardado: ' + filename);
+        return true;
+      } catch (e) {
+        const code = e && e.code;
+        if (code === 'declined') { this.ecfNote('Descarga cancelada'); return false; }
+        if (code === 'rate_limited') { this.ecfNote('Ya hay una descarga esperando confirmación'); return false; }
+        if (code === 'rejected_extension' && !/\.txt$/.test(filename)) return this.ecfSave(filename + '.txt', data);
+      }
+    }
+    // Sin capacidad de descarga en este visor: intento directo en la ventana accesible más alta
+    let tried = false;
+    const wins = this.ecfWins().reverse();
+    for (const w of wins) {
+      try {
+        const doc = w.document;
+        const blob = new w.Blob([data], { type: /\.pdf$/.test(filename) ? 'application/pdf' : 'text/plain;charset=utf-8' });
+        const url = w.URL.createObjectURL(blob);
+        const a = doc.createElement('a');
+        a.href = url; a.download = filename; a.style.display = 'none';
+        doc.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => { try { w.URL.revokeObjectURL(url); } catch (e) {} }, 8000);
+        tried = true; break;
+      } catch (e) {}
+    }
+    this.setState({ dl: { name: filename, text: typeof data === 'string' && !/\.pdf$/.test(filename) ? data.replace(/^﻿/, '') : '', tried }, fx: '', flash: '' });
+    return false;
+  }
+  async ecfCopy(text, label) {
+    let ok = false;
+    for (const w of this.ecfWins()) {
+      try { await w.navigator.clipboard.writeText(text); ok = true; break; } catch (e) {}
+    }
+    if (!ok) {
+      for (const w of this.ecfWins()) {
+        try {
+          const d = w.document; const t = d.createElement('textarea');
+          t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.top = '-1000px';
+          d.body.appendChild(t); t.select(); ok = d.execCommand('copy'); t.remove();
+          if (ok) break;
+        } catch (e) {}
+      }
+    }
+    if (ok) this.ecfNote(label || 'Copiado al portapapeles');
+    else this.setState({ dl: { name: 'Copiar manualmente', text, tried: false, copy: true }, fx: '', flash: '' });
+    return ok;
+  }
+  ecfCsv(rows) {
+    const q = v => { const s = v == null ? '' : String(v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    return '﻿' + rows.map(r => r.map(q).join(',')).join('\r\n');
+  }
+  ecfNum(v) {
+    const n = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? String(v) : n.toFixed(2);
+  }
+  ecfPad(cols, widths) {
+    return cols.map((c, i) => { const w = widths[i] || 12; let s = String(c == null ? '' : c); if (s.length > w) s = s.slice(0, w - 1) + '.'; return w < 0 ? s : (i > 0 && /^[-(]?[\d,]+\.\d\d\)?$/.test(s) ? s.padStart(w) : s.padEnd(w)); }).join(' ');
+  }
+  ecfPdf(title, lines, subtitle) {
+    const map = { '−': '-', '–': '-', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'", '…': '...', '→': '->', '›': '>', '≥': '>=', '✓': 'v', '★': '*' };
+    const esc = s => String(s).replace(/[−–—“”‘’…→›≥✓★]/g, ch => map[ch]).replace(/[\\()]/g, m => '\\' + m)
+      .replace(/[^\x20-\x7e]/g, ch => { const c = ch.charCodeAt(0); return c < 256 ? '\\' + c.toString(8).padStart(3, '0') : '?'; });
+    const per = 50, pages = [];
+    for (let i = 0; i < Math.max(lines.length, 1); i += per) pages.push(lines.slice(i, i + per));
+    const objs = [];
+    objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+    objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>';
+    objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+    objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>';
+    objs[6] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+    const kids = [];
+    pages.forEach((pl, p) => {
+      const po = 7 + p * 2, co = po + 1;
+      kids.push(po + ' 0 R');
+      let s = '0.06 0.46 0.43 rg 40 806 515 3 re f\n';
+      s += 'BT /F2 15 Tf 40 784 Td (' + esc(title) + ') Tj ET\n';
+      s += 'BT /F4 8.5 Tf 40 770 Td (' + esc((subtitle ? subtitle + '  |  ' : '') + 'Distribuidora Caribe Verde, SRL  |  RNC 1-31-89754-2  |  Pag. ' + (p + 1) + '/' + pages.length) + ') Tj ET\n';
+      s += '0.8 0.8 0.8 RG 0.5 w 40 762 m 555 762 l S\n';
+      s += 'BT /F1 8.5 Tf 40 746 Td 13.5 TL\n';
+      pl.forEach(l => {
+        const o = typeof l === 'object' && l !== null ? l : { t: l };
+        s += (o.b ? '/F3 8.5 Tf (' + esc(o.t) + ") ' /F1 8.5 Tf\n" : '(' + esc(o.t) + ") '\n");
+      });
+      s += 'ET\nBT /F4 7 Tf 40 30 Td (' + esc('Generado por Kontara el 23/10/2026 - Documento de referencia') + ') Tj ET';
+      objs[co] = '<< /Length ' + s.length + ' >>\nstream\n' + s + '\nendstream';
+      objs[po] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents ' + co + ' 0 R >>';
+    });
+    objs[2] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>';
+    let out = '%PDF-1.4\n';
+    const off = [];
+    for (let i = 1; i < objs.length; i++) { off[i] = out.length; out += i + ' 0 obj\n' + objs[i] + '\nendobj\n'; }
+    const x = out.length;
+    out += 'xref\n0 ' + objs.length + '\n0000000000 65535 f \n';
+    for (let i = 1; i < objs.length; i++) out += String(off[i]).padStart(10, '0') + ' 00000 n \n';
+    out += 'trailer\n<< /Size ' + objs.length + ' /Root 1 0 R >>\nstartxref\n' + x + '\n%%EOF\n';
+    return out;
+  }
+  ecfXml(tipo, encf, fecha, rncComprador, comprador, total, itbis) {
+    const e = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<?xml version="1.0" encoding="UTF-8"?>\n<ECF>\n  <Encabezado>\n    <Version>1.0</Version>\n    <IdDoc>\n      <TipoeCF>' + tipo + '</TipoeCF>\n      <eNCF>' + e(encf) + '</eNCF>\n      <FechaVencimientoSecuencia>31-12-2027</FechaVencimientoSecuencia>\n      <TipoIngresos>01</TipoIngresos>\n    </IdDoc>\n    <Emisor>\n      <RNCEmisor>131897542</RNCEmisor>\n      <RazonSocialEmisor>Distribuidora Caribe Verde, SRL</RazonSocialEmisor>\n      <DireccionEmisor>Av. 27 de Febrero 415, Piantini, Santo Domingo</DireccionEmisor>\n      <FechaEmision>' + e(fecha) + '</FechaEmision>\n    </Emisor>\n    <Comprador>\n      <RNCComprador>' + e(String(rncComprador).replace(/\D/g, '')) + '</RNCComprador>\n      <RazonSocialComprador>' + e(comprador) + '</RazonSocialComprador>\n    </Comprador>\n    <Totales>\n      <MontoTotal>' + this.ecfNum(total) + '</MontoTotal>\n      <TotalITBIS>' + this.ecfNum(itbis) + '</TotalITBIS>\n    </Totales>\n  </Encabezado>\n  <FechaHoraFirma>' + e(fecha) + ' 10:42:18</FechaHoraFirma>\n  <!-- Firma digital XAdES omitida en el prototipo -->\n</ECF>\n';
+  }
+  renderVals() {
+    const st = this.state || {};
+    const tab = st.tab || this.props.tab || '606';
+    const cols = list => list.map(t => ({ t: t.replace(/^#/, ''), cls: t.startsWith('#') ? 'num' : '' }));
+    const cells = (arr, numFrom) => arr.map((t, i) => ({ t, cls: i >= numFrom ? 'num' : (i < 3 ? 'mono' : '') }));
+    const F = {
+      '606': {
+        title: 'Vista previa · 606 Compras de bienes y servicios', sub: '48 registros · incluye compras pagadas en el período',
+        cards: [{ k: 'Registros', v: '48', s: '41 con e-NCF · 7 con E41/E43' }, { k: 'Monto facturado', v: 'RD$ 3,486,920.15', s: 'Bienes y servicios' }, { k: 'ITBIS facturado', v: 'RD$ 312,840.00', s: 'Adelantado en compras' }, { k: 'Retenciones', v: 'RD$ 96,480.00', s: 'ITBIS 38,450.00 · ISR 58,030.00' }],
+        cols: cols(['RNC / Cédula', 'Tipo id.', 'NCF', 'Tipo bien/serv.', 'Fecha comp.', 'Fecha pago', '#Servicios', '#Bienes', '#ITBIS facturado', '#ITBIS retenido', '#ISR retenido']),
+        rows: [
+          ['101556789', '1', 'E310000045821', '09', '22/10/2026', '', '0.00', '1,564,067.80', '281,532.20', '0.00', '0.00'],
+          ['131245678', '1', 'E310000008734', '02', '21/10/2026', '23/10/2026', '82,000.00', '0.00', '14,760.00', '4,428.00', '0.00'],
+          ['00109876543', '2', 'E410000000056', '02', '12/10/2026', '15/10/2026', '85,000.00', '0.00', '15,300.00', '15,300.00', '8,500.00'],
+          ['131778891', '1', 'E310000006652', '02', '05/10/2026', '10/10/2026', '96,500.00', '0.00', '17,370.00', '5,211.00', '0.00'],
+          ['131245679', '1', 'E310000008701', '02', '03/10/2026', '04/10/2026', '42,000.00', '0.00', '7,560.00', '2,268.00', '0.00'],
+          ['101445566', '1', 'E310000990213', '02', '15/10/2026', '30/09/2026', '10,800.00', '0.00', '1,944.00', '0.00', '0.00']
+        ].map((r, i) => ({ cells: cells(r, 6), bg: 'transparent' })),
+        foot: 'Mostrando 6 de 48 registros · Archivo: DGII_F_606_131897542_202610.TXT',
+        errors: [
+          { line: 5, msg: 'El RNC 131245679 no existe en el padrón de contribuyentes de la DGII.', action: 'Corregir RNC' },
+          { line: 6, msg: 'La fecha de pago (30/09/2026) es anterior a la fecha del comprobante (15/10/2026).', action: 'Corregir fecha' }
+        ],
+        ok: '48 registros listos para enviar.'
+      },
+      '607': {
+        title: 'Vista previa · 607 Ventas de bienes y servicios', sub: '2,184 registros · e-CF aceptados del período',
+        cards: [{ k: 'Efectivo', v: 'RD$ 612,480.25', s: '12.6% de las ventas' }, { k: 'Tarjeta débito/crédito', v: 'RD$ 398,215.40', s: '8.2% de las ventas' }, { k: 'Cheque / transferencia', v: 'RD$ 1,206,330.00', s: '24.8% de las ventas' }, { k: 'Venta a crédito', v: 'RD$ 2,655,324.35', s: '54.5% de las ventas' }],
+        cols: cols(['RNC / Cédula', 'Tipo id.', 'e-NCF', 'NCF modificado', 'Tipo ingreso', 'Fecha', '#Monto facturado', '#ITBIS', '#Efectivo', '#Tarjeta', '#Crédito']),
+        rows: [
+          ['130452187', '1', 'E310000000131', '', '01', '23/10/2026', '1,104,560.00', '180,000.00', '0.00', '0.00', '1,284,560.00'],
+          ['101784523', '1', 'E310000000130', '', '01', '22/10/2026', '302,475.00', '54,445.40', '0.00', '0.00', '356,920.40'],
+          ['430001235', '1', 'E450000000018', '', '01', '22/10/2026', '688,389.83', '123,910.17', '0.00', '0.00', '812,300.00'],
+          ['130112349', '1', 'E340000000027', 'E310000000112', '01', '21/10/2026', '38,305.08', '6,894.92', '0.00', '0.00', '45,200.00'],
+          ['', '', 'E320000004571', '', '01', '20/10/2026', '3,856.78', '694.22', '4,551.00', '0.00', '0.00'],
+          ['', '', 'E320000004566', '', '01', '20/10/2026', '10,330.51', '1,859.49', '0.00', '12,190.00', '0.00']
+        ].map(r => ({ cells: cells(r, 6), bg: 'transparent' })),
+        foot: 'Mostrando 6 de 2,184 registros · Las facturas de consumo menores de RD$ 250,000.00 se pueden consolidar · Archivo: DGII_F_607_131897542_202610.TXT',
+        errors: [], ok: '2,184 registros listos. Total RD$ 4,872,350.00 coincide con el pre-cálculo del IT-1.'
+      },
+      '608': {
+        title: 'Vista previa · 608 Comprobantes anulados', sub: 'Elija el motivo de anulación de cada comprobante',
+        cards: [{ k: 'Comprobantes anulados', v: '2', s: 'Octubre 2026' }, { k: 'Crédito fiscal (E31)', v: '1', s: 'Rechazado por la DGII' }, { k: 'Consumo (E32)', v: '1', s: 'Error de secuencia' }, { k: 'Fecha límite', v: '16/11/2026', s: 'El 15 cae domingo' }],
+        cols: cols(['e-NCF', 'Fecha', 'Cliente', 'Motivo de anulación']).slice(0, 3),
+        rows: [
+          { cells: cells(['E310000000129', '21/10/2026', 'Juan Pablo Méndez Rosario'], 9), motivo: '04 · Corrección de la información', bg: 'transparent' },
+          { cells: cells(['E320000004455', '14/10/2026', 'Consumidor final'], 9), motivo: '08 · Errores en secuencia de NCF', bg: 'transparent' }
+        ],
+        foot: 'Archivo: DGII_F_608_131897542_202610.TXT',
+        errors: [], ok: '2 comprobantes anulados con motivo asignado.'
+      }
+    };
+    if (tab === '608') F['608'].cols.push({ t: 'Motivo de anulación', cls: '' });
+    const cur = F[tab];
+    const fixed = st.fixed || {};
+    const errors = cur.errors.map((e, i) => ({ ...e, fix: () => this.setState({ fixed: { ...fixed, [i]: true } }) })).filter((e, i) => !fixed[i]);
+    const validated = !!(st.val || {})[tab];
+    const blank = tab === '608' && !!st.blank;
+    const okToGen = validated && errors.length === 0;
+    const tabs = [['606', 'Formato 606', 'Compras'], ['607', 'Formato 607', 'Ventas'], ['608', 'Formato 608', 'Anulados']].map(([k, label, sub]) => ({ label, sub, on: tab === k, cls: tab === k ? 'tab on' : 'tab', pick: () => this.setState({ tab: k }) }));
+    return {
+      dlOn: !!(this.state || {}).dl, dlHasText: !!((this.state || {}).dl && (this.state || {}).dl.text), dlText: ((this.state || {}).dl || {}).text || '',
+      dlTitle: ((this.state || {}).dl || {}).copy ? 'Copie el contenido manualmente' : 'Este visor no permitió descargar «' + (((this.state || {}).dl || {}).name || '') + '»',
+      dlMsg: ((this.state || {}).dl || {}).copy ? 'El navegador bloqueó el portapapeles dentro del lienzo. Puede copiar el texto desde aquí.' : (((this.state || {}).dl || {}).tried ? 'Intentamos descargarlo directamente; si no aparece en su carpeta de Descargas es porque el lienzo bloquea descargas. ' : '') + 'Abra el prototipo en pantalla completa (Play) o use el contenido de abajo.',
+      dlClose: () => this.setState({ dl: null }),
+      dlCopy: () => { const t = ((this.state || {}).dl || {}).text || ''; try { navigator.clipboard.writeText(t).then(() => this.setState({ dl: null, fx: 'Copiado al portapapeles', flash: 'Copiado al portapapeles' }), () => {}); } catch (e) {} },
+      sbActive: 'f' + tab,
+      tabs, cur, is608: tab === '608', blank, blankCls: blank ? 'sw on' : 'sw', toggleBlank: () => this.setState({ blank: !st.blank }),
+      showTable: !blank, showBlank: blank,
+      validate: () => this.setState({ val: { ...(st.val || {}), [tab]: true } }),
+      errors, errCount: errors.length, showErrors: validated && errors.length > 0, showOk: okToGen,
+      okMsg: blank ? 'Reporte 608 en blanco listo para generar.' : cur.ok,
+      canGen: okToGen, cantGen: !okToGen,
+      genLabel: blank ? 'Generar reporte en blanco' : 'Generar archivo TXT',
+      genWhy: validated ? 'Corrija los errores señalados para habilitar la generación.' : 'Primero valide el formato para detectar errores antes de exportar.',
+      generate: () => {
+        const name = 'DGII_F_' + tab + '_131897542_202610.txt';
+        const recs = blank ? [] : cur.rows.map(r => r.cells.map(c => /^[\d,]+\.\d\d$/.test(c.t) ? c.t.replace(/,/g, '') : c.t.replace(/\//g, '')).concat(tab === '608' ? [String(r.motivo).slice(0, 2)] : []).join('|'));
+        const head = tab + '|131897542|202610|' + (blank ? 0 : ({ '606': 48, '607': 2184, '608': 2 })[tab]);
+        this.ecfSave(name, [head].concat(recs).join('\r\n') + '\r\n');
+      },
+      toast: !!st.fx, fileName: st.fx || '',
+      closeToast: () => this.setState({ fx: '' })
+    };
+  }
+}
+</script>
+</body>
+</html>

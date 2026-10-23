@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Ventas · automatizaciones</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=Caveat:wght@600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="ventas" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,56px"></dc-import>
+    <div class="content" style="max-width: 1120px; padding-top: 40px">
+      <sc-if value="{{notActive}}" hint-placeholder-val="{{true}}">
+        <section class="card" style="display: flex; flex-wrap: wrap; overflow: hidden; padding: 8px">
+          <div style="flex: 1 1 380px; padding: 48px 40px; display: flex; flex-direction: column; gap: 18px; position: relative">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 16px">
+              <span style="width: 80px; height: 80px; border-radius: 14px; background: #CCEFEA; color: #0F766E; display: grid; place-items: center"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 15c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2.1-.1-2.9a2.1 2.1 0 0 0-2.9-.1z"></path><path d="M12 15l-3-3a22 22 0 0 1 2-4A12.9 12.9 0 0 1 22 2c0 2.7-.8 7.5-6 11a22 22 0 0 1-4 2z"></path><path d="M9 12H4s.6-3 2-4c1.6-1.1 5 0 5 0M12 15v5s3-.6 4-2c1.1-1.6 0-5 0-5"></path></svg></span>
+              <button type="button" onClick="{{openVideo}}" style="border: 0; background: none; cursor: pointer; text-align: left; font-family: Caveat, cursive; font-size: 24px; line-height: 1.1; color: #111827; display: flex; flex-direction: column; align-items: flex-end">¡Conoce cómo<br>funciona!<svg width="70" height="34" viewBox="0 0 70 34" fill="none" stroke="#111827" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M4 6c8 14 22 18 30 12s-2-14-8-6 12 18 38 14"></path><path d="M58 20l6 6-8 3"></path></svg></button>
+            </div>
+            <h1 style="margin: 0; font-size: 32px; font-weight: 700; color: #111827; letter-spacing: -.02em">{{marca}} Ventas</h1>
+            <p style="margin: 0; font-size: 20px; color: #111827">¡Fideliza a tus clientes y vende más! <svg width="18" height="18" viewBox="0 0 24 24" fill="#F59E0B" aria-hidden="true" style="vertical-align: -2px"><path d="M12 2l2.2 6.8L21 11l-6.8 2.2L12 20l-2.2-6.8L3 11l6.8-2.2z"></path></svg></p>
+            <p style="margin: 0; font-size: 18px; color: #6B7280; line-height: 1.5">Envía correos y mensajes de WhatsApp automáticos con promociones y recordatorios de pago, y permanece en la mente de tus clientes. ¡Actívalo hoy mismo!</p>
+            <button type="button" class="btn" onClick="{{activate}}" style="margin-top: 36px; height: 48px; background: #2BA89D; color: #fff; font-size: 16px">¡Activar GRATIS!</button>
+          </div>
+          <div aria-hidden="true" style="flex: 1 1 420px; background: linear-gradient(#6EE7B7, #5EC8C0); border-radius: 12px; padding: 140px 0 40px 32px; display: flex; gap: 12px; overflow: hidden; min-height: 520px">
+            <div style="width: 110px; background: #fff; border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 7px; font-size: 7px; color: #6B7280; flex: none">
+              <b style="font-size: 10px; color: #0F766E">{{marca}}</b>
+              <span>Inicio</span><span>Ingresos</span><span>Compras</span><span>Contactos</span><span>Inventario</span><span>Bancos</span><span>Contabilidad</span><span style="background: #E6F4F2; color: #0F766E; padding: 2px 4px; border-radius: 3px">Ventas</span><span>Portal de clientes</span>
+            </div>
+            <div style="flex: 1; background: #fff; border-radius: 6px 0 0 6px; padding: 14px; display: flex; flex-direction: column; gap: 8px">
+              <span style="font-size: 9px; color: #0F766E">‹ Volver</span>
+              <b style="font-size: 13px; color: #111827">Activar automatización</b>
+              <span style="font-size: 9px; color: #6B7280">Elige una automatización y personalízala para empezar</span>
+              <div style="display: flex; gap: 10px">
+                <div style="width: 190px; border: 1px solid #E5E7EB; border-radius: 8px; padding: 8px; display: flex; flex-direction: column; gap: 6px">
+                  <div style="height: 90px; border-radius: 6px; background: #2F6F68; display: grid; place-items: center"><span style="width: 30px; height: 30px; border-radius: 50%; background: #111827; color: #fff; display: grid; place-items: center; font-size: 11px">▶</span></div>
+                  <span style="display: flex; gap: 4px"><span class="chip" style="height: 14px; font-size: 7px; background: #EEF0FF; color: #4338CA">Motivar ventas</span><span class="chip" style="height: 14px; font-size: 7px">Inactiva</span></span>
+                  <b style="font-size: 9px; color: #111827">Presenta tus productos y servicios</b>
+                  <span style="font-size: 8px; color: #6B7280">Muestra tus categorías a clientes potenciales.</span>
+                  <span style="height: 18px; border-radius: 4px; background: #CCEFEA; color: #0F766E; font-size: 8px; display: grid; place-items: center">Ver detalles ›</span>
+                </div>
+                <div style="width: 40px; border-radius: 8px; background: #DC2626"></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{active}}" hint-placeholder-val="{{false}}">
+        <div class="ph">
+          <div><h1>{{marca}} Ventas</h1><p>Automatizaciones activas para fidelizar clientes. Se envían por correo y WhatsApp desde tus canales configurados.</p></div>
+          <button type="button" class="btn btn-o" onClick="{{deactivate}}">Desactivar módulo</button>
+        </div>
+        <div class="al al-s"><span><b>¡Módulo activado!</b> Prueba gratis hasta el 22/11/2026. Activa las automatizaciones que quieras usar.</span></div>
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px">
+          <sc-for list="{{autos}}" as="a" hint-placeholder-count="4">
+            <section class="card" style="padding: 18px; display: flex; flex-direction: column; gap: 10px">
+              <div style="display: flex; justify-content: space-between; align-items: center; gap: 8px"><span class="chip" style="background: #EEF0FF; color: #4338CA">{{a.cat}}</span><span class="{{a.badge}}">{{a.estado}}</span></div>
+              <b style="font-size: 15px; color: #111827">{{a.t}}</b>
+              <span style="font-size: 13.5px; color: #4B5563; line-height: 1.5">{{a.d}}</span>
+              <sc-if value="{{a.open}}" hint-placeholder-val="{{false}}"><div style="background: #F8FAFC; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #374151">{{a.det}}</div></sc-if>
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 4px">
+                <button type="button" class="btn btn-g btn-sm" onClick="{{a.toggleOpen}}">{{a.openLabel}}</button>
+                <button type="button" class="{{a.sw}}" onClick="{{a.toggle}}" aria-pressed="{{a.on}}" aria-label="Activar {{a.t}}"></button>
+              </div>
+            </section>
+          </sc-for>
+        </div>
+      </sc-if>
+    </div>
+  </main>
+  <sc-if value="{{video}}" hint-placeholder-val="{{false}}">
+    <div class="scrim">
+      <div class="modal" role="dialog" aria-modal="true" aria-label="Cómo funciona Ventas" style="max-width: 720px">
+        <div class="modal-h" style="display: flex; justify-content: space-between; align-items: center"><h3>Así funciona {{marca}} Ventas</h3><button type="button" class="ib" onClick="{{closeVideo}}" aria-label="Cerrar"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button></div>
+        <div class="modal-b"><div style="aspect-ratio: 16/9; background: #134E4A; border-radius: 10px; display: grid; place-items: center"><button type="button" onClick="{{togglePlay}}" style="width: 64px; height: 64px; border-radius: 50%; border: 0; background: #14B8A6; color: #fff; font-size: 22px; cursor: pointer" aria-label="Reproducir o pausar">{{playIcon}}</button></div><span class="hint">{{playText}}</span></div>
+        <div class="modal-f"><button type="button" class="btn btn-p" onClick="{{activateFromVideo}}">Activar gratis</button></div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":960}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = this.state || {};
+    const A = [
+      ['Motivar ventas', 'Presenta tus productos y servicios', 'Envía tu catálogo por categorías a clientes que no compran hace 30 días.', 'Se envía el primer martes de cada mes a 214 clientes. Incluye enlace al portal de clientes.'],
+      ['Cobranza', 'Recordatorio de pago amable', 'Avisa 3 días antes del vencimiento de cada factura a crédito.', 'Para facturas E31 y E45 con condición a crédito. Se detiene al registrar el cobro.'],
+      ['Fidelización', 'Gracias por tu compra', 'Mensaje de agradecimiento con la representación impresa del e-CF aceptado.', 'Se envía 1 hora después de que la DGII acepte la factura.'],
+      ['Reactivación', 'Te extrañamos', 'Oferta especial para clientes inactivos por más de 90 días.', 'Incluye un cupón de 5% válido por 15 días. 38 clientes cumplen hoy la condición.']
+    ];
+    const on = st.on || { 1: true };
+    const op = st.op || {};
+    const autos = A.map(([cat, t, d, det], i) => ({ cat, t, d, det, on: !!on[i], sw: on[i] ? 'sw on' : 'sw',
+      estado: on[i] ? 'Activa' : 'Inactiva', badge: on[i] ? 'bd b-acep' : 'bd b-borr',
+      open: !!op[i], openLabel: op[i] ? 'Ocultar detalles' : 'Ver detalles ›',
+      toggle: () => this.setState({ on: { ...on, [i]: !on[i] } }), toggleOpen: () => this.setState({ op: { ...op, [i]: !op[i] } }) }));
+    return {
+      marca: 'Kontara', active: !!st.active, notActive: !st.active, autos,
+      activate: () => this.setState({ active: true }), deactivate: () => this.setState({ active: false }),
+      video: !!st.video, openVideo: () => this.setState({ video: true }), closeVideo: () => this.setState({ video: false, playing: false }),
+      activateFromVideo: () => this.setState({ video: false, active: true }),
+      togglePlay: () => this.setState({ playing: !st.playing }), playIcon: st.playing ? '❚❚' : '▶', playText: st.playing ? 'Reproduciendo · 0:08 / 1:52' : 'Duración: 1 min 52 s'
+    };
+  }
+}
+</script>
+</body>
+</html>

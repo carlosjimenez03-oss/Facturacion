@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Reportes</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="reportes" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,56px"></dc-import>
+    <div class="content">
+      <div class="ph">
+        <div><h1>Reportes</h1><p>Informes financieros, comerciales y fiscales de tu empresa</p></div>
+        <div class="row">
+          <select class="inp" aria-label="Período" value="{{periodo}}" onChange="{{setPeriodo}}" style="width: auto; min-width: 170px"><option>Octubre 2026</option><option>Septiembre 2026</option><option>Año 2026</option></select>
+        </div>
+      </div>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px">
+        <sc-for list="{{reps}}" as="r" hint-placeholder-count="8">
+          <button type="button" onClick="{{r.pick}}" aria-pressed="{{r.on}}" style="text-align: left; font: inherit; cursor: pointer; padding: 16px; border-radius: 12px; border: {{r.border}}; background: {{r.bg}}; display: flex; flex-direction: column; gap: 4px">
+            <span class="chip" style="align-self: flex-start">{{r.cat}}</span>
+            <b style="color: #111827; font-size: 14.5px; margin-top: 4px">{{r.t}}</b>
+            <span style="font-size: 12.5px; color: #6B7280">{{r.d}}</span>
+          </button>
+        </sc-for>
+      </div>
+      <section class="card">
+        <div class="card-h">
+          <div><h2>{{cur.t}}</h2><span class="hint">{{cur.d}} · {{periodo}}</span></div>
+          <div class="row">
+            <button type="button" class="btn btn-o btn-sm" onClick="{{exportXls}}">Exportar Excel</button>
+            <button type="button" class="btn btn-o btn-sm" onClick="{{exportPdf}}">PDF</button>
+            <button type="button" class="btn btn-p btn-sm" onClick="{{toggleFav}}">{{favLabel}}</button>
+          </div>
+        </div>
+        <div class="tw"><table class="tbl" style="min-width: 640px">
+          <thead><tr><sc-for list="{{cur.cols}}" as="c" hint-placeholder-count="3"><th class="{{c.cls}}">{{c.t}}</th></sc-for></tr></thead>
+          <tbody><sc-for list="{{cur.rows}}" as="r" hint-placeholder-count="5"><tr style="font-weight: {{r.w}}; background: {{r.bg}}"><sc-for list="{{r.cells}}" as="c" hint-placeholder-count="3"><td class="{{c.cls}}">{{c.t}}</td></sc-for></tr></sc-for></tbody>
+        </table></div>
+      </section>
+    </div>
+  </main>
+  <sc-if value="{{flash}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite"><div class="toast">
+      <span class="ti" style="background: #DCFCE7; color: #166534"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+      <div style="flex: 1; min-width: 0"><b>{{flash}}</b></div>
+      <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{closeFlash}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div></div>
+  </sc-if>
+  <sc-if value="{{dlOn}}" hint-placeholder-val="{{false}}">
+    <div class="scrim" style="z-index: 140">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dl-t" style="max-width: 640px">
+        <div class="modal-h"><h3 id="dl-t">{{dlTitle}}</h3></div>
+        <div class="modal-b">
+          <span>{{dlMsg}}</span>
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}">
+            <textarea class="inp mono" readonly rows="10" style="font-size: 12px; white-space: pre" aria-label="Contenido del archivo" value="{{dlText}}"></textarea>
+            <span class="hint">Seleccione el texto (Ctrl+A) y cópielo (Ctrl+C). Para Excel, péguelo en un archivo de texto y guárdelo con la extensión indicada.</span>
+          </sc-if>
+        </div>
+        <div class="modal-f">
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}"><button type="button" class="btn btn-o" onClick="{{dlCopy}}">Copiar contenido</button></sc-if>
+          <button type="button" class="btn btn-p" onClick="{{dlClose}}">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1100}}'>
+class Component extends DCLogic {
+  ecfNote(msg) {
+    this.setState({ fx: msg, flash: msg });
+  }
+  ecfWins() {
+    const out = [];
+    try { let w = window; for (let i = 0; i < 5 && w; i++) { out.push(w); if (w === w.parent) break; w = w.parent; } } catch (e) {}
+    return out;
+  }
+  async ecfCap(name) {
+    for (const w of this.ecfWins()) {
+      try {
+        if (w.claude && typeof w.claude.use === 'function') {
+          const cap = await Promise.race([w.claude.use(name), new Promise(r => setTimeout(() => r(null), 4000))]);
+          if (cap) return cap;
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+  async ecfSave(filename, data) {
+    this.ecfNote('Preparando ' + filename + '…');
+    const cap = await this.ecfCap('downloads');
+    if (cap) {
+      try {
+        await cap.save({ filename, data: typeof data === 'string' ? data : data });
+        this.ecfNote('Archivo guardado: ' + filename);
+        return true;
+      } catch (e) {
+        const code = e && e.code;
+        if (code === 'declined') { this.ecfNote('Descarga cancelada'); return false; }
+        if (code === 'rate_limited') { this.ecfNote('Ya hay una descarga esperando confirmación'); return false; }
+        if (code === 'rejected_extension' && !/\.txt$/.test(filename)) return this.ecfSave(filename + '.txt', data);
+      }
+    }
+    // Sin capacidad de descarga en este visor: intento directo en la ventana accesible más alta
+    let tried = false;
+    const wins = this.ecfWins().reverse();
+    for (const w of wins) {
+      try {
+        const doc = w.document;
+        const blob = new w.Blob([data], { type: /\.pdf$/.test(filename) ? 'application/pdf' : 'text/plain;charset=utf-8' });
+        const url = w.URL.createObjectURL(blob);
+        const a = doc.createElement('a');
+        a.href = url; a.download = filename; a.style.display = 'none';
+        doc.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => { try { w.URL.revokeObjectURL(url); } catch (e) {} }, 8000);
+        tried = true; break;
+      } catch (e) {}
+    }
+    this.setState({ dl: { name: filename, text: typeof data === 'string' && !/\.pdf$/.test(filename) ? data.replace(/^﻿/, '') : '', tried }, fx: '', flash: '' });
+    return false;
+  }
+  async ecfCopy(text, label) {
+    let ok = false;
+    for (const w of this.ecfWins()) {
+      try { await w.navigator.clipboard.writeText(text); ok = true; break; } catch (e) {}
+    }
+    if (!ok) {
+      for (const w of this.ecfWins()) {
+        try {
+          const d = w.document; const t = d.createElement('textarea');
+          t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.top = '-1000px';
+          d.body.appendChild(t); t.select(); ok = d.execCommand('copy'); t.remove();
+          if (ok) break;
+        } catch (e) {}
+      }
+    }
+    if (ok) this.ecfNote(label || 'Copiado al portapapeles');
+    else this.setState({ dl: { name: 'Copiar manualmente', text, tried: false, copy: true }, fx: '', flash: '' });
+    return ok;
+  }
+  ecfCsv(rows) {
+    const q = v => { const s = v == null ? '' : String(v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    return '﻿' + rows.map(r => r.map(q).join(',')).join('\r\n');
+  }
+  ecfNum(v) {
+    const n = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? String(v) : n.toFixed(2);
+  }
+  ecfPad(cols, widths) {
+    return cols.map((c, i) => { const w = widths[i] || 12; let s = String(c == null ? '' : c); if (s.length > w) s = s.slice(0, w - 1) + '.'; return w < 0 ? s : (i > 0 && /^[-(]?[\d,]+\.\d\d\)?$/.test(s) ? s.padStart(w) : s.padEnd(w)); }).join(' ');
+  }
+  ecfPdf(title, lines, subtitle) {
+    const map = { '−': '-', '–': '-', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'", '…': '...', '→': '->', '›': '>', '≥': '>=', '✓': 'v', '★': '*' };
+    const esc = s => String(s).replace(/[−–—“”‘’…→›≥✓★]/g, ch => map[ch]).replace(/[\\()]/g, m => '\\' + m)
+      .replace(/[^\x20-\x7e]/g, ch => { const c = ch.charCodeAt(0); return c < 256 ? '\\' + c.toString(8).padStart(3, '0') : '?'; });
+    const per = 50, pages = [];
+    for (let i = 0; i < Math.max(lines.length, 1); i += per) pages.push(lines.slice(i, i + per));
+    const objs = [];
+    objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+    objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>';
+    objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+    objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>';
+    objs[6] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+    const kids = [];
+    pages.forEach((pl, p) => {
+      const po = 7 + p * 2, co = po + 1;
+      kids.push(po + ' 0 R');
+      let s = '0.06 0.46 0.43 rg 40 806 515 3 re f\n';
+      s += 'BT /F2 15 Tf 40 784 Td (' + esc(title) + ') Tj ET\n';
+      s += 'BT /F4 8.5 Tf 40 770 Td (' + esc((subtitle ? subtitle + '  |  ' : '') + 'Distribuidora Caribe Verde, SRL  |  RNC 1-31-89754-2  |  Pag. ' + (p + 1) + '/' + pages.length) + ') Tj ET\n';
+      s += '0.8 0.8 0.8 RG 0.5 w 40 762 m 555 762 l S\n';
+      s += 'BT /F1 8.5 Tf 40 746 Td 13.5 TL\n';
+      pl.forEach(l => {
+        const o = typeof l === 'object' && l !== null ? l : { t: l };
+        s += (o.b ? '/F3 8.5 Tf (' + esc(o.t) + ") ' /F1 8.5 Tf\n" : '(' + esc(o.t) + ") '\n");
+      });
+      s += 'ET\nBT /F4 7 Tf 40 30 Td (' + esc('Generado por Kontara el 23/10/2026 - Documento de referencia') + ') Tj ET';
+      objs[co] = '<< /Length ' + s.length + ' >>\nstream\n' + s + '\nendstream';
+      objs[po] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents ' + co + ' 0 R >>';
+    });
+    objs[2] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>';
+    let out = '%PDF-1.4\n';
+    const off = [];
+    for (let i = 1; i < objs.length; i++) { off[i] = out.length; out += i + ' 0 obj\n' + objs[i] + '\nendobj\n'; }
+    const x = out.length;
+    out += 'xref\n0 ' + objs.length + '\n0000000000 65535 f \n';
+    for (let i = 1; i < objs.length; i++) out += String(off[i]).padStart(10, '0') + ' 00000 n \n';
+    out += 'trailer\n<< /Size ' + objs.length + ' /Root 1 0 R >>\nstartxref\n' + x + '\n%%EOF\n';
+    return out;
+  }
+  ecfXml(tipo, encf, fecha, rncComprador, comprador, total, itbis) {
+    const e = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<?xml version="1.0" encoding="UTF-8"?>\n<ECF>\n  <Encabezado>\n    <Version>1.0</Version>\n    <IdDoc>\n      <TipoeCF>' + tipo + '</TipoeCF>\n      <eNCF>' + e(encf) + '</eNCF>\n      <FechaVencimientoSecuencia>31-12-2027</FechaVencimientoSecuencia>\n      <TipoIngresos>01</TipoIngresos>\n    </IdDoc>\n    <Emisor>\n      <RNCEmisor>131897542</RNCEmisor>\n      <RazonSocialEmisor>Distribuidora Caribe Verde, SRL</RazonSocialEmisor>\n      <DireccionEmisor>Av. 27 de Febrero 415, Piantini, Santo Domingo</DireccionEmisor>\n      <FechaEmision>' + e(fecha) + '</FechaEmision>\n    </Emisor>\n    <Comprador>\n      <RNCComprador>' + e(String(rncComprador).replace(/\D/g, '')) + '</RNCComprador>\n      <RazonSocialComprador>' + e(comprador) + '</RazonSocialComprador>\n    </Comprador>\n    <Totales>\n      <MontoTotal>' + this.ecfNum(total) + '</MontoTotal>\n      <TotalITBIS>' + this.ecfNum(itbis) + '</TotalITBIS>\n    </Totales>\n  </Encabezado>\n  <FechaHoraFirma>' + e(fecha) + ' 10:42:18</FechaHoraFirma>\n  <!-- Firma digital XAdES omitida en el prototipo -->\n</ECF>\n';
+  }
+  renderVals() {
+    const st = this.state || {};
+    const fmt = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const k = st.per === 'Año 2026' ? 10 : st.per === 'Septiembre 2026' ? 0.89 : 1;
+    const m = v => fmt(v * k);
+    const R = [
+      ['Financiero', 'Estado de resultados', 'Ingresos, costos y gastos del período', ['Concepto', '#Monto (RD$)'], [['Ingresos por ventas', 4872350], ['(−) Costo de ventas', -3349600], ['Utilidad bruta', 1522750, 1], ['(−) Gastos operacionales', -984300], ['Utilidad operativa', 538450, 1]]],
+      ['Financiero', 'Balance general', 'Activos, pasivos y patrimonio', ['Cuenta', '#Saldo (RD$)'], [['Total activos', 21480300.5, 1], ['Total pasivos', 3215700.1, 1], ['Patrimonio', 18264600.4, 1]]],
+      ['Ventas', 'Ventas por cliente', 'Clientes con mayor facturación', ['Cliente', '#Ventas (RD$)'], [['Caribbean Fresh Imports LLC', 2145000], ['Constructora Hispaniola, SRL', 1358860], ['Ayuntamiento Municipal de Moca', 812300], ['Supermercado La Cosecha, SRL', 369900.4]]],
+      ['Ventas', 'Ventas por producto', 'Unidades y montos vendidos', ['Producto', '#Ventas (RD$)'], [['Cemento gris Portland 42.5 kg', 1186330], ['Varilla corrugada 3/8"', 894900], ['Block de hormigón 6"', 539000], ['Pintura acrílica blanca (galón)', 412800]]],
+      ['Cobros', 'Antigüedad de cuentas por cobrar', 'Saldos por días de vencimiento', ['Tramo', '#Saldo (RD$)'], [['Corriente (no vencido)', 2049520.45], ['1 a 30 días', 171000], ['31 a 60 días', 95260], ['Más de 60 días', 0], ['Total', 2315780.45, 1]]],
+      ['Compras', 'Compras por proveedor', 'Proveedores con mayor volumen', ['Proveedor', '#Compras (RD$)'], [['Cementos del Atlántico, SA', 1845600], ['Aceros del Yaque, SRL', 732150], ['Pinturas Tropical, SRL', 412380], ['Seguridad Integral Dominicana, SRL', 113870]]],
+      ['Impuestos', 'Resumen de ITBIS', 'Facturado, adelantado y a pagar', ['Concepto', '#Monto (RD$)'], [['ITBIS facturado', 426352], ['(−) ITBIS adelantado admitido', -279866.66], ['(−) Retenido por terceros', -21700], ['(+) Retenciones efectuadas', 38450], ['ITBIS a pagar', 163235.34, 1]]],
+      ['Inventario', 'Inventario valorizado', 'Existencias y valor por producto', ['Producto', '#Valor (RD$)'], [['Block de hormigón 6"', 470400], ['Varilla corrugada 3/8"', 331250], ['Pintura acrílica blanca (galón)', 47360], ['Cemento gris Portland 42.5 kg', 7748.15]]]
+    ];
+    const sel = st.sel ?? 0;
+    const per = st.per || 'Octubre 2026';
+    const favs = st.favs || {};
+    const reps = R.map(([cat, t, d], i) => ({ cat, t: (favs[i] ? '★ ' : '') + t, d, on: i === sel, border: i === sel ? '1.5px solid #0F766E' : '1px solid #E5E7EB', bg: i === sel ? '#F0FAF9' : '#fff', pick: () => this.setState({ sel: i }) }));
+    const r = R[sel];
+    const flash = t => this.setState({ flash: t });
+    return {
+      dlOn: !!(this.state || {}).dl, dlHasText: !!((this.state || {}).dl && (this.state || {}).dl.text), dlText: ((this.state || {}).dl || {}).text || '',
+      dlTitle: ((this.state || {}).dl || {}).copy ? 'Copie el contenido manualmente' : 'Este visor no permitió descargar «' + (((this.state || {}).dl || {}).name || '') + '»',
+      dlMsg: ((this.state || {}).dl || {}).copy ? 'El navegador bloqueó el portapapeles dentro del lienzo. Puede copiar el texto desde aquí.' : (((this.state || {}).dl || {}).tried ? 'Intentamos descargarlo directamente; si no aparece en su carpeta de Descargas es porque el lienzo bloquea descargas. ' : '') + 'Abra el prototipo en pantalla completa (Play) o use el contenido de abajo.',
+      dlClose: () => this.setState({ dl: null }),
+      dlCopy: () => { const t = ((this.state || {}).dl || {}).text || ''; try { navigator.clipboard.writeText(t).then(() => this.setState({ dl: null, fx: 'Copiado al portapapeles', flash: 'Copiado al portapapeles' }), () => {}); } catch (e) {} },
+      reps, periodo: per, setPeriodo: e => this.setState({ per: e.target.value }),
+      cur: { t: r[1], d: r[2], cols: r[3].map(c => ({ t: c.replace('#', ''), cls: c.startsWith('#') ? 'num' : '' })),
+        rows: r[4].map(([a, v, b]) => ({ w: b ? '650' : '400', bg: b ? '#FAFBFC' : 'transparent', cells: [{ t: a, cls: '' }, { t: m(v), cls: 'num' }] })) },
+      exportXls: () => this.ecfSave(r[1].normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w]+/g, '_') + '.csv', this.ecfCsv([r[3].map(c => c.replace('#', ''))].concat(r[4].map(([a, v]) => [a, (v * k).toFixed(2)])))),
+      exportPdf: () => this.ecfSave(r[1].normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^\w]+/g, '_') + '.pdf', this.ecfPdf(r[1], [{ t: this.ecfPad(r[3].map(c => c.replace('#', '')), [60, 20]), b: true }].concat(r[4].map(([a, v, b]) => ({ t: this.ecfPad([a, m(v)], [60, 20]), b: !!b }))), per)),
+      favLabel: favs[sel] ? 'Quitar de favoritos' : 'Agregar a favoritos', toggleFav: () => this.setState({ favs: { ...favs, [sel]: !favs[sel] } }),
+      flash: st.flash || '', closeFlash: () => this.setState({ flash: '' })
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Centro de sincronización</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="sync" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="Modo contingencia" hint-size="100%,64px"></dc-import>
+    <div class="content">
+      <div class="al al-o" style="padding: 16px 18px; align-items: center; flex-wrap: wrap">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 8.8a15 15 0 0 1 4.2-2.6M10.7 5.1A15 15 0 0 1 22 8.8M5 12.5a10 10 0 0 1 5.2-2.4M16.9 11.5a10 10 0 0 1 2.1 1M8.5 16a5 5 0 0 1 7 0M12 20h.01M2 2l20 20"></path></svg>
+        <div style="flex: 1 1 400px"><b>Modo contingencia activo desde las 10:12 a. m.</b> Los servicios de la DGII no responden. Las facturas se siguen emitiendo y firmando localmente; se enviarán en lotes al restablecerse la conexión. Puede entregarlas al cliente con la leyenda de contingencia.</div>
+        <button type="button" class="btn btn-o btn-sm" onClick="{{retry}}">Reintentar conexión ahora</button>
+      </div>
+
+      <div class="ph">
+        <div><h1>Centro de sincronización</h1><p>Envío de comprobantes firmados localmente y registro de facturas en papel</p></div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px">
+        <div class="card stat"><span class="k">Pendientes de envío</span><span class="v" style="color: #C2410C">14</span><span class="s">Firmadas localmente · RD$ 186,430.50</span></div>
+        <div class="card stat"><span class="k">Tiempo en contingencia</span><span class="v">0 h 41 min</span><span class="s">Límite recomendado: 72 horas</span></div>
+        <div class="card stat"><span class="k">Último intento</span><span class="v">10:53 a. m.</span><span class="s">Próximo intento en 30 s · automático</span></div>
+        <div class="card stat"><span class="k">Facturas en papel</span><span class="v">{{paperCount}}</span><span class="s">Registradas en esta contingencia</span></div>
+      </div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+        <section class="card" style="flex: 2 1 600px; min-width: 0">
+          <div class="card-h"><h2>Facturas firmadas pendientes de envío</h2><span class="bd b-pend">14 pendientes</span></div>
+          <div class="tw">
+            <table class="tbl" style="min-width: 680px">
+              <thead><tr><th>e-NCF</th><th>Cliente</th><th>Firmada</th><th class="num">Total (RD$)</th><th>Lote</th><th>Estado</th></tr></thead>
+              <tbody>
+                <sc-for list="{{pend}}" as="p" hint-placeholder-count="6">
+                  <tr><td class="mono">{{p.encf}}</td><td style="color: #111827">{{p.cli}}</td><td class="mut">{{p.hora}}</td><td class="num" style="font-weight: 600">{{p.total}}</td><td class="mono mut">{{p.lote}}</td><td><span class="bd b-pend">Pendiente de sincronizar</span></td></tr>
+                </sc-for>
+              </tbody>
+            </table>
+          </div>
+          <div style="padding: 12px 16px; border-top: 1px solid #EEF0F2; font-size: 13px"><a href="Facturas.dc.html" style="font-weight: 600; text-decoration: none">Ver las 14 facturas pendientes →</a></div>
+        </section>
+
+        <div style="flex: 1 1 340px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+          <section class="card">
+            <div class="card-h"><h2>Progreso por lotes</h2><span class="hint">20 e-CF por lote</span></div>
+            <div class="card-b" style="display: flex; flex-direction: column; gap: 16px">
+              <sc-for list="{{lotes}}" as="l" hint-placeholder-count="3">
+                <div style="display: flex; flex-direction: column; gap: 6px">
+                  <div style="display: flex; justify-content: space-between; font-size: 13.5px"><span style="font-weight: 600; color: #111827"><span class="mono">{{l.id}}</span> · {{l.n}} e-CF</span><span class="mut">{{l.txt}}</span></div>
+                  <div class="{{l.pbCls}}"><span style="width: {{l.pct}}"></span></div>
+                </div>
+              </sc-for>
+            </div>
+          </section>
+          <section class="card" style="border-style: dashed; border-color: #CBD5E1">
+            <div class="card-b" style="display: flex; flex-direction: column; gap: 10px">
+              <div style="display: flex; gap: 12px; align-items: center">
+                <span class="ei" style="width: 40px; height: 40px; border-radius: 10px; background: #FFF7ED; color: #C2410C; display: grid; place-items: center; flex: none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><path d="M14 3v6h6M8 13h8M8 17h5"></path></svg></span>
+                <h3 style="margin: 0; font-size: 15px; color: #111827">Registrar facturas manuales en papel</h3>
+              </div>
+              <p style="margin: 0; font-size: 13.5px; color: #4B5563; line-height: 1.55">Si hubo una caída total (sin sistema ni firma local), capture aquí los comprobantes emitidos en papel para que se integren a la contabilidad y a los formatos 607.</p>
+              <button type="button" class="btn btn-o" onClick="{{openPaper}}">Registrar factura en papel</button>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <section class="card">
+        <div class="card-h"><h2>Historial de envíos</h2><span class="hint">Últimos 7 días</span></div>
+        <div class="tw">
+          <table class="tbl" style="min-width: 760px">
+            <thead><tr><th>Fecha y hora</th><th>Lote</th><th class="num">Documentos</th><th class="num">Aceptados</th><th class="num">Rechazados</th><th>Origen</th><th>Resultado</th></tr></thead>
+            <tbody>
+              <sc-for list="{{hist}}" as="h" hint-placeholder-count="5">
+                <tr><td class="mut">{{h.f}}</td><td class="mono">{{h.id}}</td><td class="num">{{h.n}}</td><td class="num" style="color: #15803D; font-weight: 600">{{h.ok}}</td><td class="num" style="color: {{h.badColor}}; font-weight: 600">{{h.bad}}</td><td>{{h.src}}</td><td><span class="{{h.cls}}">{{h.res}}</span></td></tr>
+              </sc-for>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <sc-if value="{{paper}}" hint-placeholder-val="{{false}}">
+    <div class="scrim">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="papel-t" style="max-width: 560px">
+        <div class="modal-h"><h3 id="papel-t">Registrar factura emitida en papel</h3></div>
+        <div class="modal-b">
+          <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+            <div class="fld"><label class="lbl" for="pt">Tipo</label><select id="pt" class="inp"><option>Crédito fiscal</option><option>Consumo</option></select></div>
+            <div class="fld"><label class="lbl" for="pn">Número de comprobante <span class="req">*</span></label><input id="pn" class="inp mono" value="B0100004521"></div>
+            <div class="fld"><label class="lbl" for="pf">Fecha de emisión</label><input id="pf" class="inp" value="23/10/2026"></div>
+            <div class="fld"><label class="lbl" for="pr">RNC o cédula del cliente</label><input id="pr" class="inp mono" value="1-01-78452-3"></div>
+            <div class="fld"><label class="lbl" for="pm">Monto gravado (RD$)</label><input id="pm" class="inp" value="23,500.00"></div>
+            <div class="fld"><label class="lbl" for="pi">ITBIS (RD$)</label><input id="pi" class="inp" value="4,230.00"></div>
+          </div>
+          <div class="fld"><span class="lbl">Foto o escaneo del comprobante</span><div style="border: 1px dashed #CBD5E1; border-radius: 10px; padding: 16px; text-align: center; font-size: 13px; color: #6B7280">Arrastre la imagen aquí o <button type="button" onClick="{{act.file}}" style="border: 0; background: none; padding: 0; font: inherit; color: #0F766E; text-decoration: underline; cursor: pointer">selecciónela</button> · JPG, PNG o PDF</div></div>
+          <div class="al al-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg><span>Al restablecerse el servicio, el sistema le pedirá emitir el e-CF de reemplazo (código de modificación 4) que referencia este comprobante.</span></div>
+        </div>
+        <div class="modal-f"><button type="button" class="btn btn-o" onClick="{{closePaper}}">Cancelar</button><button type="button" class="btn btn-p" onClick="{{savePaper}}">Registrar comprobante</button></div>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{toast}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite">
+      <div class="toast">
+        <span class="ti" style="background: {{toastBg}}; color: {{toastFg}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8v4M12 16h.01"></path><circle cx="12" cy="12" r="9"></circle></svg></span>
+        <div style="flex: 1; min-width: 0"><b>{{toastTitle}}</b><span class="mut">{{toastText}}</span></div>
+        <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{closeToast}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{fxOn}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite" style="top: 150px"><div class="toast">
+      <span class="ti" style="background: #E6F4F2; color: #0F766E"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+      <div style="flex: 1; min-width: 0"><b>{{fxMsg}}</b></div>
+      <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{fxClose}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div></div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1320}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = this.state || {};
+    const pend = [
+      ['E320000004587', 'Consumidor final', '10:14 a. m.', '4,850.00', 'A-1025'],
+      ['E310000000133', 'Supermercado La Cosecha, SRL', '10:19 a. m.', '62,540.00', 'A-1025'],
+      ['E320000004589', 'Consumidor final', '10:23 a. m.', '1,275.50', 'A-1025'],
+      ['E320000004590', 'Consumidor final', '10:31 a. m.', '8,960.00', 'A-1025'],
+      ['E310000000134', 'Hotel Brisas de Bávaro, SA', '10:38 a. m.', '97,880.00', 'A-1025'],
+      ['E320000004591', 'Consumidor final', '10:47 a. m.', '2,415.00', 'A-1025']
+    ].map(([encf, cli, hora, total, lote]) => ({ encf, cli, hora, total, lote }));
+    const lotes = [
+      { id: 'A-1023', n: 20, pct: '100%', txt: 'Enviado · 20 aceptados', pbCls: 'pb' },
+      { id: 'A-1024', n: 20, pct: '55%', txt: '11 de 20 · interrumpido', pbCls: 'pb warn' },
+      { id: 'A-1025', n: 14, pct: '0%', txt: 'En cola', pbCls: 'pb' }
+    ];
+    const hist = [
+      ['23/10/2026 10:11', 'A-1024', 20, 11, 0, 'Contingencia', 'Interrumpido', 'bd b-pend'],
+      ['23/10/2026 10:05', 'A-1023', 20, 20, 0, 'Contingencia', 'Completado', 'bd b-acep'],
+      ['21/10/2026 15:07', 'T-8841', 1, 0, 1, 'En línea', 'Con rechazos', 'bd b-rech'],
+      ['18/10/2026 08:40', 'A-1022', 37, 36, 1, 'Contingencia', 'Con rechazos', 'bd b-rech'],
+      ['18/10/2026 08:32', 'A-1021', 20, 20, 0, 'Contingencia', 'Completado', 'bd b-acep']
+    ].map(([f, id, n, ok, bad, src, res, cls]) => ({ f, id, n, ok, bad, src, res, cls, badColor: bad ? '#B91C1C' : '#9CA3AF' }));
+    const paperCount = 2 + (st.added || 0);
+    const t = st.toast;
+    const FX = {"file": "Selector de imagen abierto (simulado)"};
+    const act = {};
+    Object.keys(FX).forEach(k => { act[k] = () => this.setState({ fx: FX[k] }); });
+    return {
+      act, fxOn: !!(this.state || {}).fx, fxMsg: (this.state || {}).fx || '', fxClose: () => this.setState({ fx: '' }),
+      pend, lotes, hist, paperCount,
+      paper: !!st.paper,
+      openPaper: () => this.setState({ paper: true }),
+      closePaper: () => this.setState({ paper: false }),
+      savePaper: () => this.setState({ paper: false, added: (st.added || 0) + 1, toast: 'paper' }),
+      retry: () => this.setState({ toast: 'retry' }),
+      toast: !!t,
+      toastTitle: t === 'paper' ? 'Comprobante en papel registrado' : 'La DGII sigue sin responder',
+      toastText: t === 'paper' ? 'B0100004521 · RD$ 27,730.00. Se pedirá su e-CF de reemplazo al reconectar.' : 'Se reintentará automáticamente en 30 segundos. Puede seguir facturando.',
+      toastBg: t === 'paper' ? '#DCFCE7' : '#FFEDD5', toastFg: t === 'paper' ? '#166534' : '#C2410C',
+      closeToast: () => this.setState({ toast: null })
+    };
+  }
+}
+</script>
+</body>
+</html>

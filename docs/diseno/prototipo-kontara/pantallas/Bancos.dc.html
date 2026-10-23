@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Bancos</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="{{sbActive}}" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,56px"></dc-import>
+    <div class="content">
+      <div class="ph">
+        <div><div class="crumb"><span>Bancos</span></div><h1>Bancos</h1><p>Cuentas, conciliación bancaria y transferencias</p></div>
+        <button type="button" class="btn btn-p" onClick="{{toggleAcc}}">{{accLabel}}</button>
+      </div>
+      <sc-if value="{{addAcc}}" hint-placeholder-val="{{false}}">
+        <section class="card card-b" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; align-items: end">
+          <div class="fld"><label class="lbl" for="bb">Banco</label><select id="bb" class="inp"><option>Banco Popular Dominicano</option><option>Banreservas</option><option>Banco BHD</option><option>Scotiabank</option></select></div>
+          <div class="fld"><label class="lbl" for="bt">Tipo</label><select id="bt" class="inp"><option>Corriente</option><option>Ahorros</option></select></div>
+          <div class="fld"><label class="lbl" for="bn">Número de cuenta</label><input id="bn" class="inp mono" placeholder="000-000000-0"></div>
+          <button type="button" class="btn btn-p" onClick="{{saveAcc}}">Guardar cuenta</button>
+        </section>
+      </sc-if>
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px">
+        <sc-for list="{{accs}}" as="a" hint-placeholder-count="3">
+          <button type="button" class="card" onClick="{{a.pick}}" style="text-align: left; font: inherit; cursor: pointer; padding: 18px 20px; display: flex; flex-direction: column; gap: 6px; border: {{a.border}}; background: #fff">
+            <span style="display: flex; justify-content: space-between; color: #6B7280; font-size: 13px"><span>{{a.b}}</span><span class="mono">{{a.n}}</span></span>
+            <span style="font-size: 22px; font-weight: 700; color: #111827; font-variant-numeric: tabular-nums">RD$ {{a.s}}</span>
+            <span class="hint">{{a.t}} · {{a.pend}}</span>
+          </button>
+        </sc-for>
+      </div>
+      <div class="tabs" role="tablist">
+        <sc-for list="{{tabs}}" as="t" hint-placeholder-count="3"><button type="button" role="tab" class="{{t.cls}}" onClick="{{t.pick}}">{{t.label}}</button></sc-for>
+      </div>
+
+      <sc-if value="{{v.mov}}" hint-placeholder-val="{{true}}">
+        <section class="card"><div class="card-h"><h2>Movimientos · {{acc.b}}</h2><button type="button" class="btn btn-o btn-sm" onClick="{{exportar}}">Exportar extracto</button></div>
+          <div class="tw"><table class="tbl" style="min-width: 760px"><thead><tr><th>Fecha</th><th>Descripción</th><th>Referencia</th><th class="num">Débito</th><th class="num">Crédito</th><th class="num">Balance</th></tr></thead>
+          <tbody><sc-for list="{{movs}}" as="m" hint-placeholder-count="6"><tr><td class="mut">{{m.f}}</td><td>{{m.d}}</td><td class="mono mut">{{m.r}}</td><td class="num" style="color: #B91C1C">{{m.deb}}</td><td class="num" style="color: #15803D">{{m.cre}}</td><td class="num" style="font-weight: 600">{{m.bal}}</td></tr></sc-for></tbody></table></div>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{v.conc}}" hint-placeholder-val="{{false}}">
+        <section class="card">
+          <div class="card-h"><div><h2>Conciliación · octubre 2026</h2><span class="hint">Marque los movimientos del extracto que coinciden con sus registros</span></div><span class="chip">{{concDone}} de {{concTotal}} conciliados</span></div>
+          <div style="padding: 0 20px 12px"><div class="pb"><span style="width: {{concPct}}"></span></div></div>
+          <div class="tw"><table class="tbl" style="min-width: 720px"><thead><tr><th>Conciliado</th><th>Fecha</th><th>Extracto bancario</th><th>Registro en el sistema</th><th class="num">Monto (RD$)</th></tr></thead>
+          <tbody><sc-for list="{{conc}}" as="c" hint-placeholder-count="5"><tr><td><input type="checkbox" checked="{{c.on}}" onChange="{{c.toggle}}" aria-label="Conciliar {{c.ext}}" style="width: 18px; height: 18px; accent-color: #0F766E"></td><td class="mut">{{c.f}}</td><td>{{c.ext}}</td><td class="mut">{{c.sis}}</td><td class="num">{{c.m}}</td></tr></sc-for></tbody></table></div>
+          <div class="row" style="justify-content: flex-end; padding: 14px 20px; border-top: 1px solid #EEF0F2"><button type="button" class="btn btn-p" onClick="{{closeConc}}" disabled="{{concIncomplete}}">Cerrar conciliación</button></div>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{v.trans}}" hint-placeholder-val="{{false}}">
+        <section class="card">
+          <div class="card-h"><h2>Nueva transferencia entre cuentas</h2></div>
+          <div class="card-b" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; align-items: end">
+            <div class="fld"><label class="lbl" for="to">Origen</label><select id="to" class="inp"><option>Banco Popular · ****4471</option><option>Banreservas · ****0932</option></select></div>
+            <div class="fld"><label class="lbl" for="td">Destino</label><select id="td" class="inp"><option>Banreservas · ****0932</option><option>Caja chica</option></select></div>
+            <div class="fld"><label class="lbl" for="tm">Monto (RD$)</label><input id="tm" type="number" class="inp" value="{{tMonto}}" onChange="{{setMonto}}"></div>
+            <div class="fld"><label class="lbl" for="tc">Concepto</label><input id="tc" class="inp" value="Fondos para pago de nómina"></div>
+            <button type="button" class="btn btn-p" onClick="{{transfer}}" disabled="{{noMonto}}">Registrar transferencia</button>
+          </div>
+        </section>
+      </sc-if>
+    </div>
+  </main>
+  <sc-if value="{{flash}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite"><div class="toast">
+      <span class="ti" style="background: #DCFCE7; color: #166534"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+      <div style="flex: 1; min-width: 0"><b>{{flash}}</b></div>
+      <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{closeFlash}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div></div>
+  </sc-if>
+  <sc-if value="{{dlOn}}" hint-placeholder-val="{{false}}">
+    <div class="scrim" style="z-index: 140">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="dl-t" style="max-width: 640px">
+        <div class="modal-h"><h3 id="dl-t">{{dlTitle}}</h3></div>
+        <div class="modal-b">
+          <span>{{dlMsg}}</span>
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}">
+            <textarea class="inp mono" readonly rows="10" style="font-size: 12px; white-space: pre" aria-label="Contenido del archivo" value="{{dlText}}"></textarea>
+            <span class="hint">Seleccione el texto (Ctrl+A) y cópielo (Ctrl+C). Para Excel, péguelo en un archivo de texto y guárdelo con la extensión indicada.</span>
+          </sc-if>
+        </div>
+        <div class="modal-f">
+          <sc-if value="{{dlHasText}}" hint-placeholder-val="{{true}}"><button type="button" class="btn btn-o" onClick="{{dlCopy}}">Copiar contenido</button></sc-if>
+          <button type="button" class="btn btn-p" onClick="{{dlClose}}">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"tab":{"editor":"enum","options":["mov", "conc", "trans"],"default":"mov"},"$preview":{"width":1440,"height":1080}}'>
+class Component extends DCLogic {
+  ecfNote(msg) {
+    this.setState({ fx: msg, flash: msg });
+  }
+  ecfWins() {
+    const out = [];
+    try { let w = window; for (let i = 0; i < 5 && w; i++) { out.push(w); if (w === w.parent) break; w = w.parent; } } catch (e) {}
+    return out;
+  }
+  async ecfCap(name) {
+    for (const w of this.ecfWins()) {
+      try {
+        if (w.claude && typeof w.claude.use === 'function') {
+          const cap = await Promise.race([w.claude.use(name), new Promise(r => setTimeout(() => r(null), 4000))]);
+          if (cap) return cap;
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+  async ecfSave(filename, data) {
+    this.ecfNote('Preparando ' + filename + '…');
+    const cap = await this.ecfCap('downloads');
+    if (cap) {
+      try {
+        await cap.save({ filename, data: typeof data === 'string' ? data : data });
+        this.ecfNote('Archivo guardado: ' + filename);
+        return true;
+      } catch (e) {
+        const code = e && e.code;
+        if (code === 'declined') { this.ecfNote('Descarga cancelada'); return false; }
+        if (code === 'rate_limited') { this.ecfNote('Ya hay una descarga esperando confirmación'); return false; }
+        if (code === 'rejected_extension' && !/\.txt$/.test(filename)) return this.ecfSave(filename + '.txt', data);
+      }
+    }
+    // Sin capacidad de descarga en este visor: intento directo en la ventana accesible más alta
+    let tried = false;
+    const wins = this.ecfWins().reverse();
+    for (const w of wins) {
+      try {
+        const doc = w.document;
+        const blob = new w.Blob([data], { type: /\.pdf$/.test(filename) ? 'application/pdf' : 'text/plain;charset=utf-8' });
+        const url = w.URL.createObjectURL(blob);
+        const a = doc.createElement('a');
+        a.href = url; a.download = filename; a.style.display = 'none';
+        doc.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => { try { w.URL.revokeObjectURL(url); } catch (e) {} }, 8000);
+        tried = true; break;
+      } catch (e) {}
+    }
+    this.setState({ dl: { name: filename, text: typeof data === 'string' && !/\.pdf$/.test(filename) ? data.replace(/^﻿/, '') : '', tried }, fx: '', flash: '' });
+    return false;
+  }
+  async ecfCopy(text, label) {
+    let ok = false;
+    for (const w of this.ecfWins()) {
+      try { await w.navigator.clipboard.writeText(text); ok = true; break; } catch (e) {}
+    }
+    if (!ok) {
+      for (const w of this.ecfWins()) {
+        try {
+          const d = w.document; const t = d.createElement('textarea');
+          t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.top = '-1000px';
+          d.body.appendChild(t); t.select(); ok = d.execCommand('copy'); t.remove();
+          if (ok) break;
+        } catch (e) {}
+      }
+    }
+    if (ok) this.ecfNote(label || 'Copiado al portapapeles');
+    else this.setState({ dl: { name: 'Copiar manualmente', text, tried: false, copy: true }, fx: '', flash: '' });
+    return ok;
+  }
+  ecfCsv(rows) {
+    const q = v => { const s = v == null ? '' : String(v); return /[",\n;]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+    return '﻿' + rows.map(r => r.map(q).join(',')).join('\r\n');
+  }
+  ecfNum(v) {
+    const n = typeof v === 'number' ? v : Number(String(v).replace(/[^0-9.\-]/g, ''));
+    return isNaN(n) ? String(v) : n.toFixed(2);
+  }
+  ecfPad(cols, widths) {
+    return cols.map((c, i) => { const w = widths[i] || 12; let s = String(c == null ? '' : c); if (s.length > w) s = s.slice(0, w - 1) + '.'; return w < 0 ? s : (i > 0 && /^[-(]?[\d,]+\.\d\d\)?$/.test(s) ? s.padStart(w) : s.padEnd(w)); }).join(' ');
+  }
+  ecfPdf(title, lines, subtitle) {
+    const map = { '−': '-', '–': '-', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'", '…': '...', '→': '->', '›': '>', '≥': '>=', '✓': 'v', '★': '*' };
+    const esc = s => String(s).replace(/[−–—“”‘’…→›≥✓★]/g, ch => map[ch]).replace(/[\\()]/g, m => '\\' + m)
+      .replace(/[^\x20-\x7e]/g, ch => { const c = ch.charCodeAt(0); return c < 256 ? '\\' + c.toString(8).padStart(3, '0') : '?'; });
+    const per = 50, pages = [];
+    for (let i = 0; i < Math.max(lines.length, 1); i += per) pages.push(lines.slice(i, i + per));
+    const objs = [];
+    objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+    objs[3] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>';
+    objs[4] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>';
+    objs[5] = '<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >>';
+    objs[6] = '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>';
+    const kids = [];
+    pages.forEach((pl, p) => {
+      const po = 7 + p * 2, co = po + 1;
+      kids.push(po + ' 0 R');
+      let s = '0.06 0.46 0.43 rg 40 806 515 3 re f\n';
+      s += 'BT /F2 15 Tf 40 784 Td (' + esc(title) + ') Tj ET\n';
+      s += 'BT /F4 8.5 Tf 40 770 Td (' + esc((subtitle ? subtitle + '  |  ' : '') + 'Distribuidora Caribe Verde, SRL  |  RNC 1-31-89754-2  |  Pag. ' + (p + 1) + '/' + pages.length) + ') Tj ET\n';
+      s += '0.8 0.8 0.8 RG 0.5 w 40 762 m 555 762 l S\n';
+      s += 'BT /F1 8.5 Tf 40 746 Td 13.5 TL\n';
+      pl.forEach(l => {
+        const o = typeof l === 'object' && l !== null ? l : { t: l };
+        s += (o.b ? '/F3 8.5 Tf (' + esc(o.t) + ") ' /F1 8.5 Tf\n" : '(' + esc(o.t) + ") '\n");
+      });
+      s += 'ET\nBT /F4 7 Tf 40 30 Td (' + esc('Generado por Kontara el 23/10/2026 - Documento de referencia') + ') Tj ET';
+      objs[co] = '<< /Length ' + s.length + ' >>\nstream\n' + s + '\nendstream';
+      objs[po] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R /F2 4 0 R /F3 5 0 R /F4 6 0 R >> >> /Contents ' + co + ' 0 R >>';
+    });
+    objs[2] = '<< /Type /Pages /Kids [' + kids.join(' ') + '] /Count ' + pages.length + ' >>';
+    let out = '%PDF-1.4\n';
+    const off = [];
+    for (let i = 1; i < objs.length; i++) { off[i] = out.length; out += i + ' 0 obj\n' + objs[i] + '\nendobj\n'; }
+    const x = out.length;
+    out += 'xref\n0 ' + objs.length + '\n0000000000 65535 f \n';
+    for (let i = 1; i < objs.length; i++) out += String(off[i]).padStart(10, '0') + ' 00000 n \n';
+    out += 'trailer\n<< /Size ' + objs.length + ' /Root 1 0 R >>\nstartxref\n' + x + '\n%%EOF\n';
+    return out;
+  }
+  ecfXml(tipo, encf, fecha, rncComprador, comprador, total, itbis) {
+    const e = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return '<?xml version="1.0" encoding="UTF-8"?>\n<ECF>\n  <Encabezado>\n    <Version>1.0</Version>\n    <IdDoc>\n      <TipoeCF>' + tipo + '</TipoeCF>\n      <eNCF>' + e(encf) + '</eNCF>\n      <FechaVencimientoSecuencia>31-12-2027</FechaVencimientoSecuencia>\n      <TipoIngresos>01</TipoIngresos>\n    </IdDoc>\n    <Emisor>\n      <RNCEmisor>131897542</RNCEmisor>\n      <RazonSocialEmisor>Distribuidora Caribe Verde, SRL</RazonSocialEmisor>\n      <DireccionEmisor>Av. 27 de Febrero 415, Piantini, Santo Domingo</DireccionEmisor>\n      <FechaEmision>' + e(fecha) + '</FechaEmision>\n    </Emisor>\n    <Comprador>\n      <RNCComprador>' + e(String(rncComprador).replace(/\D/g, '')) + '</RNCComprador>\n      <RazonSocialComprador>' + e(comprador) + '</RazonSocialComprador>\n    </Comprador>\n    <Totales>\n      <MontoTotal>' + this.ecfNum(total) + '</MontoTotal>\n      <TotalITBIS>' + this.ecfNum(itbis) + '</TotalITBIS>\n    </Totales>\n  </Encabezado>\n  <FechaHoraFirma>' + e(fecha) + ' 10:42:18</FechaHoraFirma>\n  <!-- Firma digital XAdES omitida en el prototipo -->\n</ECF>\n';
+  }
+  renderVals() {
+    const st = this.state || {};
+    const fmt = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const moved = st.moved || 0;
+    const A = [['Banco Popular Dominicano', '****4471', 'Corriente', 3418250.75 - moved, '3 transacciones sin conciliar'], ['Banreservas', '****0932', 'Corriente', 1206330 + moved, 'Conciliada al 30/09'], ['Caja chica', 'CAJA-01', 'Efectivo', 48500, 'Arqueo pendiente']].concat(st.extra ? [['Banco BHD', '****2210', 'Ahorros', 0, 'Cuenta nueva']] : []);
+    const sel = st.acc ?? 0;
+    const accs = A.map((a, i) => ({ b: a[0], n: a[1], t: a[2], s: fmt(a[3]), pend: a[4], border: i === sel ? '1.5px solid #0F766E' : '1px solid #E5E7EB', pick: () => this.setState({ acc: i }) }));
+    let bal = A[sel][3] - 402000 + 1564067.8 + 4428 - 1284560 + 96760;
+    const M = [['23/10/2026', 'Cobro E310000000124 · Constructora Hispaniola', 'TRF-88213', 0, 412880], ['22/10/2026', 'Pago Cementos del Atlántico', 'CHK-1043', 1564067.8, 0], ['21/10/2026', 'Pago Transporte Cibao Express', 'TRF-88190', 92332, 0], ['20/10/2026', 'Depósito ventas en efectivo', 'DEP-5521', 0, 612480.25], ['18/10/2026', 'Comisión bancaria', 'COM-10', 1250, 0], ['15/10/2026', 'Pago IT-1 septiembre', 'DGII-0915', 158420.6, 0]];
+    let run = A[sel][3];
+    const movs = M.map(([f, d, r, deb, cre]) => { const row = { f, d, r, deb: deb ? fmt(deb) : '', cre: cre ? fmt(cre) : '', bal: fmt(run) }; run = run + deb - cre; return row; });
+    const C = [['21/10/2026', 'TRF-88190 Transporte Cibao', 'Pago a proveedor E310000008734', '92,332.00'], ['20/10/2026', 'DEP-5521 Depósito', 'Cobros en efectivo del 20/10', '612,480.25'], ['18/10/2026', 'COM-10 Comisión', 'Sin registro: crear gasto bancario', '1,250.00'], ['15/10/2026', 'DGII-0915', 'Pago IT-1 septiembre', '158,420.60'], ['12/10/2026', 'TRF-87955', 'Cobro E310000000117', '95,300.00']];
+    const cs = st.cs || { 0: true, 3: true, 4: true };
+    const conc = C.map(([f, ext, sis, m], i) => ({ f, ext, sis, m, on: !!cs[i], toggle: () => this.setState({ cs: { ...cs, [i]: !cs[i] } }) }));
+    const done = conc.filter(c => c.on).length;
+    const tab = st.tab || this.props.tab || 'mov';
+    const SBA = { mov: 'cuentas', conc: 'conc', trans: 'trans' };
+    const tabs = [['mov', 'Movimientos'], ['conc', 'Conciliación'], ['trans', 'Transferencias']].map(([k, label]) => ({ label, cls: k === tab ? 'tab on' : 'tab', pick: () => this.setState({ tab: k }) }));
+    const tMonto = st.tMonto ?? 250000;
+    return {
+      dlOn: !!(this.state || {}).dl, dlHasText: !!((this.state || {}).dl && (this.state || {}).dl.text), dlText: ((this.state || {}).dl || {}).text || '',
+      dlTitle: ((this.state || {}).dl || {}).copy ? 'Copie el contenido manualmente' : 'Este visor no permitió descargar «' + (((this.state || {}).dl || {}).name || '') + '»',
+      dlMsg: ((this.state || {}).dl || {}).copy ? 'El navegador bloqueó el portapapeles dentro del lienzo. Puede copiar el texto desde aquí.' : (((this.state || {}).dl || {}).tried ? 'Intentamos descargarlo directamente; si no aparece en su carpeta de Descargas es porque el lienzo bloquea descargas. ' : '') + 'Abra el prototipo en pantalla completa (Play) o use el contenido de abajo.',
+      dlClose: () => this.setState({ dl: null }),
+      dlCopy: () => { const t = ((this.state || {}).dl || {}).text || ''; try { navigator.clipboard.writeText(t).then(() => this.setState({ dl: null, fx: 'Copiado al portapapeles', flash: 'Copiado al portapapeles' }), () => {}); } catch (e) {} },
+      sbActive: SBA[tab],
+      accs, acc: { b: A[sel][0] }, movs, tabs, v: { mov: tab === 'mov', conc: tab === 'conc', trans: tab === 'trans' },
+      conc, concDone: done, concTotal: C.length, concPct: Math.round(done / C.length * 100) + '%', concIncomplete: done < C.length,
+      closeConc: () => this.setState({ flash: 'Conciliación de octubre cerrada' }),
+      tMonto, setMonto: e => this.setState({ tMonto: Number(e.target.value) || 0 }), noMonto: !tMonto,
+      transfer: () => this.setState({ moved: moved + tMonto, flash: 'Transferencia de RD$ ' + fmt(tMonto) + ' registrada' }),
+      addAcc: !!st.addAcc, accLabel: st.addAcc ? 'Cancelar' : '+ Nueva cuenta', toggleAcc: () => this.setState({ addAcc: !st.addAcc }),
+      saveAcc: () => this.setState({ extra: true, addAcc: false, flash: 'Cuenta bancaria agregada' }),
+      exportar: () => this.ecfSave('extracto_' + A[sel][1].replace(/\W/g, '') + '_202610.csv', this.ecfCsv([['Fecha', 'Descripcion', 'Referencia', 'Debito', 'Credito', 'Balance']].concat(movs.map(m => [m.f, m.d, m.r, m.deb ? this.ecfNum(m.deb) : '', m.cre ? this.ecfNum(m.cre) : '', this.ecfNum(m.bal)])))),
+      flash: st.flash || '', closeFlash: () => this.setState({ flash: '' })
+    };
+  }
+}
+</script>
+</body>
+</html>

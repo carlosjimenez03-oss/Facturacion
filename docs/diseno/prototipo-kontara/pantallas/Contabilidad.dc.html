@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Contabilidad</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="{{sbActive}}" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,56px"></dc-import>
+    <div class="content">
+      <div class="ph"><div><h1>Contabilidad</h1><p>Catálogo de cuentas, asientos contables y activos fijos</p></div></div>
+      <div class="tabs" role="tablist">
+        <sc-for list="{{tabs}}" as="t" hint-placeholder-count="3"><button type="button" role="tab" class="{{t.cls}}" onClick="{{t.pick}}">{{t.label}}</button></sc-for>
+      </div>
+
+      <sc-if value="{{v.cat}}" hint-placeholder-val="{{true}}">
+        <section class="card">
+          <div class="card-h"><h2>Catálogo de cuentas</h2><button type="button" class="btn btn-o btn-sm" onClick="{{expandAll}}">{{expandLabel}}</button></div>
+          <div>
+            <sc-for list="{{cat}}" as="c" hint-placeholder-count="10">
+              <div style="display: flex; align-items: center; gap: 10px; padding: 10px 20px; border-bottom: 1px solid #F0F1F3; padding-left: {{c.pad}}">
+                <sc-if value="{{c.parent}}" hint-placeholder-val="{{true}}"><button type="button" class="ib" style="width: 28px; height: 28px" onClick="{{c.toggle}}" aria-label="Expandir {{c.n}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="transform: {{c.rot}}"><path d="m9 6 6 6-6 6"></path></svg></button></sc-if>
+                <sc-if value="{{c.leaf}}" hint-placeholder-val="{{false}}"><span style="width: 28px"></span></sc-if>
+                <span class="mono" style="width: 90px; color: #6B7280">{{c.code}}</span>
+                <span style="flex: 1; font-weight: {{c.w}}; color: #111827">{{c.n}}</span>
+                <span class="num" style="font-weight: {{c.w}}">{{c.s}}</span>
+              </div>
+            </sc-for>
+          </div>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{v.asi}}" hint-placeholder-val="{{false}}">
+        <section class="card">
+          <div class="card-h"><h2>Nuevo asiento manual</h2><span class="{{balCls}}">{{balTxt}}</span></div>
+          <div class="tw"><table class="tbl" style="min-width: 680px"><thead><tr><th>Cuenta</th><th style="width: 180px">Débito</th><th style="width: 180px">Crédito</th></tr></thead>
+            <tbody><sc-for list="{{lines}}" as="l" hint-placeholder-count="2"><tr><td>{{l.cta}}</td><td><input type="number" class="inp inp-sm" value="{{l.d}}" onChange="{{l.setD}}" aria-label="Débito"></td><td><input type="number" class="inp inp-sm" value="{{l.c}}" onChange="{{l.setC}}" aria-label="Crédito"></td></tr></sc-for></tbody>
+            <tfoot><tr><td>Totales</td><td class="num">{{totD}}</td><td class="num">{{totC}}</td></tr></tfoot>
+          </table></div>
+          <div class="row" style="justify-content: flex-end; padding: 14px 20px; border-top: 1px solid #EEF0F2"><button type="button" class="btn btn-p" onClick="{{post}}" disabled="{{unbalanced}}">Contabilizar asiento</button></div>
+        </section>
+        <section class="card">
+          <div class="card-h"><h2>Asientos del período</h2></div>
+          <div class="tw"><table class="tbl" style="min-width: 680px"><thead><tr><th>N.º</th><th>Fecha</th><th>Concepto</th><th>Origen</th><th class="num">Monto (RD$)</th></tr></thead>
+          <tbody><sc-for list="{{asientos}}" as="a" hint-placeholder-count="5"><tr><td class="mono">{{a.n}}</td><td class="mut">{{a.f}}</td><td>{{a.c}}</td><td><span class="chip">{{a.o}}</span></td><td class="num">{{a.m}}</td></tr></sc-for></tbody></table></div>
+        </section>
+      </sc-if>
+
+      <sc-if value="{{v.act}}" hint-placeholder-val="{{false}}">
+        <section class="card">
+          <div class="card-h"><h2>Activos fijos</h2><button type="button" class="btn btn-p btn-sm" onClick="{{depreciar}}" disabled="{{depDone}}">{{depLabel}}</button></div>
+          <div class="tw"><table class="tbl" style="min-width: 820px"><thead><tr><th>Activo</th><th>Categoría DGII</th><th class="num">Costo</th><th class="num">Tasa</th><th class="num">Dep. acumulada</th><th class="num">Valor en libros</th></tr></thead>
+          <tbody><sc-for list="{{activos}}" as="a" hint-placeholder-count="3"><tr><td style="font-weight: 500">{{a.n}}</td><td class="mut">{{a.cat}}</td><td class="num">{{a.c}}</td><td class="num">{{a.t}}</td><td class="num">{{a.da}}</td><td class="num" style="font-weight: 600">{{a.vl}}</td></tr></sc-for></tbody></table></div>
+        </section>
+      </sc-if>
+    </div>
+  </main>
+  <sc-if value="{{flash}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite"><div class="toast">
+      <span class="ti" style="background: #DCFCE7; color: #166534"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+      <div style="flex: 1; min-width: 0"><b>{{flash}}</b></div>
+      <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{closeFlash}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div></div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"tab":{"editor":"enum","options":["cat", "asi", "act"],"default":"cat"},"$preview":{"width":1440,"height":1160}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = this.state || {};
+    const fmt = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const tab = st.tab || this.props.tab || 'cat';
+    const SBA = { cat: 'catalogo', asi: 'asientos', act: 'activos' };
+    const tabs = [['cat', 'Catálogo de cuentas'], ['asi', 'Asientos'], ['act', 'Activos fijos']].map(([k, label]) => ({ label, cls: k === tab ? 'tab on' : 'tab', pick: () => this.setState({ tab: k }) }));
+    const T = [
+      ['1', 'Activos', 21480300.5, [['1.1.01', 'Caja y bancos', 4673080.75], ['1.1.02', 'Cuentas por cobrar clientes', 2315780.45], ['1.1.03', 'Inventario de mercancías', 7215300], ['1.1.04', 'ITBIS adelantado', 312840], ['1.2.01', 'Propiedad, planta y equipo (neto)', 6963299.3]]],
+      ['2', 'Pasivos', 3215700.1, [['2.1.01', 'Cuentas por pagar proveedores', 1104920.1], ['2.1.02', 'ITBIS por pagar', 426352], ['2.1.03', 'Retenciones por pagar', 96480], ['2.2.01', 'Préstamos bancarios', 1587948]]],
+      ['3', 'Patrimonio', 18264600.4, [['3.1.01', 'Capital social', 10000000], ['3.2.01', 'Resultados acumulados', 8264600.4]]],
+      ['4', 'Ingresos', 48560200, [['4.1.01', 'Ventas gravadas', 46066750], ['4.1.02', 'Ventas exentas', 2493450]]],
+      ['6', 'Gastos', 10260900, [['6.1.01', 'Gastos de personal', 5210000], ['6.1.02', 'Arrendamientos', 1440000], ['6.1.03', 'Depreciación', 812600], ['6.1.04', 'Otros gastos operacionales', 2380000], ['6.2.01', 'Gastos financieros', 418300]]]
+    ];
+    const ex = st.ex || { 0: true };
+    const cat = [];
+    T.forEach(([code, n, s, ch], i) => {
+      cat.push({ code, n, s: fmt(s), parent: true, leaf: false, pad: '20px', w: '650', rot: ex[i] ? 'rotate(90deg)' : 'none', toggle: () => this.setState({ ex: { ...ex, [i]: !ex[i] } }) });
+      if (ex[i]) ch.forEach(([c2, n2, s2]) => cat.push({ code: c2, n: n2, s: fmt(s2), parent: false, leaf: true, pad: '48px', w: '400', rot: 'none', toggle: null }));
+    });
+    const allOpen = T.every((_, i) => ex[i]);
+    const L = st.lines || [['1.1.03 · Inventario de mercancías', 0, 0], ['1.1.01 · Caja y bancos', 0, 0]];
+    const setL = (i, k, v) => { const n = L.map(x => x.slice()); n[i][k] = Number(v) || 0; this.setState({ lines: n }); };
+    const lines = L.map(([cta, d, c], i) => ({ cta, d, c, setD: e => setL(i, 1, e.target.value), setC: e => setL(i, 2, e.target.value) }));
+    const td = L.reduce((a, l) => a + l[1], 0), tc = L.reduce((a, l) => a + l[2], 0);
+    const bal = td === tc && td > 0;
+    const posted = st.posted || [];
+    const asientos = posted.concat([['AS-0412', '23/10/2026', 'Venta E310000000131', 'Factura', '1,284,560.00'], ['AS-0411', '22/10/2026', 'Compra E310000045821', 'Compra', '1,845,600.00'], ['AS-0410', '21/10/2026', 'Pago a proveedor', 'Banco', '92,332.00'], ['AS-0409', '20/10/2026', 'Depósito de ventas', 'Banco', '612,480.25']]).map(([n, f, c, o, m]) => ({ n, f, c, o, m }));
+    const dep = !!st.dep;
+    const A = [['Camión Isuzu NPR 2024', 'Categoría 2 · 25%', 3850000, 25, 962500], ['Montacargas eléctrico', 'Categoría 3 · 15%', 1450000, 15, 290000], ['Equipos de cómputo', 'Categoría 1 · 5%', 640000, 5, 32000]];
+    const activos = A.map(([n, cat2, c, t, da]) => { const d2 = da + (dep ? c * t / 100 / 12 : 0); return { n, cat: cat2, c: fmt(c), t: t + '%', da: fmt(d2), vl: fmt(c - d2) }; });
+    return {
+      sbActive: SBA[tab],
+      tabs, v: { cat: tab === 'cat', asi: tab === 'asi', act: tab === 'act' }, cat,
+      expandLabel: allOpen ? 'Contraer todo' : 'Expandir todo',
+      expandAll: () => this.setState({ ex: allOpen ? {} : { 0: true, 1: true, 2: true, 3: true, 4: true } }),
+      lines, totD: fmt(td), totC: fmt(tc), unbalanced: !bal,
+      balTxt: bal ? 'Cuadrado' : 'Descuadre: ' + fmt(Math.abs(td - tc)), balCls: bal ? 'bd b-acep' : 'bd b-proc',
+      post: () => this.setState({ posted: [['AS-' + String(413 + posted.length).padStart(4, '0'), '23/10/2026', 'Asiento manual', 'Manual', fmt(td)]].concat(posted), lines: null, flash: 'Asiento contabilizado' }),
+      asientos, activos, depDone: dep, depLabel: dep ? 'Depreciación de octubre registrada' : 'Calcular depreciación de octubre',
+      depreciar: () => this.setState({ dep: true, flash: 'Depreciación de octubre registrada en el asiento AS-0420' }),
+      flash: st.flash || '', closeFlash: () => this.setState({ flash: '' })
+    };
+  }
+}
+</script>
+</body>
+</html>

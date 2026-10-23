@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="es-DO">
+<head>
+<meta charset="utf-8">
+<title>Nueva factura electrónica</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="./app.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;650;700&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>body{margin:0}a{color:#0F766E}a:hover{color:#115E59}</style>
+</helmet>
+<div class="shell">
+  <div class="sb-slot"><dc-import name="Sidebar" active="facturas" hint-size="270px,1100px"></dc-import></div>
+  <main class="main">
+    <dc-import name="Topbar" ambiente="Producción" conexion="En línea" hint-size="100%,64px"></dc-import>
+    <div class="content">
+      <div class="ph">
+        <div>
+          <div class="crumb"><a href="Facturas.dc.html">Facturas de venta</a><span>/</span><span>Nueva</span></div>
+          <h1>Nueva factura electrónica</h1>
+          <p>Próximo e-NCF: <span class="mono" style="color: #111827; font-weight: 600">{{cur.next}}</span> · Secuencia autorizada hasta 31/12/2027</p>
+        </div>
+      </div>
+
+      <section class="card">
+        <div class="card-h"><h2>Tipo de comprobante</h2><span class="hint">El formulario se adapta a los requisitos de cada tipo de e-CF</span></div>
+        <div class="card-b" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px">
+          <sc-for list="{{tipos}}" as="t" hint-placeholder-count="7">
+            <button type="button" onClick="{{t.pick}}" aria-pressed="{{t.on}}" style="text-align: left; padding: 12px 14px; border-radius: 10px; cursor: pointer; font: inherit; display: flex; flex-direction: column; gap: 4px; border: {{t.border}}; background: {{t.bg}}; box-shadow: {{t.ring}}">
+              <span class="mono" style="font-size: 13px; font-weight: 600; color: {{t.codeColor}}">E{{t.code}}</span>
+              <span style="font-size: 13.5px; font-weight: 600; color: #111827">{{t.label}}</span>
+              <span style="font-size: 12px; color: #6B7280; line-height: 1.35">{{t.desc}}</span>
+            </button>
+          </sc-for>
+        </div>
+      </section>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+        <div style="flex: 2 1 620px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+          <section class="card">
+            <div class="card-h"><h2>Cliente</h2><span class="chip">{{cur.reqLabel}}</span></div>
+            <div class="card-b" style="display: flex; flex-direction: column; gap: 16px">
+
+              <sc-if value="{{showRnc}}" hint-placeholder-val="{{true}}">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px">
+                  <div class="fld">
+                    <label class="lbl" for="rnc">RNC o cédula del cliente <span class="req">*</span><span class="tip" data-tip="Registro Nacional del Contribuyente (9 dígitos) o cédula (11 dígitos). Se verifica en línea contra el padrón de la DGII."><button type="button" class="info" aria-label="Qué es el RNC"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></button></span></label>
+                    <div style="display: flex; gap: 8px"><input id="rnc" class="inp mono" value="{{cur.rnc}}" readonly><button type="button" class="btn btn-o" onClick="{{act.ver}}">Verificar</button></div>
+                  </div>
+                  <div class="fld">
+                    <span class="lbl">Razón social</span>
+                    <div style="min-height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 12px; border-radius: 8px; background: #F0FDF4; border: 1px solid #BBF7D0">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#15803D" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>
+                      <span style="font-weight: 600; color: #14532D; font-size: 13.5px">{{cur.cliente}}</span>
+                      <span class="bd b-acep" style="margin-left: auto; height: 22px">Activo</span>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{is32}}" hint-placeholder-val="{{false}}">
+                <div style="display: flex; flex-direction: column; gap: 12px">
+                  <div style="display: flex; align-items: center; gap: 12px">
+                    <button type="button" class="{{genCls}}" onClick="{{toggleGen}}" aria-pressed="{{generico}}" aria-label="Usar cliente genérico"></button>
+                    <div><div style="font-weight: 600; color: #111827">Consumidor final (cliente genérico)</div><div class="hint">No requiere RNC ni cédula para montos menores de RD$ 250,000.00</div></div>
+                  </div>
+                  <sc-if value="{{needId}}" hint-placeholder-val="{{false}}">
+                    <div class="al al-w"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4M12 17h.01"></path></svg><span><b>El total supera RD$ 250,000.00.</b> Identifique al comprador con RNC o cédula para poder emitir el e-CF de Consumo.</span></div>
+                  </sc-if>
+                  <sc-if value="{{genOff}}" hint-placeholder-val="{{false}}">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px">
+                      <div class="fld"><label class="lbl" for="ced">Cédula o RNC</label><input id="ced" class="inp mono" placeholder="001-0000000-0"></div>
+                      <div class="fld"><label class="lbl" for="nom">Nombre</label><input id="nom" class="inp" placeholder="Nombre del comprador"></div>
+                    </div>
+                  </sc-if>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{isNota}}" hint-placeholder-val="{{false}}">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; padding: 16px; border-radius: 10px; background: #F8FAFC; border: 1px dashed #CBD5E1">
+                  <div class="fld">
+                    <label class="lbl" for="afec">e-NCF original afectado <span class="req">*</span><span class="tip" data-tip="Las notas de débito (E33) y crédito (E34) deben referenciar el comprobante que modifican. Solo se listan e-CF aceptados del cliente."><button type="button" class="info" aria-label="Por qué es obligatorio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v5M12 8h.01"></path></svg></button></span></label>
+                    <select id="afec" class="inp mono"><option>E310000000131 · 23/10/2026 · RD$ 1,284,560.00</option><option>E310000000124 · 14/10/2026 · RD$ 412,880.00</option><option>E310000000117 · 06/10/2026 · RD$ 95,300.00</option></select>
+                  </div>
+                  <div class="fld">
+                    <label class="lbl" for="cod">Código de modificación <span class="req">*</span></label>
+                    <select id="cod" class="inp"><option>3 · Corrige montos</option><option>1 · Anula el e-NCF referenciado</option><option>2 · Corrige texto</option><option>4 · Reemplazo de NCF emitido en contingencia</option></select>
+                  </div>
+                  <div class="fld" style="grid-column: 1 / -1">
+                    <label class="lbl" for="raz">Razón de la modificación</label>
+                    <input id="raz" class="inp" value="{{cur.razon}}">
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{is46}}" hint-placeholder-val="{{false}}">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px">
+                  <div class="fld"><label class="lbl" for="cx">Comprador en el exterior</label><input id="cx" class="inp" value="Caribbean Fresh Imports LLC"></div>
+                  <div class="fld"><label class="lbl" for="pais">País de destino</label><select id="pais" class="inp"><option>Estados Unidos</option><option>Puerto Rico</option><option>Países Bajos</option></select></div>
+                  <div class="fld"><label class="lbl" for="inc">Incoterm</label><select id="inc" class="inp"><option>FOB · Puerto de Haina</option><option>CIF</option><option>EXW</option></select></div>
+                  <div class="fld"><label class="lbl" for="mon">Moneda</label><select id="mon" class="inp"><option>USD · tasa 63.4500</option><option>EUR</option><option>DOP</option></select></div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{locked}}" hint-placeholder-val="{{false}}">
+                <div class="al al-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="11" width="18" height="10" rx="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg><span><b>ITBIS bloqueado.</b> {{cur.lockMsg}}</span></div>
+              </sc-if>
+
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px">
+                <div class="fld"><label class="lbl" for="fe">Fecha de emisión</label><input id="fe" class="inp" value="23/10/2026"></div>
+                <div class="fld"><label class="lbl" for="fv">Vencimiento del pago</label><input id="fv" class="inp" value="22/11/2026"></div>
+                <div class="fld"><label class="lbl" for="alm">Almacén</label><select id="alm" class="inp"><option>Principal · Santo Domingo</option><option>Sucursal Santiago</option></select></div>
+                <div class="fld"><label class="lbl" for="ven">Vendedor</label><select id="ven" class="inp"><option>Ramón Peralta</option><option>Yokasta Marte</option></select></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="card">
+            <div class="card-h"><h2>Productos y servicios</h2><button type="button" class="btn btn-o btn-sm" onClick="{{act.add}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Agregar línea</button></div>
+            <div class="tw">
+              <table class="tbl" style="min-width: 860px">
+                <thead><tr><th style="width: 30%">Producto</th><th>Existencia</th><th style="width: 96px">Cantidad</th><th class="num">Precio</th><th class="num">Desc.</th><th style="width: 130px"><span class="tip" data-tip="18% tasa general · 16% tasa reducida (café, yogur, mantequilla, azúcar, entre otros) · Exento según el Código Tributario.">ITBIS ⓘ</span></th><th class="num">Importe (RD$)</th></tr></thead>
+                <tbody>
+                  <sc-for list="{{items}}" as="it" hint-placeholder-count="5">
+                    <tr>
+                      <td><div style="font-weight: 500; color: #111827">{{it.desc}}</div><div class="hint mono">{{it.sku}}</div></td>
+                      <td>
+                        <span style="font-variant-numeric: tabular-nums; color: {{it.stockColor}}; font-weight: 600">{{it.stock}}</span>
+                        <sc-if value="{{it.warn}}" hint-placeholder-val="{{false}}"><div class="err-t" style="font-size: 12px; margin-top: 2px"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4M12 17h.01"></path></svg>Faltan {{it.short}}</div></sc-if>
+                      </td>
+                      <td><input type="number" min="0" class="inp inp-sm" style="border-color: {{it.qtyBorder}}" value="{{it.qty}}" onChange="{{it.setQty}}" aria-label="Cantidad de {{it.desc}}"></td>
+                      <td class="num">{{it.price}}</td>
+                      <td class="num mut">{{it.disc}}</td>
+                      <td>
+                        <select class="inp inp-sm" value="{{it.rateV}}" onChange="{{it.setRate}}" disabled="{{locked}}" aria-label="ITBIS de {{it.desc}}">
+                          <option value="18">18%</option><option value="16">16%</option><option value="0">Exento</option>
+                        </select>
+                      </td>
+                      <td class="num" style="font-weight: 600; color: #111827">{{it.amount}}</td>
+                    </tr>
+                  </sc-for>
+                </tbody>
+              </table>
+            </div>
+            <sc-if value="{{anyWarn}}" hint-placeholder-val="{{true}}">
+              <div style="padding: 0 20px 16px"><div class="al al-w"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5z"></path><path d="M3 8l9 5 9-5"></path></svg><span><b>Existencia insuficiente.</b> Hay líneas con cantidad mayor al disponible en el almacén Principal. Puede emitir igual (quedará existencia negativa) o ajustar la cantidad.</span></div></div>
+            </sc-if>
+          </section>
+        </div>
+
+        <div style="flex: 1 1 320px; min-width: 0; display: flex; flex-direction: column; gap: 16px">
+          <section class="card">
+            <div class="card-h"><h2>Totales</h2><span class="chip mono">{{cur.next}}</span></div>
+            <dl class="kv card-b" style="grid-template-columns: 1fr auto">
+              <dt>Subtotal</dt><dd class="num">{{t.sub}}</dd>
+              <dt>Descuentos</dt><dd class="num">-{{t.disc}}</dd>
+              <dt>Gravado 18%</dt><dd class="num">{{t.g18}}</dd>
+              <dt>Gravado 16%</dt><dd class="num">{{t.g16}}</dd>
+              <dt>Exento</dt><dd class="num">{{t.ex}}</dd>
+              <dt>ITBIS 18%</dt><dd class="num">{{t.i18}}</dd>
+              <dt>ITBIS 16%</dt><dd class="num">{{t.i16}}</dd>
+              <dt style="font-size: 15px; font-weight: 650; color: #111827; border-top: 1px solid #E5E7EB; padding-top: 12px">Total a pagar</dt><dd class="num" style="font-size: 20px; font-weight: 700; border-top: 1px solid #E5E7EB; padding-top: 10px">RD$ {{t.total}}</dd>
+            </dl>
+          </section>
+          <section class="card">
+            <div class="card-h"><h2>Forma de pago</h2></div>
+            <div class="card-b" style="display: flex; flex-direction: column; gap: 12px">
+              <div class="seg" role="group" aria-label="Forma de pago" style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr))">
+                <sc-for list="{{pagos}}" as="p" hint-placeholder-count="4"><button type="button" class="{{p.cls}}" onClick="{{p.pick}}" aria-pressed="{{p.on}}" style="justify-content: center">{{p.label}}</button></sc-for>
+              </div>
+              <span class="hint">{{pagoHint}}</span>
+            </div>
+          </section>
+          <div style="display: flex; flex-direction: column; gap: 8px">
+            <button type="button" class="btn btn-p" onClick="{{openConfirm}}" style="height: 46px">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4z"></path><path d="M22 2 11 13"></path></svg>Emitir y enviar a DGII
+            </button>
+            <button type="button" class="btn btn-o" onClick="{{act.draft}}">Guardar borrador</button>
+            <span class="hint" style="text-align: center">El borrador no consume secuencia ni se envía a la DGII.</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <sc-if value="{{confirm}}" hint-placeholder-val="{{false}}">
+    <div class="scrim">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="emitir-t">
+        <div class="modal-h"><h3 id="emitir-t">¿Emitir y enviar a la DGII?</h3></div>
+        <div class="modal-b">
+          <span>Se firmará digitalmente el comprobante <b class="mono" style="color: #111827">{{cur.next}}</b> ({{cur.label}}) por <b style="color: #111827">RD$ {{t.total}}</b> y se enviará a la DGII.</span>
+          <div class="al al-w"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"></path><path d="M12 9v4M12 17h.01"></path></svg><span>Una vez enviado, el e-NCF queda utilizado y el comprobante no puede editarse. Para corregirlo deberá emitir una nota de crédito o débito.</span></div>
+          <label style="display: flex; gap: 10px; align-items: center; font-size: 13.5px; color: #374151"><input type="checkbox" checked style="width: 18px; height: 18px; accent-color: #0F766E">Enviar al cliente por WhatsApp y correo cuando sea aceptada</label>
+        </div>
+        <div class="modal-f"><button type="button" class="btn btn-o" onClick="{{closeConfirm}}">Revisar</button><button type="button" class="btn btn-p" onClick="{{emitir}}">Sí, emitir</button></div>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{rejected}}" hint-placeholder-val="{{false}}">
+    <div class="scrim">
+      <div class="modal" role="alertdialog" aria-modal="true" aria-labelledby="rj-t" style="max-width: 560px">
+        <div class="modal-h" style="display: flex; gap: 12px; align-items: center"><span style="width: 36px; height: 36px; border-radius: 10px; background: #FEE2E2; color: #B91C1C; display: grid; place-items: center; flex: none"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M15 9l-6 6M9 9l6 6"></path></svg></span><h3 id="rj-t">La DGII rechazó el comprobante {{cur.next}}</h3></div>
+        <div class="modal-b">
+          <div style="background: #FEF2F2; border: 1px solid #FECACA; border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px">
+            <b style="color: #B91C1C">{{rej.codigo}} · {{rej.titulo}}</b>
+            <span style="color: #374151">{{rej.motivo}}</span>
+          </div>
+          <span><b style="color: #111827">Cómo corregirlo:</b> {{rej.solucion}}</span>
+          <span class="hint">{{rej.secuencia}}</span>
+        </div>
+        <div class="modal-f"><a href="DetalleRechazada.dc.html" class="btn btn-o">Ver detalle del rechazo</a><button type="button" class="btn btn-p" onClick="{{fixRejected}}">Corregir y volver a emitir</button></div>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{toast}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite">
+      <div class="toast">
+        <span class="ti" style="background: #DCFCE7; color: #166534"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+        <div style="flex: 1; min-width: 0"><b>Factura aceptada por la DGII</b><span class="mut">{{cur.next}} · RD$ {{t.total}} · Track ID 4c8e1f02…b7a3</span> <a href="DetalleFactura.dc.html" style="font-weight: 600">Ver detalle</a></div>
+        <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{closeToast}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+      </div>
+    </div>
+  </sc-if>
+  <sc-if value="{{fxOn}}" hint-placeholder-val="{{false}}">
+    <div class="toasts" role="status" aria-live="polite" style="top: 150px"><div class="toast">
+      <span class="ti" style="background: #E6F4F2; color: #0F766E"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span>
+      <div style="flex: 1; min-width: 0"><b>{{fxMsg}}</b></div>
+      <button type="button" class="ib" style="width: 32px; height: 32px" onClick="{{fxClose}}" aria-label="Cerrar notificación"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"></path></svg></button>
+    </div></div>
+  </sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":1480}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const st = this.state || {};
+    const fmt = n => n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const T = {
+      '31': { label: 'Crédito fiscal', desc: 'Ventas a empresas con derecho a crédito de ITBIS', next: 'E310000000132', rnc: '130452187', cliente: 'Constructora Hispaniola, SRL', req: 'RNC obligatorio' },
+      '32': { label: 'Consumo', desc: 'Consumidor final; permite cliente genérico', next: 'E320000004588', req: 'Cliente opcional' },
+      '33': { label: 'Nota de débito', desc: 'Aumenta el monto de un e-CF emitido', next: 'E330000000007', rnc: '101784523', cliente: 'Supermercado La Cosecha, SRL', req: 'Requiere e-NCF afectado', razon: 'Cargo por flete no facturado' },
+      '34': { label: 'Nota de crédito', desc: 'Anula o reduce un e-CF emitido', next: 'E340000000028', rnc: '130452187', cliente: 'Constructora Hispaniola, SRL', req: 'Requiere e-NCF afectado', razon: 'Devolución de 40 sacos de cemento' },
+      '44': { label: 'Regímenes especiales', desc: 'Zonas francas y otros regímenes', next: 'E440000000015', rnc: '131558820', cliente: 'Textiles del Norte ZF, SA', req: 'RNC obligatorio', lock: 'El cliente opera bajo régimen especial (zona franca): las ventas están exentas de ITBIS.' },
+      '45': { label: 'Gubernamental', desc: 'Ventas a entidades del Estado', next: 'E450000000019', rnc: '430001235', cliente: 'Ayuntamiento Municipal de Moca', req: 'RNC gubernamental' },
+      '46': { label: 'Exportaciones', desc: 'Ventas de bienes al exterior', next: 'E460000000010', req: 'Comprador extranjero', lock: 'Las exportaciones tienen tasa 0% de ITBIS y conservan el derecho a crédito por el ITBIS adelantado.' }
+    };
+    const tipo = st.tipo || '31';
+    const cur = { ...T[tipo], reqLabel: T[tipo].req, lockMsg: T[tipo].lock || '' };
+    const locked = !!T[tipo].lock;
+    const tipos = Object.keys(T).map(code => {
+      const on = code === tipo;
+      return { code, label: T[code].label, desc: T[code].desc, on,
+        border: on ? '1px solid #0F766E' : '1px solid #E5E7EB', bg: on ? '#F0FAF9' : '#fff',
+        ring: on ? '0 0 0 3px rgba(20,184,166,.18)' : 'none', codeColor: on ? '#0F766E' : '#6B7280',
+        pick: () => this.setState({ tipo: code }) };
+    });
+    const base = [
+      ['Cemento gris Portland 42.5 kg', 'CEM-425', 120, 545, 5, 18, 18],
+      ['Varilla corrugada 3/8" × 20\'', 'VAR-038', 300, 285, 0, 18, 1250],
+      ['Pintura acrílica blanca (galón)', 'PIN-AB1', 24, 1150, 10, 18, 64],
+      ['Café molido 1 lb', 'CAF-001', 50, 320, 0, 16, 400],
+      ['Arroz selecto 10 lb', 'ARZ-010', 40, 410, 0, 0, 220]
+    ].concat(Array.from({ length: st.more || 0 }, () => ['Block de hormigón 6"', 'BLK-006', 100, 55, 0, 18, 9800]));
+    const qty = st.qty || base.map(b => b[2]);
+    const rates = st.rates || base.map(b => b[5]);
+    let sub = 0, disc = 0, g18 = 0, g16 = 0, ex = 0;
+    const items = base.map(([desc, sku, , price, d, , stock], i) => {
+      const q = Number(qty[i] ?? base[i][2]) || 0;
+      const r = locked ? 0 : Number(rates[i] ?? base[i][5]);
+      const gross = q * price, dv = gross * d / 100, net = gross - dv;
+      sub += gross; disc += dv;
+      if (r === 18) g18 += net; else if (r === 16) g16 += net; else ex += net;
+      const warn = q > stock;
+      return { desc, sku, qty: q, price: fmt(price), disc: d ? d + '%' : '—', rateV: String(r), amount: fmt(net),
+        stock: stock.toLocaleString('en-US') + ' uds', warn, short: (q - stock).toLocaleString('en-US'),
+        stockColor: warn ? '#B91C1C' : '#374151', qtyBorder: warn ? '#F87171' : '#D1D5DB',
+        setQty: e => { const n = qty.slice(); n[i] = e.target.value; this.setState({ qty: n }); },
+        setRate: e => { const n = rates.slice(); n[i] = Number(e.target.value); this.setState({ rates: n }); } };
+    });
+    const anyStockShort = items.some(x => x.warn);
+    const i18 = g18 * 0.18, i16 = g16 * 0.16, total = g18 + g16 + ex + i18 + i16;
+    const genericoNow = st.gen !== false;
+    const rejReason = tipo === '32' && genericoNow && total >= 250000 ? { codigo: 'Código 613', titulo: 'Comprador no identificado', motivo: 'Una factura de consumo (E32) por RD$ 250,000.00 o más debe incluir el RNC o la cédula del comprador. Este comprobante suma RD$ ' + fmt(total) + ' con cliente genérico.', solucion: 'desactive «Consumidor final», escriba la cédula o el RNC del comprador y emita de nuevo.', secuencia: 'La secuencia ' + T[tipo].next + ' no quedó utilizada: puede reintentar con el mismo e-NCF.' }
+      : anyStockShort && st.blockNeg ? null : null;
+    const pagoSel = st.pago || 'Crédito';
+    const hints = { Efectivo: 'Se registrará el cobro en Caja principal.', Tarjeta: 'Se registrará el cobro en la cuenta del adquirente (POS).', Transferencia: 'Indique el banco y número de referencia al registrar el cobro.', 'Crédito': 'Condición: 30 días. Se generará una cuenta por cobrar al cliente.' };
+    const pagos = Object.keys(hints).map(label => ({ label, on: label === pagoSel, cls: label === pagoSel ? 'on' : '', pick: () => this.setState({ pago: label }) }));
+    const generico = st.gen !== false;
+    const FX = {"ver": "RNC verificado en el padrón de la DGII: contribuyente activo", "draft": "Borrador guardado · no consume secuencia"};
+    const act = {};
+    Object.keys(FX).forEach(k => { act[k] = () => this.setState({ fx: FX[k] }); });
+    act.add = () => this.setState({ more: ((this.state || {}).more || 0) + 1, fx: 'Línea agregada: Block de hormigón 6"' });
+    return {
+      act, fxOn: !!(this.state || {}).fx, fxMsg: (this.state || {}).fx || '', fxClose: () => this.setState({ fx: '' }),
+      tipos, cur, locked, items,
+      anyWarn: items.some(i => i.warn),
+      showRnc: !!T[tipo].rnc, is32: tipo === '32', isNota: tipo === '33' || tipo === '34', is46: tipo === '46',
+      generico, genOff: !generico, genCls: generico ? 'sw on' : 'sw', toggleGen: () => this.setState({ gen: !generico }),
+      needId: tipo === '32' && generico && total >= 250000,
+      t: { sub: fmt(sub), disc: fmt(disc), g18: fmt(g18), g16: fmt(g16), ex: fmt(ex), i18: fmt(i18), i16: fmt(i16), total: fmt(total) },
+      pagos, pagoHint: hints[pagoSel],
+      confirm: !!st.confirm, toast: !!st.toast,
+      openConfirm: () => this.setState({ confirm: true }),
+      closeConfirm: () => this.setState({ confirm: false }),
+      emitir: () => this.setState(rejReason ? { confirm: false, rejected: true } : { confirm: false, toast: true }),
+      rejected: !!st.rejected, rej: rejReason || { codigo: '', titulo: '', motivo: '', solucion: '', secuencia: '' },
+      fixRejected: () => this.setState({ rejected: false, gen: false }),
+      closeToast: () => this.setState({ toast: false })
+    };
+  }
+}
+</script>
+</body>
+</html>
