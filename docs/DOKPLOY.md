@@ -42,6 +42,9 @@ Opcionales (con default razonable si se omiten):
 | `DEBUG` | `false` | Modo debug de FastAPI |
 | `VITE_API_URL` | `/api` | Base URL que el frontend usa para llamar a `facturas-api`. El default `/api` hace que nginx (dentro del propio contenedor `frontend`) reenvíe esas llamadas a `facturas-api` por la red interna `facturacion` -- mismo origen que el frontend, sin CORS ni el problema de "mixed content" de llamar a un backend `http://` desde un frontend `https://`. **No hace falta cambiarlo** salvo que quieras exponer `facturas-api` con su propia URL pública. Se hornea en el bundle del frontend en build time — cambiarlo exige reconstruir la imagen (redeploy), no basta con reiniciar el contenedor |
 | `VITE_INVENTARIO_API_URL` | `/api-inventario` | Lo mismo que `VITE_API_URL` pero para `inventario-api` (catálogo de productos, proveedores, compras y kardex). Mismo mecanismo de proxy same-origin vía nginx, mismas advertencias |
+| `VITE_MARCA` | `Kontara` | Nombre de la marca en el menú lateral y la barra superior. Se hornea en build time: cambiarlo exige redeploy |
+| `VITE_EMPRESA_NOMBRE` | `Mi empresa` | Nombre de la empresa emisora en el selector de empresa de la barra superior. Build time |
+| `VITE_EMPRESA_RNC` | RNC de la primera factura | RNC que se muestra junto al nombre de la empresa. Build time |
 
 Nunca se commitean estos valores en el repo — se configuran únicamente en el
 panel de Dokploy.

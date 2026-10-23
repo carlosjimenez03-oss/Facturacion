@@ -264,6 +264,10 @@ services:
         VITE_API_URL: "${VITE_API_URL:-/api}"
         VITE_INVENTARIO_API_URL: "${VITE_INVENTARIO_API_URL:-/api-inventario}"
         VITE_FORMATO_606_API_URL: "${VITE_FORMATO_606_API_URL:-/api-606}"
+        # Identidad visual del frontend (opcional, ver docs/DOKPLOY.md).
+        VITE_MARCA: "${VITE_MARCA:-}"
+        VITE_EMPRESA_NOMBRE: "${VITE_EMPRESA_NOMBRE:-}"
+        VITE_EMPRESA_RNC: "${VITE_EMPRESA_RNC:-}"
     ports: ["8013:80"]
     networks: [facturacion]
 

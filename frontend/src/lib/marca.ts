@@ -1,11 +1,11 @@
 /** Identidad de la aplicación. Cambie estos valores (o las variables VITE_*) para personalizar la marca. */
-export const MARCA = (import.meta.env.VITE_MARCA as string | undefined) ?? "Kontara";
-export const EMPRESA_NOMBRE = (import.meta.env.VITE_EMPRESA_NOMBRE as string | undefined) ?? "Mi empresa";
-export const EMPRESA_RNC = (import.meta.env.VITE_EMPRESA_RNC as string | undefined) ?? "";
+export const MARCA = (import.meta.env.VITE_MARCA as string | undefined) || "Kontara";
+export const EMPRESA_NOMBRE = (import.meta.env.VITE_EMPRESA_NOMBRE as string | undefined) || "Mi empresa";
+export const EMPRESA_RNC = (import.meta.env.VITE_EMPRESA_RNC as string | undefined) || "";
 
 /** Nombre legible del ambiente DGII a partir del valor guardado en la factura. */
 export function nombreAmbiente(ambiente: string | null | undefined): "Pruebas" | "Certificación" | "Producción" {
-  const a = (ambiente ?? (import.meta.env.VITE_AMBIENTE as string | undefined) ?? "test").toLowerCase();
+  const a = (ambiente || (import.meta.env.VITE_AMBIENTE as string | undefined) || "test").toLowerCase();
   if (a.includes("cert") || a === "qa") return "Certificación";
   if (a === "ecf" || a.startsWith("prod")) return "Producción";
   return "Pruebas";

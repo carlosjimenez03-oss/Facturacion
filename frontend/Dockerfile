@@ -25,6 +25,15 @@ ENV VITE_INVENTARIO_API_URL=${VITE_INVENTARIO_API_URL}
 # (services/formato_606).
 ARG VITE_FORMATO_606_API_URL=http://localhost:8016
 ENV VITE_FORMATO_606_API_URL=${VITE_FORMATO_606_API_URL}
+
+# Identidad visual (opcional): nombre de la marca, de la empresa y RNC que
+# muestran el menú lateral y la barra superior. Vacío = valores por defecto.
+ARG VITE_MARCA=
+ENV VITE_MARCA=${VITE_MARCA}
+ARG VITE_EMPRESA_NOMBRE=
+ENV VITE_EMPRESA_NOMBRE=${VITE_EMPRESA_NOMBRE}
+ARG VITE_EMPRESA_RNC=
+ENV VITE_EMPRESA_RNC=${VITE_EMPRESA_RNC}
 RUN npm run build
 
 FROM nginx:1.27-alpine
