@@ -1,15 +1,19 @@
 """Servicio ERP de ventas: contactos (clientes/proveedores), cotizaciones,
 cobros y cuentas por cobrar, y un resumen de los documentos de venta; y el
 módulo de impuestos (formatos 607/608, pre-cálculos IT-1/IR-17/IR-2 y
-declaraciones), con sus rutas en `impuestos.py`.
+declaraciones), con sus rutas en `impuestos.py`; y Compras (bandeja de
+entrada de e-CF recibidos, cuentas por pagar, pagos a proveedores y
+retenciones), con sus rutas en `compras.py`.
 
-Vive en sus propios esquemas `ventas` e `impuestos`, que este servicio crea
+Vive en sus propios esquemas `ventas`, `impuestos` y `compras` (más
+`recepcion.ecf_recibidos`), que este servicio crea
 por sí mismo al arrancar (ver `migraciones.py`). Las cuentas por cobrar, el saldo de cada
 cliente y `/documentos-venta` se calculan LEYENDO `facturacion.facturas`
 (de `facturas_api`) -- este servicio nunca la modifica.
 
 El contrato con el frontend es `frontend/src/lib/erpApi.ts` (y
-`frontend/src/lib/impuestosApi.ts` para impuestos).
+`frontend/src/lib/impuestosApi.ts` para impuestos,
+`frontend/src/lib/comprasApi.ts` para compras).
 """
 import asyncio
 import logging
@@ -22,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from libs.ecf_common.db import cerrar_pool, crear_pool
 
-from . import impuestos, repository
+from . import compras, impuestos, repository
 from .config import ErpApiSettings, get_settings
 from .migraciones import aplicar_migraciones
 from .repository import (
@@ -103,6 +107,7 @@ app.add_middleware(
 )
 
 app.include_router(impuestos.router)
+app.include_router(compras.router)
 
 
 def _pool():

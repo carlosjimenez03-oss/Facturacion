@@ -30,6 +30,8 @@ datos es **Supabase** (self-hosted, recurso aparte en Dokploy) — ver
 | `DATABASE_URL` | Cadena de conexión al Postgres de Supabase (pooler Supavisor, puerto 5432). Ver [`SUPABASE.md`](SUPABASE.md), paso 2 |
 | `SUPABASE_NETWORK` | Red de Docker del recurso de Supabase (p. ej. `facturacion-supabase-soscqp_default`), para llegar a `supavisor` por la red interna. Ver [`SUPABASE.md`](SUPABASE.md), paso 2 |
 | `EMISOR_100_ELECTRONICO` | Opcional, por defecto `true`: la empresa emite solo e-CF, así que el 607 y el 608 aparecen como "No aplica". Póngalo en `false` si todavía emite NCF serie B. Ver [`ERP_API.md`](ERP_API.md) |
+| `APROBACION_COMERCIAL_URL` | Opcional, por defecto `http://aprobacion-comercial:8000` (red interna): el módulo al que `erp-api` le pide firmar y enviar a la DGII la aprobación/rechazo comercial de la bandeja de entrada de Compras |
+| `EMISOR_RAZON_SOCIAL` | Opcional: razón social de la empresa en los certificados de retención de Compras (vacío = el frontend usa la suya) |
 
 Opcionales (con default razonable si se omiten):
 
@@ -88,7 +90,11 @@ aparte. Instalación, migración de los datos existentes, configuración de
   al arrancar** (`CREATE ... IF NOT EXISTS`, más la función
   `ventas.fecha_dgii_segura`): no hace falta correr `db/init/007_ventas.sql`
   ni `009_fecha_dgii_segura.sql` en Studio. Solo lee `facturacion.facturas`. Ver
-  [`ERP_API.md`](ERP_API.md).
+  [`ERP_API.md`](ERP_API.md). También crea `compras` (facturas de compra y
+  pagos a proveedores) y `recepcion.ecf_recibidos` (bandeja de entrada, la
+  llena `receptor-recepcion`): igual, no hace falta correr
+  `010_compras.sql`. Los pagos a proveedores escriben la fecha de pago y
+  las retenciones en `compras606.registros`.
 - Los cambios de esquema futuros se agregan como `db/init/00N_*.sql`
   idempotentes y se ejecutan una vez en Studio → SQL Editor (en una
   instalación nueva, en orden desde `001`).

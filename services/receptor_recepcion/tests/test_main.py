@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+import asyncpg
 import pytest
 from fastapi.testclient import TestClient
 from lxml import etree
@@ -181,3 +182,60 @@ def test_recibir_ecf_ok_aunque_falle_registrar_compra_606(client, monkeypatch, c
     )
 
     assert respuesta.status_code == 200
+
+
+def test_recibir_ecf_guarda_el_xml_en_la_bandeja_despues_del_606(client, monkeypatch, credencial_prueba):
+    orden = []
+
+    async def fake_registrar_compra_606(pool, **kwargs):
+        orden.append("606")
+
+    async def fake_registrar_ecf_recibido(pool, xml_bytes, root):
+        orden.append(("bandeja", xml_bytes, root.findtext(".//eNCF")))
+
+    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+    monkeypatch.setattr(main, "registrar_ecf_recibido", fake_registrar_ecf_recibido)
+    token = _token_valido(credencial_prueba)
+
+    respuesta = client.post(
+        "/fe/recepcion/api/ecf",
+        files={"xml": ("e-cf.xml", XML_ECF_COMPLETO, "text/xml")},
+        headers={"authorization": f"Bearer {token}"},
+    )
+
+    assert respuesta.status_code == 200
+    assert orden == ["606", ("bandeja", XML_ECF_COMPLETO, "E310000000001")]
+
+
+class _ConnSinTablas:
+    async def execute(self, *args):
+        raise asyncpg.UndefinedTableError('relation "recepcion.ecf_recibidos" does not exist')
+
+
+class _AcquireSinTablas:
+    async def __aenter__(self):
+        return _ConnSinTablas()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _PoolSinTablas:
+    def acquire(self):
+        return _AcquireSinTablas()
+
+
+def test_recibir_ecf_ok_aunque_la_tabla_de_la_bandeja_no_exista(client, monkeypatch, credencial_prueba):
+    """Base sin migrar (erp-api todavía no arrancó): las inserciones fallan
+    por dentro y la recepción sigue -- todas son best-effort."""
+    monkeypatch.setattr(main.app.state, "db_pool", _PoolSinTablas())
+    token = _token_valido(credencial_prueba)
+
+    respuesta = client.post(
+        "/fe/recepcion/api/ecf",
+        files={"xml": ("e-cf.xml", XML_ECF_COMPLETO, "text/xml")},
+        headers={"authorization": f"Bearer {token}"},
+    )
+
+    assert respuesta.status_code == 200
+    assert "ARECF" in respuesta.text

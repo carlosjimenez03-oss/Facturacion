@@ -224,9 +224,14 @@ services:
     # El <<: de arriba no fusiona `environment` en profundidad: se repite el
     # ancla y se agrega EMISOR_100_ELECTRONICO (true = no presenta 607/608
     # por emitir solo e-CF; ponga false si todavía emite NCF serie B).
+    # Compras: APROBACION_COMERCIAL_URL es el módulo que firma y envía a la
+    # DGII la aprobación/rechazo comercial de la bandeja de entrada (red
+    # interna); EMISOR_RAZON_SOCIAL sale en los certificados de retención.
     environment:
       <<: *modulo-env
       EMISOR_100_ELECTRONICO: ${EMISOR_100_ELECTRONICO:-true}
+      APROBACION_COMERCIAL_URL: ${APROBACION_COMERCIAL_URL:-http://aprobacion-comercial:8000}
+      EMISOR_RAZON_SOCIAL: ${EMISOR_RAZON_SOCIAL:-}
 
   # --- Frontend (React) ---
 

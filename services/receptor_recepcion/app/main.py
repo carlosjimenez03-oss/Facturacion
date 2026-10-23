@@ -10,7 +10,9 @@ hacia la DGII -- ver el docstring de `libs.ecf_common.db`.
 Además, registra (best-effort) un renglón pendiente de clasificar en
 compras606.registros -- el e-CF recibido es una de las dos fuentes del
 Formato 606 (Compras de Bienes y Servicios), ver docs/dgii/FORMATO_606.md y
-`services/formato_606`.
+`services/formato_606` -- y guarda el XML en recepcion.ecf_recibidos para la
+bandeja de entrada de Compras de `erp_api` (aprobación comercial), ver
+`libs.ecf_common.ecf_recibidos`.
 """
 import logging
 from contextlib import asynccontextmanager
@@ -25,6 +27,7 @@ from libs.ecf_common.auth.jwt_tokens import TokenInvalidoError, validar_token
 from libs.ecf_common.auth.signing import CredencialFirma, cargar_certificado_p12, firmar_xml
 from libs.ecf_common.compras606 import fecha_dgii_a_aaaammdd, registrar_compra_606
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
+from libs.ecf_common.ecf_recibidos import registrar_ecf_recibido, separar_bienes_servicios
 
 from .arecf_builder import construir_arecf
 from .config import ReceptorRecepcionSettings, get_settings
@@ -73,24 +76,6 @@ def _extraer_campos_ecf(root: etree._Element) -> tuple[str, str | None, str]:
     return rnc_emisor, rnc_comprador, encf
 
 
-def _separar_bienes_servicios(root: etree._Element) -> tuple[Decimal, Decimal]:
-    """Suma DetallesItems/Item por IndicadorBienoServicio (1=Bien, 2=Servicio)
-    -- el Formato 606 exige la proporción Bienes/Servicios por separado y
-    ningún e-CF la trae ya calculada."""
-    servicios = Decimal("0")
-    bienes = Decimal("0")
-    for item in root.findall(".//DetallesItems/Item"):
-        try:
-            monto = Decimal(item.findtext("MontoItem") or "0")
-        except InvalidOperation:
-            continue
-        if (item.findtext("IndicadorBienoServicio") or "") == "2":
-            servicios += monto
-        else:
-            bienes += monto
-    return servicios, bienes
-
-
 async def _registrar_compra_606_desde_ecf(
     pool, root: etree._Element, rnc_emisor: str, encf: str
 ) -> None:
@@ -108,7 +93,7 @@ async def _registrar_compra_606_desde_ecf(
             itbis_facturado = Decimal(root.findtext(".//TotalITBIS") or "0")
         except InvalidOperation:
             itbis_facturado = Decimal("0")
-        servicios, bienes = _separar_bienes_servicios(root)
+        servicios, bienes = separar_bienes_servicios(root)
         await registrar_compra_606(
             pool,
             origen="receptor_recepcion",
@@ -175,5 +160,7 @@ async def recibir_ecf(
         estado="recibido",
     )
     await _registrar_compra_606_desde_ecf(app.state.db_pool, root, rnc_emisor, encf)
+    # Después del 606, para enlazar su renglón. Best-effort como los dos anteriores.
+    await registrar_ecf_recibido(app.state.db_pool, xml_bytes, root)
 
     return Response(content=arecf_firmado, media_type="text/xml")
