@@ -7,19 +7,33 @@ aprobación/anulación ya sucedió; perder el registro de auditoría es un
 problema menor comparado con reportar un error al llamador por algo que en
 realidad sí se completó).
 
-El esquema (`facturacion.envios_dgii`) se crea vía `db/init/001_schema.sql`,
-ejecutado automáticamente por el contenedor de Postgres en su primer arranque
-(`docker-entrypoint-initdb.d`). Ese mismo esquema se expone de solo lectura
-a través de PostgREST (rol `web_anon`); las escrituras solo ocurren desde
-este módulo (vía asyncpg), nunca a través de la API REST de PostgREST.
+El esquema (`facturacion.envios_dgii`) se crea vía `db/init/001_schema.sql`:
+en desarrollo local lo ejecuta el contenedor de Postgres en su primer
+arranque (`docker-entrypoint-initdb.d`); en producción la base es Supabase
+(ver docs/SUPABASE.md). Las escrituras solo ocurren desde este módulo.
 """
 import json
 import logging
 from typing import Any
+from urllib.parse import urlsplit
 
 import asyncpg
 
 logger = logging.getLogger(__name__)
+
+
+def opciones_pool(database_url: str) -> dict[str, Any]:
+    """Opciones extra de asyncpg según el destino de la conexión.
+
+    El pooler de Supabase (Supavisor) en modo transacción -- puerto 6543 --
+    no admite sentencias preparadas con nombre entre transacciones, así que
+    hay que desactivar la caché de sentencias de asyncpg. En modo sesión
+    (puerto 5432) o contra un Postgres directo no hace falta.
+    """
+    puerto = urlsplit(database_url).port
+    if puerto == 6543:
+        return {"statement_cache_size": 0}
+    return {}
 
 
 async def crear_pool(database_url: str) -> asyncpg.Pool | None:
@@ -31,7 +45,7 @@ async def crear_pool(database_url: str) -> asyncpg.Pool | None:
     if not database_url:
         return None
     try:
-        return await asyncpg.create_pool(database_url, min_size=1, max_size=5)
+        return await asyncpg.create_pool(database_url, min_size=1, max_size=5, **opciones_pool(database_url))
     except Exception:
         logger.exception("No se pudo conectar a la base de datos de auditoría")
         return None

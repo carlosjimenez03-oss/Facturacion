@@ -1,6 +1,6 @@
 # Despliegue único para Dokploy: los 11 módulos de facturación electrónica +
 # facturas-api + inventario-api + los 3 módulos de Receptor Electrónico +
-# frontend + Postgres + PostgREST + pgAdmin, en un solo archivo (sin
+# frontend, en un solo archivo (sin
 # encadenar -f -f como en docker-compose.yml + overrides, pensado para
 # desarrollo local).
 #
@@ -23,65 +23,25 @@ x-modulo-env: &modulo-env
   CERTIFICADO_PATH: /app/certs/emisor.p12
   CERTIFICADO_PASSWORD: ${CERTIFICADO_PASSWORD:?CERTIFICADO_PASSWORD es requerido}
   ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["*"]}
-  DATABASE_URL: postgresql://${POSTGRES_USER:-facturacion}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-facturacion}
+  # Base de datos: Postgres de Supabase (self-hosted en Dokploy). Cadena de
+  # conexión del pooler Supavisor -- ver docs/SUPABASE.md. Ejemplo (modo
+  # sesión): postgresql://postgres.<POOLER_TENANT_ID>:<POSTGRES_PASSWORD>@<host>:5432/postgres
+  DATABASE_URL: ${DATABASE_URL:?DATABASE_URL es requerido (Postgres de Supabase, ver docs/SUPABASE.md)}
 
 x-modulo-comun: &modulo-comun
   restart: unless-stopped
   environment: *modulo-env
   volumes:
     - ./certs:/app/certs:ro
-  depends_on:
-    postgres:
-      condition: service_healthy
   networks: [facturacion]
 
 services:
-  # --- Base de datos y herramientas de administración ---
-
-  postgres:
-    build:
-      context: ./db
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: ${POSTGRES_USER:-facturacion}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD es requerido}
-      POSTGRES_DB: ${POSTGRES_DB:-facturacion}
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    expose: ["5432"]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-facturacion}"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    networks: [facturacion]
-
-  postgrest:
-    image: postgrest/postgrest:v12.2.3
-    restart: unless-stopped
-    environment:
-      PGRST_DB_URI: postgresql://${POSTGRES_USER:-facturacion}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-facturacion}
-      PGRST_DB_SCHEMA: facturacion
-      PGRST_DB_ANON_ROLE: web_anon
-    depends_on:
-      postgres:
-        condition: service_healthy
-    expose: ["3000"]
-    networks: [facturacion]
-
-  pgadmin:
-    image: dpage/pgadmin4:8
-    restart: unless-stopped
-    environment:
-      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:?PGADMIN_DEFAULT_EMAIL es requerido}
-      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:?PGADMIN_DEFAULT_PASSWORD es requerido}
-      PGADMIN_CONFIG_SERVER_MODE: "True"
-    volumes:
-      - pgadmin_data:/var/lib/pgadmin
-    depends_on:
-      - postgres
-    ports: ["8901:80"]
-    networks: [facturacion]
+  # --- Base de datos ---
+  #
+  # La base de datos vive en Supabase (self-hosted, recurso aparte en
+  # Dokploy): Postgres + Supabase Studio para ver y editar las tablas. Ya no
+  # se levantan aquí postgres, postgrest ni pgadmin. Ver docs/SUPABASE.md
+  # (instalación, migración de datos y acceso a Studio).
 
   # --- Módulos de facturación electrónica (uno por servicio DGII) ---
 
@@ -270,10 +230,6 @@ services:
         VITE_EMPRESA_RNC: "${VITE_EMPRESA_RNC:-}"
     ports: ["8013:80"]
     networks: [facturacion]
-
-volumes:
-  postgres_data:
-  pgadmin_data:
 
 networks:
   facturacion:

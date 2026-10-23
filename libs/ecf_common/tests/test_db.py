@@ -1,5 +1,6 @@
 import pytest
 
+from libs.ecf_common import db
 from libs.ecf_common.db import crear_pool, registrar_envio
 
 
@@ -83,3 +84,13 @@ async def test_registrar_envio_no_lanza_si_falla_la_insercion():
 
     # No debe propagar la excepción del pool.
     await registrar_envio(pool, modulo="recepcion", ambiente="test", rnc_emisor="101672919")
+
+
+def test_opciones_pool_supavisor_modo_transaccion_desactiva_cache():
+    url = "postgresql://postgres.tenant:clave@supabase.local:6543/postgres"
+    assert db.opciones_pool(url) == {"statement_cache_size": 0}
+
+
+def test_opciones_pool_modo_sesion_o_postgres_directo_sin_cambios():
+    assert db.opciones_pool("postgresql://postgres.tenant:clave@supabase.local:5432/postgres") == {}
+    assert db.opciones_pool("postgresql://facturacion:clave@postgres:5432/facturacion") == {}
