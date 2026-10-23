@@ -32,6 +32,9 @@ def test_estado_declaracion():
     assert precalculos.estado_declaracion(date(2026, 10, 20), False, HOY) == "vencida"
     assert precalculos.estado_declaracion(date(2026, 11, 20), False, HOY) == "pendiente"
     assert precalculos.estado_declaracion(date(2026, 10, 20), True, HOY) == "presentada"
+    # 607/608 del emisor 100 % electrónico: nunca "vencida"; si se marcó, presentada.
+    assert precalculos.estado_declaracion(date(2026, 10, 20), False, HOY, aplica=False) == "no_aplica"
+    assert precalculos.estado_declaracion(date(2026, 10, 20), True, HOY, aplica=False) == "presentada"
 
 
 def _it1(ajustes=None, saldo_sugerido=Decimal("200"), **ventas):
@@ -69,6 +72,13 @@ def test_it1_proporcionalidad_retenciones_y_saldo_anterior():
     assert any("sujeto a proporcionalidad" in a for a in precalculo["advertencias"])
     assert {a["clave"]: a["valor"] for a in precalculo["ajustes"]} == {
         "itbis_retenido_terceros": Decimal("500.00"), "saldo_favor_anterior": Decimal("200.00")}
+    # El saldo anterior es el sugerido (no un valor guardado); el retenido
+    # por terceros sí es manual y no tiene sugerencia.
+    ajustes = {a["clave"]: a for a in precalculo["ajustes"]}
+    assert (ajustes["saldo_favor_anterior"]["manual"], ajustes["saldo_favor_anterior"]["sugerido"]) == (
+        False, Decimal("200.00"))
+    assert (ajustes["itbis_retenido_terceros"]["manual"], ajustes["itbis_retenido_terceros"]["sugerido"]) == (
+        True, None)
 
 
 def test_it1_sin_exentas_admite_todo_y_saldo_a_favor():
@@ -86,6 +96,8 @@ def test_it1_sin_exentas_admite_todo_y_saldo_a_favor():
     assert c["10"]["etiqueta"] == "Proporción admitida: 100.00%"
     assert c["11"]["valor"] == Decimal("-5000.00")
     assert c["14"]["valor"] == 0  # el valor guardado (0) gana al sugerido
+    saldo = next(a for a in precalculo["ajustes"] if a["clave"] == "saldo_favor_anterior")
+    assert (saldo["valor"], saldo["manual"], saldo["sugerido"]) == (0, True, Decimal("999.00"))
     assert precalculo["resultado"] == {"etiqueta": "Saldo a favor", "valor": Decimal("4820.00")}
     assert nuevo_saldo == Decimal("4820")
 
@@ -139,7 +151,52 @@ def test_ir17_tasas_segun_periodo_y_recargos():
     assert nuevo["resultado"]["valor"] == Decimal("3735.00")
     assert nuevo["vence"] == date(2026, 11, 10)
     assert any("sin tipo" in a for a in nuevo["advertencias"])
-    assert _casillas(anterior)["1"]["etiqueta"].startswith("Honorarios por servicios independientes · 10%")
+    assert not any("tasa vigente" in a for a in nuevo["advertencias"])
+    assert "Tasa vigente para los pagos de octubre 2026: 15%" in c["1"]["ayuda"]
+    assert "Casilla" not in c["1"]["ayuda"]
+    assert "desde julio 2026" in nuevo["nota"]
+    # En junio 2026 (antes de la Ley 30-26) la tasa vigente es 10 %: la
+    # etiqueta muestra la tasa efectiva del 606 (15 %) y se avisa.
+    c_ant = _casillas(anterior)
+    assert c_ant["1"]["etiqueta"] == "Honorarios por servicios independientes · 15% de RD$ 10,000.00"
+    assert "Tasa vigente para los pagos de junio 2026: 10%" in c_ant["1"]["ayuda"]
+    assert any("tasa vigente para los pagos de junio 2026 es 10%" in a for a in anterior["advertencias"])
+    assert "anteriores a julio 2026" in anterior["nota"]
+
+
+def test_ir17_etiqueta_coherente_con_lo_retenido_y_mes_de_pago():
+    # Caso del e2e: 606 de alquiler con base 20,000 y 2,000 retenidos (10 %)
+    # pagado en octubre 2026, cuando la tasa vigente ya es 15 %.
+    grupos = [{"tipo_retencion_isr": 1, "monto_retencion_renta": Decimal("2000"), "monto_pagado": Decimal("20000")}]
+
+    octubre = precalculos.calcular_ir17(periodo="202610", retenciones=grupos, ajustes={}, hoy=HOY)
+    junio = precalculos.calcular_ir17(periodo="202606", retenciones=grupos, ajustes={}, hoy=HOY)
+    julio = precalculos.calcular_ir17(periodo=precalculos.PERIODO_LEY_30_26, retenciones=grupos, ajustes={}, hoy=HOY)
+    sin_base = precalculos.calcular_ir17(
+        periodo="202610", retenciones=[{**grupos[0], "monto_pagado": Decimal("0")}], ajustes={}, hoy=HOY)
+
+    linea = _casillas(octubre)["1"]
+    assert (linea["etiqueta"], linea["valor"]) == ("Alquileres · 10% de RD$ 20,000.00", Decimal("2000.00"))
+    assert any("es el 10% de la base" in a and "es 15%" in a for a in octubre["advertencias"])
+    assert _casillas(junio)["1"]["etiqueta"] == "Alquileres · 10% de RD$ 20,000.00"
+    assert not any("tasa vigente" in a for a in junio["advertencias"])
+    assert any("es 15%" in a for a in julio["advertencias"])
+    assert _casillas(sin_base)["1"]["etiqueta"] == "Alquileres"
+
+
+def test_ir2_inventario_final_sugerido_y_manual():
+    def ir2(ajustes):
+        return precalculos.calcular_ir2(anio="2026", ingresos=Decimal("0"), compras_por_tipo={},
+                                        valuacion_inventario=Decimal("80000"), ajustes=ajustes, hoy=HOY)
+
+    sugerido = {a["clave"]: a for a in ir2({})["ajustes"]}["inventario_final"]
+    manual = {a["clave"]: a for a in ir2({"inventario_final": Decimal("75000")})["ajustes"]}["inventario_final"]
+
+    assert (sugerido["valor"], sugerido["manual"], sugerido["sugerido"]) == (Decimal("80000.00"), False,
+                                                                              Decimal("80000.00"))
+    assert (manual["valor"], manual["manual"], manual["sugerido"]) == (Decimal("75000.00"), True, Decimal("80000.00"))
+    anticipos = {a["clave"]: a for a in ir2({})["ajustes"]}["anticipos"]
+    assert (anticipos["valor"], anticipos["manual"], anticipos["sugerido"]) == (0, False, None)
 
 
 def test_ir2_costo_gastos_y_tasa():

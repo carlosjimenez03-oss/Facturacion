@@ -5,10 +5,13 @@ reciben los datos ya leídos y los valores manuales (`ajustes`) y devuelven
 el pre-cálculo con la estructura de `PreCalculo` de
 frontend/src/lib/impuestosApi.ts.
 
-Las secciones, números de casilla, etiquetas y ayudas siguen el prototipo
+Las secciones, etiquetas y ayudas siguen el prototipo
 docs/diseno/prototipo-kontara/pantallas/PreCalculo.dc.html (objetos `it1`,
-`ir2` e `ir17`); los valores salen de los e-CF y del 606. Es una ayuda para
-llenar el formulario oficial en la Oficina Virtual, no lo sustituye -- ver
+`ir2` e `ir17`); los valores salen de los e-CF y del 606. Los `codigo` de
+cada renglón ("1", "2", ...) son números de LÍNEA de este pre-cálculo, NO
+las casillas del formulario oficial (no se verificó esa numeración): el
+usuario ubica cada concepto por su nombre. Es una ayuda para llenar el
+formulario oficial en la Oficina Virtual, no lo sustituye -- ver
 docs/ERP_API.md, sección "Impuestos", para las fuentes y las
 interpretaciones.
 """
@@ -39,6 +42,9 @@ DIA_VENCE_MENSUAL = {"ir17": 10, "606": 15, "607": 15, "608": 15, "it1": 20}
 DIAS_VENCE_IR2 = 120
 
 FORMULARIOS_MENSUALES = ("606", "607", "608", "it1", "ir17")
+# Formatos que solo llevan NCF serie B: no aplican al emisor 100 %
+# electrónico (setting `emisor_100_electronico` de erp-api).
+FORMATOS_SOLO_SERIE_B = ("607", "608")
 
 # Categorías del campo 3 del 606, "Tipo de Bienes y Servicios Comprados"
 # (docs/dgii/FORMATO_606.md).
@@ -58,39 +64,40 @@ TIPOS_BIENES_SERVICIOS = {
 TIPO_COSTO_VENTA = 9
 TIPO_ADQUISICION_ACTIVOS = 10
 
-# Campo 17 del 606 ("Tipo de Retención en ISR") -> casilla del IR-17 y su
-# tasa. Las tasas cambian con la Ley 30-26: el formulario oficial
-# "IR-17-2026 (Julio 2026 en adelante)" sube alquileres, honorarios y otras
-# rentas del Art. 309 lit. f de 10 % a 15 % y otras rentas del Decreto
-# 139-98 de 2 % a 3 %; el "IR-17-2025" tiene las anteriores.
+# Campo 17 del 606 ("Tipo de Retención en ISR") -> concepto y tasa de
+# retención. La Ley 30-26 sube, para los pagos desde julio 2026
+# (PERIODO_LEY_30_26), alquileres, honorarios y otras rentas del Art. 309
+# lit. f de 10 % a 15 % y otras rentas presuntas del Decreto 139-98 de 2 % a
+# 3 % (ver las fuentes en docs/ERP_API.md). El IR-17 se declara por mes de
+# PAGO, así que la tasa se elige por el período del IR-17, no por la fecha
+# de la factura.
 PERIODO_LEY_30_26 = "202607"
 
 
 @dataclass(frozen=True)
 class RetencionIsr:
     etiqueta: str
-    casilla_ir17: str
     tasa: Decimal
     tasa_desde_ley_30_26: Decimal
 
 
 RETENCIONES_ISR = {
-    1: RetencionIsr("Alquileres", "1", Decimal("0.10"), Decimal("0.15")),
-    2: RetencionIsr("Honorarios por servicios independientes", "2", Decimal("0.10"), Decimal("0.15")),
-    3: RetencionIsr("Otras rentas (Art. 309 lit. f)", "16", Decimal("0.10"), Decimal("0.15")),
-    4: RetencionIsr("Otras rentas presuntas (Decreto 139-98, Art. 70)", "17", Decimal("0.02"), Decimal("0.03")),
-    5: RetencionIsr(
-        "Intereses pagados a personas jurídicas residentes", "19", Decimal("0.01"), Decimal("0.01")
-    ),
-    6: RetencionIsr(
-        "Intereses pagados a personas físicas residentes", "11", Decimal("0.10"), Decimal("0.10")
-    ),
-    7: RetencionIsr("Pagos a proveedores del Estado", "12", Decimal("0.05"), Decimal("0.05")),
-    8: RetencionIsr("Juegos telefónicos", "13", Decimal("0.05"), Decimal("0.05")),
+    1: RetencionIsr("Alquileres", Decimal("0.10"), Decimal("0.15")),
+    2: RetencionIsr("Honorarios por servicios independientes", Decimal("0.10"), Decimal("0.15")),
+    3: RetencionIsr("Otras rentas (Art. 309 lit. f)", Decimal("0.10"), Decimal("0.15")),
+    4: RetencionIsr("Otras rentas presuntas (Decreto 139-98, Art. 70)", Decimal("0.02"), Decimal("0.03")),
+    5: RetencionIsr("Intereses pagados a personas jurídicas residentes", Decimal("0.01"), Decimal("0.01")),
+    6: RetencionIsr("Intereses pagados a personas físicas residentes", Decimal("0.10"), Decimal("0.10")),
+    7: RetencionIsr("Pagos a proveedores del Estado", Decimal("0.05"), Decimal("0.05")),
+    8: RetencionIsr("Juegos telefónicos", Decimal("0.05"), Decimal("0.05")),
     9: RetencionIsr(
-        "Compras a proveedores informales de ganadería de carne bovina", "21", Decimal("0.01"), Decimal("0.01")
+        "Compras a proveedores informales de ganadería de carne bovina", Decimal("0.01"), Decimal("0.01")
     ),
 }
+
+# Diferencia (en puntos porcentuales) entre la tasa efectiva del 606 y la
+# vigente a partir de la cual se avisa.
+_TOLERANCIA_TASA = Decimal("0.05")
 
 # IR-2: tasa general (Art. 297 del Código Tributario) y la transitoria de
 # la Ley 30-26 para los ejercicios 2026-2028 de quienes ingresan
@@ -189,9 +196,13 @@ def periodo_anterior(periodo: str) -> str:
     return f"{anio - 1}12" if mes == 1 else f"{anio}{mes - 1:02d}"
 
 
-def estado_declaracion(vence_en: date, presentada: bool, hoy: date) -> str:
+def estado_declaracion(vence_en: date, presentada: bool, hoy: date, *, aplica: bool = True) -> str:
+    """`aplica` = False (607/608 del emisor 100 % electrónico): "no_aplica"
+    salvo que el usuario la haya marcado presentada igual."""
     if presentada:
         return "presentada"
+    if not aplica:
+        return "no_aplica"
     return "vencida" if vence_en < hoy else "pendiente"
 
 
@@ -207,11 +218,29 @@ def casilla(codigo: str, etiqueta: str, valor: Decimal, tipo: str = "normal", ay
     return {"codigo": codigo, "etiqueta": etiqueta, "valor": redondear(valor), "tipo": tipo, "ayuda": ayuda}
 
 
-def lista_ajustes(formulario: str, valores: dict[str, Decimal]) -> list[dict]:
-    return [
-        {"clave": clave, "etiqueta": etiqueta, "valor": redondear(valores.get(clave, _CERO)), "ayuda": ayuda}
-        for clave, (etiqueta, ayuda) in AJUSTES[formulario].items()
-    ]
+def lista_ajustes(
+    formulario: str, manuales: dict[str, Decimal], sugeridos: dict[str, Decimal] | None = None
+) -> list[dict]:
+    """Los ajustes del formulario: `valor` es el que se usó en el cálculo
+    (el manual guardado o, si no hay, el sugerido por el sistema o 0);
+    `manual` dice si viene de un valor guardado y `sugerido` es el valor
+    calculado por el sistema (None si no tiene uno), al que se vuelve
+    borrando el manual."""
+    sugeridos = sugeridos or {}
+    resultado = []
+    for clave, (etiqueta, ayuda) in AJUSTES[formulario].items():
+        manual = manuales.get(clave)
+        sugerido = sugeridos.get(clave)
+        valor = manual if manual is not None else (sugerido if sugerido is not None else _CERO)
+        resultado.append({
+            "clave": clave,
+            "etiqueta": etiqueta,
+            "valor": redondear(valor),
+            "manual": manual is not None,
+            "sugerido": redondear(sugerido) if sugerido is not None else None,
+            "ayuda": ayuda,
+        })
+    return resultado
 
 
 def _valor(ajustes: dict[str, Decimal], clave: str, por_defecto: Decimal = _CERO) -> Decimal:
@@ -222,6 +251,11 @@ def _valor(ajustes: dict[str, Decimal], clave: str, por_defecto: Decimal = _CERO
 def _fmt(valor: Decimal) -> str:
     """Monto para un texto (etiquetas, advertencias): "1,234.56"."""
     return f"{redondear(valor):,.2f}"
+
+
+def _pct(valor: Decimal) -> str:
+    """Porcentaje para un texto, sin ceros de más: 15 -> "15", 12.5 -> "12.5"."""
+    return f"{redondear(valor).normalize():f}"
 
 
 def _monto(valor: Decimal) -> str:
@@ -288,7 +322,8 @@ def calcular_it1(
     valor sugerido de "saldo a favor anterior" del mes siguiente."""
     total_ingresos = ventas.g18 + ventas.g16 + ventas.exportaciones + ventas.exentas
     itbis_facturado = ventas.i18 + ventas.i16
-    # ITBIS por adelantar del 606 (campo 15 = facturado - llevado al costo).
+    # ITBIS por adelantar del 606 (campo 16 = facturado [campo 14] - llevado
+    # al costo [campo 15]).
     adelantado = compras.itbis_facturado - compras.itbis_costo
     # Coeficiente de proporcionalidad (casilla 54 del Anexo A del IT-1):
     # (exportaciones + exentas por destino + gravadas) / total de operaciones.
@@ -396,7 +431,7 @@ def calcular_it1(
             {"etiqueta": "Nuevo saldo a favor", "valor": _monto(nuevo_saldo_favor)},
             {"etiqueta": "Vencimiento", "valor": _resumen_vence(fecha_vence, hoy)},
         ],
-        "ajustes": lista_ajustes("it1", {**ajustes, "saldo_favor_anterior": saldo_anterior}),
+        "ajustes": lista_ajustes("it1", ajustes, {"saldo_favor_anterior": saldo_favor_sugerido}),
         "advertencias": advertencias,
     }
     return precalculo, nuevo_saldo_favor
@@ -409,7 +444,11 @@ def calcular_ir17(
 ) -> dict[str, Any]:
     """`retenciones`: filas del 606 pagadas en el período agrupadas por
     `tipo_retencion_isr` (None si falta) con `monto_retencion_renta` y
-    `monto_pagado` (servicios + bienes)."""
+    `monto_pagado` (servicios + bienes). `periodo` es el mes de PAGO: decide
+    la tasa vigente (antes o desde la Ley 30-26). El importe de cada línea es
+    lo retenido según el 606; la etiqueta muestra la base del 606 y la tasa
+    efectiva (retenido / base), y si esta no coincide con la vigente se
+    avisa."""
     nueva_ley = periodo >= PERIODO_LEY_30_26
     filas: list[dict] = []
     resumen: list[dict] = []
@@ -428,15 +467,28 @@ def calcular_ir17(
             resumen.append({"etiqueta": "Sin tipo", "valor": _monto(monto)})
             continue
         tasa = definicion.tasa_desde_ley_30_26 if nueva_ley else definicion.tasa
-        pct = f"{redondear(tasa * 100).normalize():f}"
+        pct = _pct(tasa * 100)
+        base = grupo["monto_pagado"] or _CERO
+        if base > 0:
+            efectiva = monto / base * 100
+            etiqueta = f"{definicion.etiqueta} · {_pct(efectiva)}% de RD$ {_fmt(base)}"
+            if abs(efectiva - tasa * 100) > _TOLERANCIA_TASA:
+                advertencias.append(
+                    f"{definicion.etiqueta}: lo retenido según el 606 (RD${_fmt(monto)}) es el {_pct(efectiva)}% de "
+                    f"la base (RD${_fmt(base)}), pero la tasa vigente para los pagos de {nombre_periodo(periodo)} es "
+                    f"{pct}%: revise el 'Monto Retención Renta' del 606 (la base puede incluir montos no sujetos a "
+                    "retención)."
+                )
+        else:
+            etiqueta = definicion.etiqueta
         filas.append(casilla(
             codigo,
-            f"{definicion.etiqueta} · {pct}% de RD$ {_fmt(grupo['monto_pagado'])}",
+            etiqueta,
             monto,
             ayuda=(
-                f"Casilla {definicion.casilla_ir17} del IR-17 (tasa {pct}%). Suma del 'Monto Retención Renta' "
-                "del 606 de las facturas pagadas en el período; la base mostrada es el monto facturado de esas "
-                "facturas."
+                f"Tasa vigente para los pagos de {nombre_periodo(periodo)}: {pct}%. El importe es la suma del "
+                "'Monto Retención Renta' del 606 de las facturas pagadas en el período; la base mostrada es el "
+                "monto facturado de esas facturas y el porcentaje, lo retenido sobre esa base."
             ),
         ))
         resumen.append({"etiqueta": definicion.etiqueta, "valor": _monto(monto)})
@@ -465,7 +517,11 @@ def calcular_ir17(
         "nota": (
             "Incluye las retenciones de las facturas de compra pagadas en el período (fecha de pago del 606), "
             "sin importar su fecha de emisión."
-            + (" Tasas del formulario IR-17-2026 (Ley 30-26)." if nueva_ley else " Tasas del formulario IR-17-2025.")
+            + (
+                " Tasas vigentes para pagos desde julio 2026 (Ley 30-26)."
+                if nueva_ley
+                else " Tasas vigentes para pagos anteriores a julio 2026 (antes de la Ley 30-26)."
+            )
         ),
         "vence": fecha_vence,
         "secciones": secciones,
@@ -593,6 +649,6 @@ def calcular_ir2(
             {"etiqueta": "Renta neta imponible", "valor": _monto(renta_imponible)},
             {"etiqueta": "Tasa efectiva s/ ingresos", "valor": f"{tasa_efectiva:.2f}%"},
         ],
-        "ajustes": lista_ajustes("ir2", {**ajustes, "inventario_final": inventario_final}),
+        "ajustes": lista_ajustes("ir2", ajustes, {"inventario_final": valuacion_inventario}),
         "advertencias": advertencias,
     }

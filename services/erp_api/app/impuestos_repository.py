@@ -36,6 +36,13 @@ class ConflictoImpuestosError(Exception):
 _ESTADO_ACEPTADO = "aceptado"
 _ESTADO_PENDIENTE_DGII = "enviado"
 
+# `codigo` que anulacion_encf guarda en facturacion.envios_dgii cuando la
+# DGII acepta la anulación de rangos (respuesta `{rnc, codigo, nombre,
+# mensajes}` de /api/operaciones/anularrango, docs/dgii/SERVICIOS_DGII.md).
+# Un envío sin `error` pero con otro código (o sin código) no se da por
+# anulado.
+_CODIGO_ANECF_ACEPTADO = "1"
+
 # Nota de crédito en el 606 (e-NCF E34, NCF B04 o tipo 04 del formato de 19
 # posiciones): resta en compras e ITBIS adelantado.
 _SIGNO_606 = (
@@ -127,7 +134,9 @@ def _advertencia_pendientes(cantidad: int) -> list[str]:
 
 # --- Formato 607 ---------------------------------------------------------
 
-async def formato_607(pool: asyncpg.Pool, periodo: str, rnc_emisor: str) -> dict[str, Any]:
+async def formato_607(
+    pool: asyncpg.Pool, periodo: str, rnc_emisor: str, *, emisor_100_electronico: bool = True
+) -> dict[str, Any]:
     validar_periodo_mensual(periodo)
     desde, hasta = _rango_mes(periodo)
     async with pool.acquire() as conn:
@@ -136,7 +145,7 @@ async def formato_607(pool: asyncpg.Pool, periodo: str, rnc_emisor: str) -> dict
     filas, totales, advertencias = formatos.armar_607(facturas)
     encabezado: list[str] = []
     if facturas:
-        encabezado.append(formatos.ADVERTENCIA_ECF_607)
+        encabezado.append(formatos.advertencia_ecf_607(emisor_100_electronico))
     if not rnc_emisor:
         encabezado.append("El RNC del emisor no está configurado (EMISOR_RNC): no se puede generar el archivo.")
     return {
@@ -156,19 +165,17 @@ def _exigir_rnc(rnc_emisor: str) -> None:
         )
 
 
-async def archivo_607(pool: asyncpg.Pool, periodo: str, rnc_emisor: str) -> tuple[str, bytes]:
+async def archivo_607(
+    pool: asyncpg.Pool, periodo: str, rnc_emisor: str, *, emisor_100_electronico: bool = True
+) -> tuple[str, bytes]:
     """(nombre, contenido) del TXT. Solo lleva comprobantes que la DGII
     acepta en el 607 (no e-CF, ver formatos.py); 422 si no hay ninguno o si
     alguno es inválido."""
     _exigir_rnc(rnc_emisor)
-    datos = await formato_607(pool, periodo, rnc_emisor)
+    datos = await formato_607(pool, periodo, rnc_emisor, emisor_100_electronico=emisor_100_electronico)
     reportables = [fila for fila in datos["filas"] if not formatos.es_encf(fila["ncf"])]
     if not reportables:
-        raise DatosInvalidosError(
-            f"No hay comprobantes que remitir en el 607 de {periodo}: los e-CF no se reportan en el Formato 607 "
-            "(la DGII ya los recibe en XML -- Norma General 01-20, Ley 32-23). Presente el 607 en cero en la "
-            "Oficina Virtual (Declaraciones Juradas > Declaraciones en Cero)."
-        )
+        raise DatosInvalidosError(formatos.sin_registros_607(periodo, emisor_100_electronico))
     errores = [
         f"{fila['ncf']}: {error}" for fila in reportables for error in formatos.errores_fila_607(fila)
     ]
@@ -191,12 +198,12 @@ def _fecha_anulacion(respuesta: dict[str, Any], creado_en: datetime) -> date:
 async def _anulaciones_encf(
     conn: asyncpg.Connection, desde: date, hasta: date
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """e-NCF anulados con ANECF (envíos sin error de `anulacion_encf`) cuya
-    fecha de anulación cae en [desde, hasta). Los rangos se despliegan uno
-    por e-NCF."""
+    """e-NCF anulados con ANECF (envíos de `anulacion_encf` sin error y con
+    el código de aceptación de la DGII) cuya fecha de anulación cae en
+    [desde, hasta). Los rangos se despliegan uno por e-NCF."""
     envios = await conn.fetch(
         """
-        SELECT id, respuesta::text AS respuesta, creado_en
+        SELECT id, codigo, respuesta::text AS respuesta, creado_en
         FROM facturacion.envios_dgii
         WHERE modulo = 'anulacion_encf' AND error IS NULL
           AND creado_en >= $1 AND creado_en < $2
@@ -208,11 +215,15 @@ async def _anulaciones_encf(
     filas: list[dict[str, Any]] = []
     advertencias: list[str] = []
     sin_rangos = 0
+    no_aceptadas = 0
     truncado = False
     for envio in envios:
         respuesta = json.loads(envio["respuesta"]) if envio["respuesta"] else {}
         fecha = _fecha_anulacion(respuesta, envio["creado_en"])
         if not (desde <= fecha < hasta):
+            continue
+        if (envio["codigo"] or "").strip() != _CODIGO_ANECF_ACEPTADO:
+            no_aceptadas += 1
             continue
         rangos = respuesta.get("rangos")
         if not rangos:
@@ -239,6 +250,11 @@ async def _anulaciones_encf(
                 }
                 for encf in encfs
             )
+    if no_aceptadas:
+        advertencias.append(
+            f"{no_aceptadas} envío(s) de anulación de e-NCF del período no tienen el código de aceptación de la "
+            f"DGII ({_CODIGO_ANECF_ACEPTADO}) y no se listan: verifique su resultado antes de darlos por anulados."
+        )
     if sin_rangos:
         advertencias.append(
             f"{sin_rangos} anulación(es) de e-NCF del período se registraron sin el detalle de rangos (envíos "
@@ -262,7 +278,9 @@ def _fila_manual(fila: asyncpg.Record) -> dict[str, Any]:
     }
 
 
-async def formato_608(pool: asyncpg.Pool, periodo: str, rnc_emisor: str) -> dict[str, Any]:
+async def formato_608(
+    pool: asyncpg.Pool, periodo: str, rnc_emisor: str, *, emisor_100_electronico: bool = True
+) -> dict[str, Any]:
     validar_periodo_mensual(periodo)
     desde, hasta = _rango_mes(periodo)
     async with pool.acquire() as conn:
@@ -279,22 +297,22 @@ async def formato_608(pool: asyncpg.Pool, periodo: str, rnc_emisor: str) -> dict
     filas = sorted(encf + [_fila_manual(f) for f in manuales], key=lambda f: (f["fecha_comprobante"], f["ncf"]))
     encabezado: list[str] = []
     if encf:
-        encabezado.append(formatos.ADVERTENCIA_ECF_608)
+        encabezado.append(formatos.advertencia_ecf_608(emisor_100_electronico))
     if not rnc_emisor:
         encabezado.append("El RNC del emisor no está configurado (EMISOR_RNC): no se puede generar el archivo.")
     return {"periodo": periodo, "rnc_emisor": rnc_emisor, "filas": filas, "advertencias": encabezado + advertencias}
 
 
-async def archivo_608(pool: asyncpg.Pool, periodo: str, rnc_emisor: str) -> tuple[str, bytes]:
+async def archivo_608(
+    pool: asyncpg.Pool, periodo: str, rnc_emisor: str, *, emisor_100_electronico: bool = True
+) -> tuple[str, bytes]:
+    """(nombre, contenido) del TXT: solo las anulaciones manuales (NCF serie
+    B); 422 si no hay ninguna."""
     _exigir_rnc(rnc_emisor)
-    datos = await formato_608(pool, periodo, rnc_emisor)
+    datos = await formato_608(pool, periodo, rnc_emisor, emisor_100_electronico=emisor_100_electronico)
     reportables = [fila for fila in datos["filas"] if fila["origen"] == "manual"]
     if not reportables:
-        raise DatosInvalidosError(
-            f"No hay comprobantes que remitir en el 608 de {periodo}: las anulaciones de e-NCF no se reportan en el "
-            "608 (se informan a la DGII con el servicio ANECF o con notas de crédito). Si no anuló NCF serie B, "
-            "presente el 608 en cero en la Oficina Virtual (Declaraciones Juradas > Declaraciones en Cero)."
-        )
+        raise DatosInvalidosError(formatos.sin_registros_608(periodo, emisor_100_electronico))
     errores = [f["ncf"] for f in reportables if not formatos.validar_ncf_608(f["ncf"])]
     if errores:
         raise DatosInvalidosError("NCF inválidos para el 608: " + ", ".join(errores[:10]))
@@ -302,7 +320,22 @@ async def archivo_608(pool: asyncpg.Pool, periodo: str, rnc_emisor: str) -> tupl
     return formatos.nombre_archivo("608", rnc_emisor, periodo), contenido
 
 
+async def _bloquear_declaracion(conn: asyncpg.Connection, formulario: str, periodo: str) -> None:
+    """Candado de transacción por (formulario, período): serializa las altas
+    y bajas del 608 con la marca de "presentada", para que nadie agregue una
+    anulación mientras otro marca el período como presentado. Se libera al
+    terminar la transacción (debe llamarse dentro de una)."""
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtext('impuestos.declaracion'), hashtext($1 || ':' || $2))",
+        formulario,
+        periodo,
+    )
+
+
 async def _exigir_no_presentada(conn: asyncpg.Connection, formulario: str, periodo: str) -> None:
+    """Toma el candado del período y falla (409) si ya está presentado.
+    Dentro de una transacción."""
+    await _bloquear_declaracion(conn, formulario, periodo)
     presentada = await conn.fetchval(
         "SELECT presentada_en FROM impuestos.declaraciones_presentadas WHERE formulario = $1 AND periodo = $2",
         formulario,
@@ -403,10 +436,11 @@ async def _precalculo_it1(conn: asyncpg.Connection, periodo: str) -> dict[str, A
     ajustes = await _leer_ajustes(conn, "it1", periodo)
     # Saldo a favor sugerido: el nuevo saldo a favor del mes anterior,
     # calculado con sus datos y sus ajustes guardados (sin arrastrar el de
-    # meses previos si no se guardó -- es lo conservador).
+    # meses previos si no se guardó -- es lo conservador). Se calcula aunque
+    # haya un valor manual, para mostrarlo como sugerencia y poder volver a él.
     anterior = precalculos.periodo_anterior(periodo)
     saldo_sugerido = Decimal("0")
-    if "saldo_favor_anterior" not in ajustes and validar_periodo(anterior):
+    if validar_periodo(anterior):
         v_ant, c_ant, r_ant = await _datos_it1(conn, anterior)
         _, saldo_sugerido = precalculos.calcular_it1(
             periodo=anterior,
@@ -551,13 +585,16 @@ async def guardar_ajustes(
 
 # --- Declaraciones ---------------------------------------------------------
 
-def _declaracion(formulario: str, periodo: str, marca: dict[str, Any] | None, hoy_: date) -> dict[str, Any]:
+def _declaracion(
+    formulario: str, periodo: str, marca: dict[str, Any] | None, hoy_: date, emisor_100_electronico: bool
+) -> dict[str, Any]:
     fecha_vence = precalculos.vence(formulario, periodo)
+    aplica = not (emisor_100_electronico and formulario in precalculos.FORMATOS_SOLO_SERIE_B)
     return {
         "formulario": formulario,
         "periodo": periodo,
         "vence": fecha_vence,
-        "estado": precalculos.estado_declaracion(fecha_vence, marca is not None, hoy_),
+        "estado": precalculos.estado_declaracion(fecha_vence, marca is not None, hoy_, aplica=aplica),
         "presentada_en": marca["presentada_en"] if marca else None,
         "monto": marca["monto"] if marca else None,
         "referencia": marca["referencia"] if marca else None,
@@ -567,9 +604,12 @@ def _declaracion(formulario: str, periodo: str, marca: dict[str, Any] | None, ho
 _ORDEN_FORMULARIOS = ("ir17", "606", "607", "608", "it1", "ir2")
 
 
-async def listar_declaraciones(pool: asyncpg.Pool, anio: str) -> list[dict[str, Any]]:
+async def listar_declaraciones(
+    pool: asyncpg.Pool, anio: str, *, emisor_100_electronico: bool = True
+) -> list[dict[str, Any]]:
     """Las obligaciones de los 12 períodos mensuales del año (606, 607, 608,
-    IT-1, IR-17) y el IR-2 del ejercicio, ordenadas por vencimiento."""
+    IT-1, IR-17) y el IR-2 del ejercicio, ordenadas por vencimiento. Con
+    `emisor_100_electronico`, el 607 y el 608 sin marcar salen "no_aplica"."""
     validar_anio(anio)
     async with pool.acquire() as conn:
         marcas = await conn.fetch(
@@ -583,11 +623,14 @@ async def listar_declaraciones(pool: asyncpg.Pool, anio: str) -> list[dict[str, 
     por_clave = {(m["formulario"], m["periodo"]): dict(m) for m in marcas}
     hoy_ = hoy()
     declaraciones = [
-        _declaracion(formulario, f"{anio}{mes:02d}", por_clave.get((formulario, f"{anio}{mes:02d}")), hoy_)
+        _declaracion(
+            formulario, f"{anio}{mes:02d}", por_clave.get((formulario, f"{anio}{mes:02d}")), hoy_,
+            emisor_100_electronico,
+        )
         for mes in range(1, 13)
         for formulario in precalculos.FORMULARIOS_MENSUALES
     ]
-    declaraciones.append(_declaracion("ir2", anio, por_clave.get(("ir2", anio)), hoy_))
+    declaraciones.append(_declaracion("ir2", anio, por_clave.get(("ir2", anio)), hoy_, emisor_100_electronico))
     return sorted(declaraciones, key=lambda d: (d["vence"], _ORDEN_FORMULARIOS.index(d["formulario"])))
 
 
@@ -599,10 +642,12 @@ async def marcar_presentada(
     monto: Decimal | None,
     referencia: str | None,
     presentada_en: date | None,
+    emisor_100_electronico: bool = True,
 ) -> dict[str, Any]:
     validar_periodo_formulario(formulario, periodo)
     monto = precalculos.redondear(monto) if monto is not None else None
-    async with pool.acquire() as conn:
+    async with pool.acquire() as conn, conn.transaction():
+        await _bloquear_declaracion(conn, formulario, periodo)
         fila = await conn.fetchrow(
             """
             INSERT INTO impuestos.declaraciones_presentadas (formulario, periodo, presentada_en, monto, referencia)
@@ -618,16 +663,19 @@ async def marcar_presentada(
             monto,
             referencia or None,
         )
-    return _declaracion(formulario, periodo, dict(fila), hoy())
+    return _declaracion(formulario, periodo, dict(fila), hoy(), emisor_100_electronico)
 
 
-async def desmarcar_presentada(pool: asyncpg.Pool, formulario: str, periodo: str) -> dict[str, Any]:
+async def desmarcar_presentada(
+    pool: asyncpg.Pool, formulario: str, periodo: str, *, emisor_100_electronico: bool = True
+) -> dict[str, Any]:
     """Quita la marca (idempotente) y devuelve la declaración con su estado recalculado."""
     validar_periodo_formulario(formulario, periodo)
-    async with pool.acquire() as conn:
+    async with pool.acquire() as conn, conn.transaction():
+        await _bloquear_declaracion(conn, formulario, periodo)
         await conn.execute(
             "DELETE FROM impuestos.declaraciones_presentadas WHERE formulario = $1 AND periodo = $2",
             formulario,
             periodo,
         )
-    return _declaracion(formulario, periodo, None, hoy())
+    return _declaracion(formulario, periodo, None, hoy(), emisor_100_electronico)

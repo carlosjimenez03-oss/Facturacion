@@ -68,6 +68,14 @@ Las rutas están en `app/impuestos.py`, las consultas en
   [`db/init/008_impuestos.sql`](../db/init/008_impuestos.sql).
 - El RNC del encabezado de los TXT es `EMISOR_RNC` (sin guiones). Si falta,
   los TXT devuelven 422.
+- **`EMISOR_100_ELECTRONICO`** (booleano, por defecto `true`): la empresa
+  solo emite e-CF. Según la DGII (ver las fuentes), el emisor 100 %
+  electrónico no presenta el 607 ni el 608, así que con `true` las
+  declaraciones 607/608 salen con estado `no_aplica` (nunca `vencida`) y
+  las advertencias y los 422 de los TXT lo explican. **Póngalo en `false`
+  si la empresa todavía emite o anula NCF serie B** (papel o impresora
+  fiscal): entonces el 607/608 vuelven a vencer cada mes y los mensajes
+  piden declararlos en cero cuando no hay comprobantes serie B.
 - `anulacion_encf` ahora guarda en `respuesta` de `envios_dgii`, junto con la
   respuesta de la DGII, los rangos anulados (`rangos: [{tipo_ecf, desde,
   hasta}]`) y `fecha_hora_anulacion`, que saca del ANECF enviado
@@ -85,12 +93,26 @@ Las rutas están en `app/impuestos.py`, las consultas en
 | `GET /impuestos/608/tipos-anulacion` | La tabla oficial 01–10 |
 | `POST /impuestos/608` | Registra un NCF anulado a mano. 422 si el NCF no cumple la plantilla del 608 (11 o 19 posiciones, serie A/B/P/Q y tipo válido) o si es un e-NCF; 409 si el NCF ya está registrado o el 608 de ese mes ya está marcado presentado. El período es el mes de `fecha_comprobante` |
 | `DELETE /impuestos/608/{id}` | Solo filas manuales (las de e-NCF no tienen id). 404 si no existe, 409 si el 608 del período ya está presentado |
-| `GET /impuestos/608/txt?periodo=` | `DGII_F_608_<RNC>_<AAAAMM>.TXT` con las filas manuales. 422 si no hay ninguna o falta el RNC |
+| `GET /impuestos/608/txt?periodo=` | `DGII_F_608_<RNC>_<AAAAMM>.TXT` con las filas manuales (NCF serie B). 422 si no hay ninguna (también si solo hay anulaciones ANECF) o falta el RNC. El frontend no ofrece el botón en ese caso |
 | `GET /impuestos/precalculo/{it1\|ir17\|ir2}?periodo=` | El pre-cálculo. `it1` e `ir17` usan `AAAAMM` e `ir2` usa `AAAA` (422 si no) |
-| `PUT /impuestos/precalculo/{formulario}/ajustes?periodo=` | `{"valores": {clave: "monto"}}` guarda los valores manuales y devuelve el pre-cálculo recalculado. Un valor vacío borra el manual y vuelve al calculado. 422 con claves desconocidas o montos inválidos |
-| `GET /impuestos/declaraciones?anio=AAAA` | 606, 607, 608, IT-1 e IR-17 de los 12 meses, más el IR-2 del ejercicio (61 filas), ordenadas por vencimiento. `estado` es `presentada` si se marcó, `vencida` si `vence` < hoy y `pendiente` en otro caso |
+| `PUT /impuestos/precalculo/{formulario}/ajustes?periodo=` | `{"valores": {clave: "monto"}}` guarda los valores manuales de las claves enviadas (las demás no se tocan) y devuelve el pre-cálculo recalculado. Un valor vacío (`""` o `null`) borra el manual y vuelve al sugerido. 422 con claves desconocidas o montos inválidos. El frontend envía solo las claves que el usuario cambió |
+| `GET /impuestos/declaraciones?anio=AAAA` | 606, 607, 608, IT-1 e IR-17 de los 12 meses, más el IR-2 del ejercicio (61 filas), ordenadas por vencimiento. `estado` es `presentada` si se marcó, `no_aplica` para el 607/608 con `EMISOR_100_ELECTRONICO=true`, `vencida` si `vence` < hoy y `pendiente` en otro caso |
 | `POST /impuestos/declaraciones/{formulario}/{periodo}/presentada` | Marca la declaración como presentada (`monto`, `referencia`, `presentada_en`, que por defecto es hoy). Repetir la llamada actualiza la marca |
 | `DELETE …/presentada` | Quita la marca (idempotente) y devuelve la declaración con su estado recalculado |
+
+Cada elemento de `ajustes` trae `valor` (el que se usó en el cálculo: el
+manual guardado o, si no hay, el sugerido o 0), `manual` (si `valor` es un
+valor guardado) y `sugerido` (lo que calcula el sistema, o `null` si no
+sugiere nada). Hoy sugieren valor `it1.saldo_favor_anterior` (el nuevo saldo
+a favor del pre-cálculo del mes anterior) e `ir2.inventario_final` (la
+valuación del Kardex). El frontend muestra "Sugerido por el sistema" o
+"Manual · Restablecer" (que envía `""`).
+
+Los `codigo` de las `casillas` ("1", "2", …) son **números de línea** del
+pre-cálculo, no las casillas del formulario oficial (no se pudo verificar
+esa numeración en una fuente oficial). La pantalla los muestra como `L1`,
+`L2`… y "Copiar valores" los copia como "Línea N", con un aviso: se
+transcribe cada valor buscando su concepto en el formulario.
 
 Claves de `ajustes`:
 
@@ -137,7 +159,7 @@ y 05-2019), igual que el 606 (`docs/dgii/FORMATO_606.md`):
   También las [Preguntas frecuentes del Facturador Gratuito](https://dgii.gov.do/cicloContribuyente/facturacion/comprobantesFiscalesElectronicosE-CF/Preguntas%20frecuentes/Generales/Preguntas-Frecuentes-Facturador-Gratuito.pdf) (preguntas 39 y 71).
 - [Formato Anulación de e-NCF v1.0](https://dgii.gov.do/cicloContribuyente/facturacion/comprobantesFiscalesElectronicosE-CF/Documentacin%20sobre%20eCF/Formatos%20XML/Formato%20Anulaci%C3%B3n%20de%20e-NCF%20v1.0.pdf) (campos del ANECF) y [Descripción Técnica Servicios DGII](https://dgii.gov.do/cicloContribuyente/facturacion/comprobantesFiscalesElectronicosE-CF/Documentacin%20sobre%20eCF/Informe%20y%20Descripci%C3%B3n%20T%C3%A9cnica/Descripcion%20Tecnica%20Servicios%20DGII.pdf) (respuesta de `anularrango`).
 - [Instructivo de llenado del IT-1](https://dgii.gov.do/publicacionesOficiales/bibliotecaVirtual/contribuyentes/itbis/Documents/Instructivo%20LLENADO%20IT-1%202020.pdf) (versión julio 2026). Cubre las tasas del 18 % y el 16 %, exportaciones, exentas y exentas por destino, el coeficiente de proporcionalidad de la casilla 54 (exportaciones + exentas por destino + gravadas, entre el total), el ITBIS por adelantar del 606, las retenciones, el saldo a favor anterior y los recargos.
-- Formularios [IR-17-2026 (julio 2026 en adelante) e IR-17-2025](https://dgii.gov.do/herramientas/formularios/formularioDeclaraciones/Paginas/impuestosRetencionesyRetribuciones.aspx) (Excel oficial). Dan las casillas 1–24 y sus tasas; la Ley 30-26 sube alquileres, honorarios y otras rentas a 15 % y las rentas presuntas a 3 %. Ver también el [instructivo IR-17](https://dgii.gov.do/publicacionesOficiales/bibliotecaVirtual/contribuyentes/retencionesRetribucionesComplementarias/Documents/3-IR-17.pdf), que fija el vencimiento el día 10.
+- [Página de formularios de retenciones de la DGII](https://dgii.gov.do/herramientas/formularios/formularioDeclaraciones/Paginas/impuestosRetencionesyRetribuciones.aspx) (IR-17 en Excel). Se usó para las tasas; la Ley 30-26 sube alquileres, honorarios y otras rentas a 15 % y las rentas presuntas a 3 % para los pagos desde julio 2026. El pre-cálculo **no** reproduce la numeración de casillas del formulario. Ver también el [instructivo IR-17](https://dgii.gov.do/publicacionesOficiales/bibliotecaVirtual/contribuyentes/retencionesRetribucionesComplementarias/Documents/3-IR-17.pdf), que fija el vencimiento el día 10.
 - IR-2: [instructivo del formulario IR-2](https://dgii.gov.do/publicacionesOficiales/bibliotecaVirtual/contribuyentes/isr/ISR%20Persona%20Jurdica/7-InstructivoUsoFormularioIR-2EnExcel.pdf) (tasa del 27 %, plazo de 120 días tras el cierre). La tasa transitoria del 30 % de la Ley 30-26 (ejercicios 2026–2028, ingresos de RD$1,000 millones o más) está resumida en el [Tax Flash de Deloitte](https://www.deloitte.com/latam/es/services/tax/perspectives/do-3jul26-ley-tributaria-cambios-isr-itbis-fiscalidad.html). Es una fuente secundaria: no se encontró el texto oficial de la ley.
 
 ### Interpretaciones y supuestos
@@ -151,18 +173,33 @@ y 05-2019), igual que el 606 (`docs/dgii/FORMATO_606.md`):
    - Los TXT solo llevan lo que la DGII espera: en el 608, los NCF serie B
      registrados a mano; en el 607, ningún comprobante de este sistema, que
      solo emite e-CF.
-   - Sin comprobantes reportables, el TXT responde 422 e indica presentar
-     el formato **en cero** (Oficina Virtual > Declaraciones en Cero).
+   - Sin comprobantes reportables, el TXT responde 422. Con
+     `EMISOR_100_ELECTRONICO=true` el mensaje dice que el formato no aplica;
+     con `false`, que se declare **en cero** (Oficina Virtual >
+     Declaraciones Juradas > Declaraciones en Cero).
+   - El frontend aplica la misma regla: solo ofrece "Generar archivo TXT"
+     si hay comprobantes serie B (en el 607, NCF que no son e-NCF; en el
+     608, filas manuales) y, si no, muestra la explicación. "Validar" cuenta
+     solo esos comprobantes. El alta manual del 608 acepta NCF serie B de 11
+     posiciones o el formato de 19 y rechaza los e-NCF (se anulan con ANECF
+     o con una nota de crédito).
    - El 606 sí incluye e-CF, como pide la DGII.
 2. **Consumo.** Un E32 con `MontoTotal` menor de RD$250,000 no va renglón
    por renglón: se suma en la advertencia del "Resumen General de Facturas de
    Consumo". Se compara el monto con impuestos, que es lo conservador. Desde
    el tope, el E32 va individual y, si no trae RNC, genera una advertencia.
 3. **Mapeo del 607:**
-   - **Monto facturado:** gravado + exento sin impuestos. Sale de
-     `Totales.MontoGravadoI1/I2/I3` y `MontoExento`, o de las líneas por
-     `IndicadorFacturacion` si el e-CF no los trae (descontando el ITBIS si
-     `IndicadorMontoGravado=1`).
+   - **Desglose por tasa (607 e IT-1/IR-2):** cada e-CF sale de **una sola
+     fuente**, para que el gravado y su ITBIS cuadren: (1) los totales por
+     tasa (`MontoGravadoI1/I2/I3`, `MontoExento`, `TotalITBIS1/2`) si el
+     e-CF trae alguno; si no, (2) las líneas por `IndicadorFacturacion`
+     (descontando el ITBIS si `IndicadorMontoGravado=1`), con el ITBIS =
+     gravado × tasa (es lo que escribe este sistema,
+     `frontend/src/lib/buildDatos.ts`); y si no hay líneas, (3) los totales
+     globales `MontoGravadoTotal`/`MontoExento`/`TotalITBIS`, con la tasa
+     deducida de `TotalITBIS / MontoGravadoTotal` (sin ITBIS = 0 %; la más
+     cercana entre 16 % y 18 %).
+   - **Monto facturado:** gravado + exento sin impuestos, del desglose.
    - **Propina legal:** el impuesto adicional con código `001`. El
      selectivo es la suma del específico y el ad valorem; el resto va a
      "otros impuestos".
@@ -175,8 +212,10 @@ y 05-2019), igual que el 606 (`docs/dgii/FORMATO_606.md`):
    - **Sin identificación del comprador:** `tipo_id` sale 3, porque el
      contrato lo exige numérico; en el TXT ese campo queda vacío.
 4. **608 desde ANECF.**
-   - **Qué cuenta:** solo los envíos sin `error`. Si los mensajes de la
-     DGII indican anulación parcial, se avisa.
+   - **Qué cuenta:** solo los envíos sin `error` **y** con `codigo = "1"`,
+     el código de aceptación que `anulacion_encf` guarda de la respuesta de
+     `anularrango`. Los demás se cuentan en una advertencia. Si los mensajes
+     de la DGII indican anulación parcial, se avisa.
    - **Fecha:** la fecha es `FechaHoraAnulacioneNCF` o, si falta, la fecha
      del envío.
    - **Tipo de anulación:** **08 "Errores en secuencia de NCF"**, que es el
@@ -184,9 +223,10 @@ y 05-2019), igual que el 606 (`docs/dgii/FORMATO_606.md`):
      no enviado. Es informativo, porque no va al TXT.
    - **Rangos:** se expanden hasta 4,999 e-NCF por período, que es el
      límite de la plantilla.
-5. **IT-1.** Las casillas siguen el prototipo
+5. **IT-1.** Las líneas siguen el prototipo
    (`docs/diseno/prototipo-kontara/pantallas/PreCalculo.dc.html`), no la
-   numeración del formulario oficial.
+   numeración de casillas del formulario oficial (ver "Claves de
+   `ajustes`" arriba).
    - **Ventas:** las E34 restan y las E33 suman. El 0 % cuenta como
      exportación y el exento como exentas. En E44, lo exento se trata como
      exento por destino, que no reduce la proporcionalidad.
@@ -205,24 +245,28 @@ y 05-2019), igual que el 606 (`docs/dgii/FORMATO_606.md`):
 6. **IR-17.**
    - **Qué suma:** `monto_retencion_renta` del 606 con `fecha_pago` en el
      período, agrupado por `tipo_retencion_isr`.
-   - **Casilla y tasa:** se muestran según el formulario vigente para el
-     período (IR-17-2025 o IR-17-2026, desde 202607). Es informativo: el
-     importe es el retenido real.
-   - **Tipos del 606 y casillas del IR-17:**
+   - **Tasa vigente:** depende del mes de **pago** (el período del IR-17):
+     la anterior a la Ley 30-26 hasta junio 2026 y la nueva desde
+     `PERIODO_LEY_30_26` = 202607. Se muestra en la ayuda de cada línea.
+   - **Importe y etiqueta:** el importe es lo retenido según el 606. La
+     etiqueta muestra la base del 606 (monto facturado de esas compras) y
+     la **tasa efectiva** (retenido / base), para que el porcentaje cuadre
+     con el número. Si la efectiva no coincide con la vigente, se avisa
+     (revisar el "Monto Retención Renta" del 606).
+   - **Tipos del 606:**
 
-     | Tipo del 606 | Concepto | Casilla del IR-17 |
+     | Tipo del 606 | Concepto | Tasa antes / desde Ley 30-26 |
      |---|---|---|
-     | 01 | Alquileres | 1 |
-     | 02 | Honorarios | 2 |
-     | 03 | Otras rentas | 16 |
-     | 04 | Rentas presuntas | 17 |
-     | 05 | Intereses a personas jurídicas | 19 |
-     | 06 | Intereses a personas físicas | 11 (pagador no financiero) |
-     | 07 | Proveedores del Estado | 12 |
-     | 08 | Juegos telefónicos | 13 |
-     | 09 | Ganadería bovina | 21 |
+     | 01 | Alquileres | 10 % / 15 % |
+     | 02 | Honorarios | 10 % / 15 % |
+     | 03 | Otras rentas (Art. 309 lit. f) | 10 % / 15 % |
+     | 04 | Rentas presuntas (Decreto 139-98) | 2 % / 3 % |
+     | 05 | Intereses a personas jurídicas | 1 % |
+     | 06 | Intereses a personas físicas | 10 % |
+     | 07 | Proveedores del Estado | 5 % |
+     | 08 | Juegos telefónicos | 5 % |
+     | 09 | Ganadería bovina | 1 % |
 
-   - **Base mostrada:** el monto facturado de esas compras.
    - **Sin tipo de retención:** se listan aparte, con una advertencia.
 7. **IR-2.**
    - **Ingresos:** las ventas sin ITBIS del año.

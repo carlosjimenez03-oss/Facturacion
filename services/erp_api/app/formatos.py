@@ -191,56 +191,101 @@ def _impuestos_adicionales(totales: dict[str, Any]) -> tuple[Decimal, Decimal, D
     return selectivo, otros, propina
 
 
+_TASAS = {"1": Decimal("0.18"), "2": Decimal("0.16"), "3": _CERO, "4": _CERO}
+_CLAVE_INDICADOR = {"1": "g18", "2": "g16", "3": "g0", "4": "exento"}
+# Campos de Totales que traen el desglose por tasa (XSD del e-CF:
+# MontoGravadoI1 = 18 %, I2 = 16 %, I3 = 0 %; TotalITBIS1/2/3 su ITBIS).
+_TOTALES_POR_TASA = ("MontoGravadoI1", "MontoGravadoI2", "MontoGravadoI3", "TotalITBIS1", "TotalITBIS2", "TotalITBIS3")
+
+
+def _hay(totales: dict[str, Any], clave: str) -> bool:
+    return totales.get(clave) not in (None, "")
+
+
+def _desglose_totales(totales: dict[str, Any]) -> dict[str, Decimal]:
+    resultado = {
+        "g18": a_decimal(totales.get("MontoGravadoI1")),
+        "g16": a_decimal(totales.get("MontoGravadoI2")),
+        "g0": a_decimal(totales.get("MontoGravadoI3")),
+        "exento": a_decimal(totales.get("MontoExento")),
+    }
+    if _hay(totales, "TotalITBIS1") or _hay(totales, "TotalITBIS2"):
+        resultado["i18"] = a_decimal(totales.get("TotalITBIS1"))
+        resultado["i16"] = a_decimal(totales.get("TotalITBIS2"))
+    elif _hay(totales, "TotalITBIS") and not (resultado["g18"] and resultado["g16"]):
+        # Una sola tasa gravada: el TotalITBIS del e-CF es el de esa tasa.
+        resultado["i18"], resultado["i16"] = _CERO, _CERO
+        resultado["i16" if resultado["g16"] else "i18"] = a_decimal(totales.get("TotalITBIS"))
+    else:
+        resultado["i18"] = _redondear(resultado["g18"] * _TASAS["1"])
+        resultado["i16"] = _redondear(resultado["g16"] * _TASAS["2"])
+    return resultado
+
+
+def _desglose_lineas(items: list[dict[str, Any]], itbis_incluido: bool) -> dict[str, Decimal]:
+    montos = {"g18": _CERO, "g16": _CERO, "g0": _CERO, "exento": _CERO}
+    for item in items:
+        indicador = str(item.get("IndicadorFacturacion") or "")
+        monto = a_decimal(item.get("MontoItem"))
+        if itbis_incluido and _TASAS[indicador]:
+            monto = monto / (1 + _TASAS[indicador])
+        montos[_CLAVE_INDICADOR[indicador]] += monto
+    resultado = {clave: _redondear(valor) for clave, valor in montos.items()}
+    resultado["i18"] = _redondear(montos["g18"] * _TASAS["1"])
+    resultado["i16"] = _redondear(montos["g16"] * _TASAS["2"])
+    return resultado
+
+
+def _desglose_totales_globales(totales: dict[str, Any]) -> dict[str, Decimal]:
+    """e-CF sin líneas ni desglose por tasa: MontoGravadoTotal, MontoExento
+    y TotalITBIS. La tasa se deduce de TotalITBIS / MontoGravadoTotal (sin
+    ITBIS = 0 %; la más cercana entre 16 % y 18 %)."""
+    exento = a_decimal(totales.get("MontoExento"))
+    itbis = a_decimal(totales.get("TotalITBIS"))
+    if _hay(totales, "MontoGravadoTotal"):
+        gravado = a_decimal(totales.get("MontoGravadoTotal"))
+    else:
+        gravado = max(a_decimal(totales.get("MontoTotal")) - itbis - exento, _CERO) if itbis else _CERO
+    resultado = dict.fromkeys(("g18", "g16", "g0", "i18", "i16"), _CERO)
+    resultado["exento"] = exento
+    if not gravado:
+        resultado["i18"] = itbis
+    elif not itbis:
+        resultado["g0"] = gravado
+    elif abs(itbis / gravado - _TASAS["2"]) < abs(itbis / gravado - _TASAS["1"]):
+        resultado["g16"], resultado["i16"] = gravado, itbis
+    else:
+        resultado["g18"], resultado["i18"] = gravado, itbis
+    return resultado
+
+
 def desglose_por_tasa(datos: dict[str, Any]) -> dict[str, Decimal]:
     """Montos sin impuestos por tasa de ITBIS y el ITBIS de cada tasa de un
-    e-CF: {g18, g16, g0, exento, i18, i16}. Usa Totales.MontoGravadoI1/I2/I3,
-    MontoExento y TotalITBIS1/2 cuando el e-CF los trae; si no, los deriva de
-    las líneas (IndicadorFacturacion 1 = 18 %, 2 = 16 %, 3 = 0 %, 4 =
-    exento; 0 = no facturable, no cuenta), descontando el ITBIS incluido si
-    IndicadorMontoGravado = 1."""
+    e-CF: {g18, g16, g0, exento, i18, i16}. Cada e-CF sale de UNA sola
+    fuente, para que el gravado y su ITBIS cuadren (nunca se mezclan):
+
+    1. Totales por tasa (MontoGravadoI1/I2/I3, MontoExento, TotalITBIS1/2)
+       si el e-CF trae alguno de ellos.
+    2. Si no, las líneas (IndicadorFacturacion 1 = 18 %, 2 = 16 %, 3 = 0 %,
+       4 = exento; 0 = no facturable, no cuenta), descontando el ITBIS
+       incluido si IndicadorMontoGravado = 1; el ITBIS es gravado × tasa.
+       Es lo que escribe este sistema (frontend/src/lib/buildDatos.ts:
+       líneas + MontoGravadoTotal/MontoExento/TotalITBIS globales).
+    3. Sin líneas: los totales globales (ver `_desglose_totales_globales`).
+    """
     encabezado = datos.get("Encabezado") or {}
     totales = encabezado.get("Totales") or {}
-    id_doc = encabezado.get("IdDoc") or {}
-    tasas = {"1": Decimal("0.18"), "2": Decimal("0.16"), "3": _CERO, "4": _CERO}
-    claves = {"1": "g18", "2": "g16", "3": "g0", "4": "exento"}
-    desde_lineas = {"g18": _CERO, "g16": _CERO, "g0": _CERO, "exento": _CERO}
-    itbis_incluido = str(id_doc.get("IndicadorMontoGravado") or "0") == "1"
-    for item in _lista((datos.get("DetallesItems") or {}).get("Item")):
-        if not isinstance(item, dict):
-            continue
-        indicador = str(item.get("IndicadorFacturacion") or "")
-        if indicador not in claves:
-            continue
-        monto = a_decimal(item.get("MontoItem"))
-        if itbis_incluido and tasas[indicador]:
-            monto = monto / (1 + tasas[indicador])
-        desde_lineas[claves[indicador]] += monto
-
-    def total_o_lineas(clave_total: str, clave: str) -> Decimal:
-        if totales.get(clave_total) not in (None, ""):
-            return a_decimal(totales.get(clave_total))
-        return _redondear(desde_lineas[clave])
-
-    resultado = {
-        "g18": total_o_lineas("MontoGravadoI1", "g18"),
-        "g16": total_o_lineas("MontoGravadoI2", "g16"),
-        "g0": total_o_lineas("MontoGravadoI3", "g0"),
-        "exento": total_o_lineas("MontoExento", "exento"),
-    }
-    i18 = totales.get("TotalITBIS1")
-    i16 = totales.get("TotalITBIS2")
-    total_itbis = totales.get("TotalITBIS")
-    if i18 not in (None, "") or i16 not in (None, ""):
-        resultado["i18"], resultado["i16"] = a_decimal(i18), a_decimal(i16)
-    elif total_itbis not in (None, "") and not (resultado["g18"] and resultado["g16"]):
-        # Una sola tasa gravada: el TotalITBIS del e-CF es el de esa tasa.
-        clave = "i16" if resultado["g16"] else "i18"
-        resultado["i18"], resultado["i16"] = _CERO, _CERO
-        resultado[clave] = a_decimal(total_itbis)
-    else:
-        resultado["i18"] = _redondear(resultado["g18"] * Decimal("0.18"))
-        resultado["i16"] = _redondear(resultado["g16"] * Decimal("0.16"))
-    return resultado
+    if any(_hay(totales, clave) for clave in _TOTALES_POR_TASA):
+        return _desglose_totales(totales)
+    items = [
+        item
+        for item in _lista((datos.get("DetallesItems") or {}).get("Item"))
+        if isinstance(item, dict) and str(item.get("IndicadorFacturacion") or "") in _CLAVE_INDICADOR
+    ]
+    if items:
+        itbis_incluido = str((encabezado.get("IdDoc") or {}).get("IndicadorMontoGravado") or "0") == "1"
+        return _desglose_lineas(items, itbis_incluido)
+    return _desglose_totales_globales(totales)
 
 
 def _formas_pago(datos: dict[str, Any], monto_total: Decimal) -> dict[str, Decimal]:
@@ -382,18 +427,55 @@ def armar_607(facturas: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dic
     return filas, totales, advertencias
 
 
-ADVERTENCIA_ECF_607 = (
-    "La DGII indica que los emisores electrónicos no reportan sus e-CF en el Formato 607: los recibe "
-    "directamente en XML (Norma General 01-20, Ley 32-23). Estos renglones son de referencia (cuadre con "
-    "el IT-1) y no van en el archivo TXT; si no tuvo ventas con NCF serie B, presente el 607 en cero "
-    "(Oficina Virtual > Declaraciones Juradas > Declaraciones en Cero)."
-)
-ADVERTENCIA_ECF_608 = (
-    "La DGII indica que los emisores 100 % electrónicos no remiten el 608: los e-NCF se anulan con el "
-    "servicio de Anulación de e-NCF (ANECF) o con notas de crédito. Las anulaciones de e-NCF se muestran "
-    "como referencia y no van en el archivo TXT; en él solo van los NCF serie B (11 o 19 posiciones) "
-    "registrados a mano."
-)
+# Ruta de la Oficina Virtual para declarar un formato sin datos.
+_EN_CERO = "Oficina Virtual > Declaraciones Juradas > Declaraciones en Cero"
+
+
+def advertencia_ecf_607(emisor_100_electronico: bool) -> str:
+    base = (
+        "La DGII indica que los emisores electrónicos no reportan sus e-CF en el Formato 607: los recibe "
+        "directamente en XML (Norma General 01-20, Ley 32-23). Estos renglones son de referencia (cuadre con "
+        "el IT-1) y no van en el archivo TXT"
+    )
+    if emisor_100_electronico:
+        return base + "; como emisor 100 % electrónico, el 607 no le aplica y no tiene que presentarlo."
+    return base + (
+        f"; solo las ventas con NCF serie B van en el 607. Si no tuvo ninguna, declárelo en cero ({_EN_CERO})."
+    )
+
+
+def advertencia_ecf_608(emisor_100_electronico: bool) -> str:
+    base = (
+        "La DGII indica que los emisores electrónicos no remiten sus e-NCF anulados en el 608: se anulan con el "
+        "servicio de Anulación de e-NCF (ANECF) o con notas de crédito. Las anulaciones de e-NCF se muestran "
+        "como referencia y no van en el archivo TXT"
+    )
+    if emisor_100_electronico:
+        return base + "; como emisor 100 % electrónico, el 608 no le aplica y no tiene que presentarlo."
+    return base + (
+        "; en él solo van los NCF serie B (11 o 19 posiciones) registrados a mano. Si no anuló ninguno, "
+        f"declárelo en cero ({_EN_CERO})."
+    )
+
+
+def sin_registros_607(periodo: str, emisor_100_electronico: bool) -> str:
+    texto = (
+        f"No hay comprobantes que remitir en el 607 de {periodo}: los e-CF no se reportan en el Formato 607 "
+        "(la DGII ya los recibe en XML -- Norma General 01-20, Ley 32-23)."
+    )
+    if emisor_100_electronico:
+        return texto + " Como emisor 100 % electrónico, el 607 no le aplica."
+    return texto + f" Si no tuvo ventas con NCF serie B, declare el 607 en cero ({_EN_CERO})."
+
+
+def sin_registros_608(periodo: str, emisor_100_electronico: bool) -> str:
+    texto = (
+        f"No hay comprobantes que remitir en el 608 de {periodo}: solo van los NCF serie B registrados a mano; "
+        "las anulaciones de e-NCF se informan a la DGII con el servicio ANECF o con notas de crédito."
+    )
+    if emisor_100_electronico:
+        return texto + " Como emisor 100 % electrónico, el 608 no le aplica."
+    return texto + f" Si no anuló NCF serie B, declare el 608 en cero ({_EN_CERO})."
 
 
 # --- Validación (reglas de las plantillas oficiales) ---------------------------------------------------------

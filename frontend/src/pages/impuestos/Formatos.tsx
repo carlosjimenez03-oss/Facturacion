@@ -1,6 +1,10 @@
 // Formatos de envío de datos 606 (compras), 607 (ventas) y 608 (anulados), según
 // Formatos.dc.html del prototipo. El 606 usa el servicio formato_606 existente (y
 // enlaza a sus pantallas de clasificación); el 607 y el 608 vienen de erp-api.
+// Los e-CF y los e-NCF anulados no van en el TXT del 607/608 (la DGII ya los recibe;
+// NG 01-20, Ley 32-23): se muestran como referencia y el botón de generar solo se
+// ofrece cuando hay comprobantes serie B que sí van en el archivo (misma regla que
+// erp-api, que responde 422 si no hay ninguno).
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
@@ -36,6 +40,9 @@ const PESTANAS: { id: Formato; label: string; sub: string }[] = [
 
 /** Renglones que se muestran de entrada; el resto con "Ver todos" (el 607 puede tener miles). */
 const LIMITE_FILAS = 200;
+
+const ES_ENCF = /^E\d{12}$/i;
+const RUTA_EN_CERO = "Oficina Virtual > Declaraciones Juradas > Declaraciones en Cero";
 
 const suma = <T,>(filas: T[], campo: (f: T) => string | null | undefined) => filas.reduce((s, f) => s + (Number(campo(f)) || 0), 0);
 const rd = (n: number | string) => `RD$ ${formatoMonto(n)}`;
@@ -196,7 +203,7 @@ function TarjetaFormato({
   generar,
   exportar,
   genLabel = "Generar archivo TXT",
-  bloqueo,
+  sinArchivo,
   version,
   mostrar,
   children,
@@ -208,8 +215,11 @@ function TarjetaFormato({
   generar: () => Promise<{ nombre: string; contenido: string | Blob }>;
   exportar?: () => void;
   genLabel?: string;
-  /** Motivo adicional que impide generar (p. ej. 608 sin confirmar la declaración en cero). */
-  bloqueo?: string | null;
+  /**
+   * Explicación de por qué este período no lleva archivo TXT (p. ej. solo hay e-CF, que no van
+   * en el 607/608). Si se indica, no se ofrece el botón de generar.
+   */
+  sinArchivo?: ReactNode;
   /** Cambia cuando se modifican los datos: obliga a validar de nuevo. */
   version?: number;
   mostrar: Avisar;
@@ -257,7 +267,7 @@ function TarjetaFormato({
     ? "Primero valide el formato para detectar errores antes de exportar."
     : errores.length > 0
       ? "Corrija los errores señalados para habilitar la generación."
-      : (bloqueo ?? null);
+      : null;
 
   return (
     <section className="card">
@@ -277,7 +287,7 @@ function TarjetaFormato({
             <IconoValidar />
             {validando ? "Validando…" : "Validar"}
           </button>
-          {motivo ? (
+          {sinArchivo ? null : motivo ? (
             <span className="tip r" data-tip={motivo}>
               <button type="button" className="btn btn-p btn-sm" disabled>
                 <IconoDescargar />
@@ -293,6 +303,17 @@ function TarjetaFormato({
         </div>
       </div>
 
+      {sinArchivo && (
+        <div className="imp-pad">
+          <div className="al al-i" role="note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 11v5M12 8h.01" />
+            </svg>
+            <span className="imp-sin-txt">{sinArchivo}</span>
+          </div>
+        </div>
+      )}
       {error && (
         <div className="imp-pad">
           <AvisoError mensaje={error} />
@@ -334,7 +355,7 @@ function TarjetaFormato({
 }
 
 /** Pie de la tabla: cuántos renglones se ven, "Ver todos" y el nombre del archivo. */
-function PieTabla({ mostrando, total, archivo, nota, onVerTodos }: { mostrando: number; total: number; archivo: string; nota?: string; onVerTodos: () => void }) {
+function PieTabla({ mostrando, total, archivo, nota, onVerTodos }: { mostrando: number; total: number; archivo?: string; nota?: string; onVerTodos: () => void }) {
   return (
     <div className="imp-pie">
       {mostrando < total ? `Mostrando ${mostrando.toLocaleString("en-US")} de ${registros(total)}` : registros(total)}
@@ -346,7 +367,13 @@ function PieTabla({ mostrando, total, archivo, nota, onVerTodos }: { mostrando: 
           </button>
         </>
       )}
-      {nota && ` · ${nota}`} · Archivo: <span className="mono">{archivo}</span>
+      {nota && ` · ${nota}`}
+      {archivo && (
+        <>
+          {" "}
+          · Archivo: <span className="mono">{archivo}</span>
+        </>
+      )}
     </div>
   );
 }
@@ -533,7 +560,7 @@ function Formato606Vista({ periodo, mostrar }: VistaProps) {
 
 // --- 607 · Ventas (erp-api) ---------------------------------------------------
 
-function Formato607Vista({ periodo, mostrar }: VistaProps) {
+function Formato607Vista({ periodo, declaracion, mostrar }: VistaProps) {
   const [datos, setDatos] = useState<Formato607 | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [todos, setTodos] = useState(false);
@@ -566,15 +593,39 @@ function Formato607Vista({ periodo, mostrar }: VistaProps) {
   const totalFormas = formas.reduce((s, f) => s + f.v, 0) + otras;
   const pct = (v: number) => `${totalFormas > 0 ? ((v / totalFormas) * 100).toFixed(1) : "0.0"}% de las ventas`;
   const visibles = todos ? filas : filas.slice(0, LIMITE_FILAS);
+  const noAplica = declaracion?.estado === "no_aplica";
+  // Solo los NCF serie B van en el TXT; los e-CF (todo lo que emite este sistema) son referencia.
+  const reportables = filas.filter((f) => !ES_ENCF.test(f.ncf));
+  const sinArchivo =
+    reportables.length > 0 ? null : noAplica ? (
+      <>
+        <b>El 607 no aplica a este emisor.</b>
+        <span>
+          Como emisor 100 % electrónico no lo presenta: la DGII ya recibe sus e-CF en XML (Norma General 01-20, Ley 32-23). Los renglones de abajo son de
+          referencia para cuadrar el IT-1 y no generan archivo.
+        </span>
+      </>
+    ) : (
+      <>
+        <b>No hay comprobantes para el archivo TXT.</b>
+        <span>
+          Los e-CF no se reportan en el 607 (la DGII ya los recibe en XML); solo van las ventas con NCF serie B. Si no tuvo ninguna, declare el 607 en cero en
+          la {RUTA_EN_CERO}.
+        </span>
+      </>
+    );
 
   async function validar(): Promise<Validacion> {
     const d = await impuestosApi.formato607(periodo);
     setDatos(d);
+    const serieB = d.filas.filter((f) => !ES_ENCF.test(f.ncf)).length;
+    const totales = `Total facturado RD$ ${formatoMonto(d.totales.monto_facturado)} · ITBIS RD$ ${formatoMonto(d.totales.itbis_facturado)}.`;
     return {
       errores: [],
-      ok: `${registros(d.totales.cantidad)} listos. Total facturado RD$ ${formatoMonto(d.totales.monto_facturado)} · ITBIS RD$ ${formatoMonto(d.totales.itbis_facturado)}.${
-        d.advertencias.length > 0 ? " Revise las advertencias antes de enviarlo." : ""
-      }`,
+      ok:
+        serieB > 0
+          ? `${registros(serieB)} con NCF serie B listos para el archivo TXT. ${totales}${d.advertencias.length > 0 ? " Revise las advertencias antes de enviarlo." : ""}`
+          : `${registros(d.filas.length)} de e-CF revisados como referencia (no van en el archivo TXT). ${totales}`,
     };
   }
 
@@ -622,10 +673,11 @@ function Formato607Vista({ periodo, mostrar }: VistaProps) {
 
       <TarjetaFormato
         titulo="Vista previa · 607 Ventas de bienes y servicios"
-        sub={`${registros(totales.cantidad)} · e-CF aceptados del período`}
+        sub={`${registros(totales.cantidad)} · e-CF aceptados del período${reportables.length === 0 && filas.length > 0 ? " (referencia)" : ""}`}
         validar={validar}
         generar={() => impuestosApi.descargar607(periodo)}
         exportar={filas.length > 0 ? exportar : undefined}
+        sinArchivo={sinArchivo}
         mostrar={mostrar}
       >
         {datos.advertencias.length > 0 && (
@@ -636,7 +688,11 @@ function Formato607Vista({ periodo, mostrar }: VistaProps) {
         {filas.length === 0 ? (
           <Vacio
             titulo={`Sin ventas en ${nombrePeriodo(periodo)}`}
-            texto="No hay e-CF aceptados por la DGII en el período. Genere el 607 sin registros y envíelo igual desde la Oficina Virtual."
+            texto={
+              noAplica
+                ? "No hay e-CF aceptados por la DGII en el período. Como emisor 100 % electrónico, el 607 no le aplica."
+                : `No hay e-CF aceptados por la DGII en el período. Si tampoco tuvo ventas con NCF serie B, declare el 607 en cero en la ${RUTA_EN_CERO}.`
+            }
           />
         ) : (
           <>
@@ -646,7 +702,7 @@ function Formato607Vista({ periodo, mostrar }: VistaProps) {
                   <tr>
                     <th>RNC / Cédula</th>
                     <th>Tipo id.</th>
-                    <th>e-NCF</th>
+                    <th>NCF / e-NCF</th>
                     <th>NCF modificado</th>
                     <th>Tipo ingreso</th>
                     <th>Fecha</th>
@@ -691,7 +747,7 @@ function Formato607Vista({ periodo, mostrar }: VistaProps) {
             <PieTabla
               mostrando={visibles.length}
               total={filas.length}
-              archivo={nombreArchivo("607", datos.rnc_emisor, periodo)}
+              archivo={reportables.length > 0 ? nombreArchivo("607", datos.rnc_emisor, periodo) : undefined}
               nota={`ITBIS retenido por terceros RD$ ${formatoMonto(totales.itbis_retenido_terceros)} · Retención de renta RD$ ${formatoMonto(totales.retencion_renta_terceros)}`}
               onVerTodos={() => setTodos(true)}
             />
@@ -705,18 +761,21 @@ function Formato607Vista({ periodo, mostrar }: VistaProps) {
 // --- 608 · Comprobantes anulados (erp-api) ------------------------------------
 
 const ORIGEN_608: Record<Fila608["origen"], { label: string; badge: string }> = {
-  anulacion_encf: { label: "Anulación e-NCF", badge: "bd b-teal" },
-  manual: { label: "Manual", badge: "bd b-borr" },
+  anulacion_encf: { label: "ANECF · referencia", badge: "bd b-teal" },
+  manual: { label: "Manual · serie B", badge: "bd b-borr" },
 };
 
-const NCF_VALIDO = /^(E\d{12}|B\d{10})$/;
+/**
+ * NCF que acepta el 608 (formatos.validar_ncf_608 de erp-api, plantilla oficial): serie B de 11
+ * posiciones (B + tipo + 8 dígitos) o el formato anterior de 19. Los e-NCF no van en el 608.
+ */
+const NCF_608 = /^(B\d{10}|[ABPQ]\d{18})$/;
 
 function Formato608Vista({ periodo, declaracion, mostrar }: VistaProps) {
   const [datos, setDatos] = useState<Formato608 | null>(null);
   const [tipos, setTipos] = useState<TipoAnulacion[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
-  const [enBlanco, setEnBlanco] = useState(false);
   const [abierto, setAbierto] = useState(false);
   const [form, setForm] = useState({ ncf: "", fecha_comprobante: "", tipo_anulacion: "" });
   const [errorForm, setErrorForm] = useState<string | null>(null);
@@ -745,7 +804,26 @@ function Formato608Vista({ periodo, declaracion, mostrar }: VistaProps) {
 
   const filas = datos.filas;
   const sinFilas = filas.length === 0;
-  const blanco = sinFilas && enBlanco;
+  const noAplica = declaracion?.estado === "no_aplica";
+  // Solo las anulaciones manuales (NCF serie B) van en el TXT; las de ANECF son referencia.
+  const manuales = filas.filter((f) => f.origen === "manual");
+  const sinArchivo =
+    manuales.length > 0 ? null : noAplica ? (
+      <>
+        <b>El 608 no aplica a este emisor.</b>
+        <span>
+          Como emisor 100 % electrónico no lo presenta: los e-NCF se anulan con el servicio de Anulación de e-NCF (ANECF) si no se usaron o con una nota de
+          crédito electrónica si ya se enviaron. Si anula un NCF serie B, regístrelo con «+ Agregar anulación».
+        </span>
+      </>
+    ) : (
+      <>
+        <b>No hay NCF serie B anulados para el archivo TXT.</b>
+        <span>
+          Las anulaciones de e-NCF no van en el 608. Si no anuló NCF serie B en el período, declare el 608 en cero en la {RUTA_EN_CERO}.
+        </span>
+      </>
+    );
 
   function abrirForm() {
     setForm({ ncf: "", fecha_comprobante: "", tipo_anulacion: tipos[0]?.codigo ?? "" });
@@ -754,8 +832,10 @@ function Formato608Vista({ periodo, declaracion, mostrar }: VistaProps) {
   }
 
   async function agregar() {
-    const ncf = form.ncf.trim().toUpperCase();
-    if (!NCF_VALIDO.test(ncf)) return setErrorForm("Escriba un e-NCF de 13 caracteres (E310000000123) o un NCF de 11 (B0100000123).");
+    const ncf = form.ncf.replace(/\s/g, "").toUpperCase();
+    if (/^E\d/.test(ncf))
+      return setErrorForm("Los e-NCF no van en el 608: anúlelos con la Anulación de e-NCF (ANECF) si no se usaron, o con una nota de crédito electrónica si ya se enviaron.");
+    if (!NCF_608.test(ncf)) return setErrorForm("Escriba un NCF serie B de 11 caracteres (B0100000123) o uno de 19 del formato anterior.");
     if (!form.fecha_comprobante) return setErrorForm("Indique la fecha del comprobante anulado.");
     if (!form.tipo_anulacion) return setErrorForm("Elija el motivo de anulación.");
     setGuardando(true);
@@ -763,7 +843,6 @@ function Formato608Vista({ periodo, declaracion, mostrar }: VistaProps) {
     try {
       const fila = await impuestosApi.agregarAnulacion608({ ncf, fecha_comprobante: form.fecha_comprobante, tipo_anulacion: form.tipo_anulacion });
       setAbierto(false);
-      setEnBlanco(false);
       setVersion((v) => v + 1);
       mostrar("Anulación agregada", { detalle: `${fila.ncf} · ${fila.tipo_anulacion} ${fila.tipo_anulacion_label}` });
       void cargar();
@@ -793,19 +872,21 @@ function Formato608Vista({ periodo, declaracion, mostrar }: VistaProps) {
   async function validar(): Promise<Validacion> {
     const d = await impuestosApi.formato608(periodo);
     setDatos(d);
-    const n = d.filas.length;
+    const n = d.filas.filter((f) => f.origen === "manual").length;
+    const encf = d.filas.length - n;
+    const referencia = encf > 0 ? ` ${encf} e-NCF anulados con ANECF quedan como referencia (no van en el archivo).` : "";
     return {
       errores: [],
       ok:
         n === 0
-          ? "Reporte 608 en blanco listo para generar."
-          : `${n} ${n === 1 ? "comprobante anulado" : "comprobantes anulados"} con motivo asignado.`,
+          ? `No hay NCF serie B anulados: no hay archivo TXT que generar.${referencia}`
+          : `${n} ${n === 1 ? "NCF serie B anulado" : "NCF serie B anulados"} con motivo asignado, listos para el archivo TXT.${referencia}`,
     };
   }
 
   function exportar() {
     descargarCsv(`Formato_608_${periodo}.csv`, [
-      ["e-NCF", "Fecha comprobante", "Tipo de anulación", "Motivo", "Origen"],
+      ["NCF / e-NCF", "Fecha comprobante", "Tipo de anulación", "Motivo", "Origen"],
       ...filas.map((f) => [f.ncf, fechaDgii(f.fecha_comprobante), f.tipo_anulacion, f.tipo_anulacion_label, ORIGEN_608[f.origen]?.label ?? f.origen]),
     ]);
   }
@@ -819,28 +900,9 @@ function Formato608Vista({ periodo, declaracion, mostrar }: VistaProps) {
         <TarjetaVence declaracion={declaracion} />
       </Tarjetas>
 
-      <div className="card imp-blanco">
-        <button
-          type="button"
-          className={blanco ? "sw on" : "sw"}
-          onClick={() => setEnBlanco((v) => !v)}
-          disabled={!sinFilas}
-          aria-pressed={blanco}
-          aria-label="No hubo anulaciones en el período"
-        />
-        <div>
-          <div className="strong">No hubo anulaciones en el período</div>
-          <div className="hint">
-            {sinFilas
-              ? "El 608 debe presentarse igual: se generará un reporte en blanco (sin registros)."
-              : `Hay ${filas.length} ${filas.length === 1 ? "comprobante anulado" : "comprobantes anulados"} en el período; el reporte se generará con ${filas.length === 1 ? "él" : "ellos"}.`}
-          </div>
-        </div>
-      </div>
-
       <TarjetaFormato
         titulo="Vista previa · 608 Comprobantes anulados"
-        sub={sinFilas ? "Declaración en cero si no se anuló ningún comprobante" : "Motivo de anulación de cada comprobante"}
+        sub={manuales.length > 0 ? "En el archivo van solo los NCF serie B registrados a mano" : "Motivo de anulación de cada comprobante"}
         acciones={
           <button type="button" className="btn btn-o btn-sm" onClick={() => (abierto ? setAbierto(false) : abrirForm())}>
             {abierto ? "Cerrar formulario" : "+ Agregar anulación"}
@@ -849,8 +911,7 @@ function Formato608Vista({ periodo, declaracion, mostrar }: VistaProps) {
         validar={validar}
         generar={() => impuestosApi.descargar608(periodo)}
         exportar={sinFilas ? undefined : exportar}
-        genLabel={sinFilas ? "Generar reporte en blanco" : "Generar archivo TXT"}
-        bloqueo={sinFilas && !blanco ? "Confirme arriba que no hubo anulaciones para generar el reporte en blanco." : null}
+        sinArchivo={sinArchivo}
         version={version}
         mostrar={mostrar}
       >
@@ -858,15 +919,15 @@ function Formato608Vista({ periodo, declaracion, mostrar }: VistaProps) {
           <div className="card-b form-grid imp-form">
             <div className="fld">
               <label className="lbl" htmlFor="an-ncf">
-                e-NCF o NCF anulado <span className="req">*</span>
+                NCF serie B anulado <span className="req">*</span>
               </label>
               <input
                 id="an-ncf"
                 className="inp mono"
                 value={form.ncf}
-                maxLength={13}
+                maxLength={19}
                 onChange={(e) => setForm((f) => ({ ...f, ncf: e.target.value.toUpperCase() }))}
-                placeholder="E310000000123"
+                placeholder="B0100000123"
               />
             </div>
             <div className="fld">
@@ -889,7 +950,8 @@ function Formato608Vista({ periodo, declaracion, mostrar }: VistaProps) {
               </select>
             </div>
             <div className="fld-full hint">
-              Los e-CF anulados con la DGII (ANECF) ya aparecen solos. Agregue aquí los comprobantes en papel o los que anuló por otra vía.
+              Solo NCF serie B (11 posiciones, o 19 del formato anterior) emitidos en papel o con impresora fiscal. Los e-NCF no van en el 608: se anulan con la
+              Anulación de e-NCF (ANECF), que aparece aquí sola como referencia, o con una nota de crédito electrónica.
             </div>
             {errorForm && (
               <div className="al al-d fld-full" role="alert">
@@ -924,8 +986,9 @@ function Formato608Vista({ periodo, declaracion, mostrar }: VistaProps) {
             </span>
             <h3>Sin anulaciones en {nombrePeriodo(periodo)}</h3>
             <p>
-              No se anuló ningún comprobante en el período. Genere el 608 en blanco (declaración en cero) y envíelo desde la Oficina Virtual para cumplir con la
-              obligación.
+              {noAplica
+                ? "No hay anulaciones en el período. Como emisor 100 % electrónico, el 608 no le aplica."
+                : `No se anuló ningún comprobante en el período. Si no anuló NCF serie B, declare el 608 en cero en la ${RUTA_EN_CERO}.`}
             </p>
           </div>
         ) : (
@@ -934,7 +997,7 @@ function Formato608Vista({ periodo, declaracion, mostrar }: VistaProps) {
               <table className="tbl" style={{ minWidth: 760 }}>
                 <thead>
                   <tr>
-                    <th>e-NCF</th>
+                    <th>NCF / e-NCF</th>
                     <th>Fecha</th>
                     <th>Origen</th>
                     <th>Motivo de anulación</th>
@@ -969,9 +1032,11 @@ function Formato608Vista({ periodo, declaracion, mostrar }: VistaProps) {
                 </tbody>
               </table>
             </div>
-            <div className="imp-pie">
-              Archivo: <span className="mono">{nombreArchivo("608", datos.rnc_emisor, periodo)}</span>
-            </div>
+            {manuales.length > 0 && (
+              <div className="imp-pie">
+                {registros(manuales.length)} en el archivo · Archivo: <span className="mono">{nombreArchivo("608", datos.rnc_emisor, periodo)}</span>
+              </div>
+            )}
           </>
         )}
       </TarjetaFormato>

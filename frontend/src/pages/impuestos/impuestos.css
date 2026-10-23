@@ -11,11 +11,9 @@
 .imp-error-l{font-weight:600;color:#B91C1C}
 .imp-error-m{flex:1 1 300px;color:#374151}
 .tbl tr.imp-fila-error td{background:#FEF2F2}
-.imp-blanco{padding:14px 18px;display:flex;align-items:center;gap:12px}
-.imp-blanco .sw:disabled{opacity:.5;cursor:not-allowed}
 .imp-form{border-bottom:1px solid #EEF0F2}
 
-/* Pre-cálculo: casillas del formulario y columna lateral */
+/* Pre-cálculo: líneas (no son las casillas del formulario oficial) y columna lateral */
 .pc-layout{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
 .pc-main{flex:2 1 640px;min-width:0;display:flex;flex-direction:column;gap:16px}
 .pc-side{flex:1 1 320px;min-width:0;display:flex;flex-direction:column;gap:16px}
@@ -23,7 +21,7 @@
 .pc-sec-n{color:var(--teal);margin-right:8px}
 .pc-casilla{display:flex;align-items:center;gap:14px;padding:12px 20px;border-bottom:1px solid #F0F1F3;font-size:14px;color:#374151}
 .pc-casilla:last-child{border-bottom:0;border-radius:0 0 12px 12px}
-.pc-casilla .pc-c{width:28px;flex:none;color:#9CA3AF;font-size:12px}
+.pc-casilla .pc-c{width:32px;flex:none;color:#9CA3AF;font-size:12px}
 .pc-casilla .pc-l{flex:1;min-width:0}
 .pc-casilla .tip{margin-left:4px;vertical-align:middle}
 .pc-casilla.subtotal{font-weight:650;color:var(--ink)}
@@ -35,6 +33,10 @@
 .pc-res-v{font-size:30px;font-weight:700;color:var(--teal);letter-spacing:-.02em;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
 .pc-ajuste{display:grid;grid-template-columns:1fr 150px;gap:6px 12px;align-items:center}
 .pc-ajuste .lbl{font-weight:500}
+.pc-ajuste-origen{grid-column:1 / -1;display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:-2px}
+.pc-ajuste-origen .btn{height:24px;padding:0 8px}
+.pc-lineas{margin:0}
+.imp-sin-txt{display:flex;flex-direction:column;gap:4px}
 @media (max-width:640px){
   .imp-acciones > .btn{margin-top:0}
   .pc-casilla{padding:11px 14px;gap:10px}
