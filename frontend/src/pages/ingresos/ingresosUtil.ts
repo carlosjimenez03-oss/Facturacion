@@ -74,23 +74,25 @@ export function importeLinea(l: LineaCalculo): number {
   return centavos(bruto * (1 - pct / 100));
 }
 
-/** Totales de una cotización; el ITBIS se calcula sobre el importe de cada línea. */
+/** Totales de una cotización, igual que el backend (services/erp_api): el ITBIS
+ * se calcula sobre la suma de importes de cada tasa, como en los Totales del e-CF. */
 export function totalesCotizacion(lineas: LineaCalculo[]) {
-  const t = { subtotal: 0, descuentos: 0, i18: 0, i16: 0, total: 0 };
+  let bruto = 0;
+  let importes = 0;
+  let gravado18 = 0;
+  let gravado16 = 0;
   for (const l of lineas) {
-    const bruto = centavos((Number(l.cantidad) || 0) * (Number(l.precio_unitario) || 0));
     const importe = importeLinea(l);
-    t.subtotal += bruto;
-    t.descuentos += bruto - importe;
-    if (l.itbis === "18") t.i18 += centavos(importe * 0.18);
-    if (l.itbis === "16") t.i16 += centavos(importe * 0.16);
+    bruto += (Number(l.cantidad) || 0) * (Number(l.precio_unitario) || 0);
+    importes += importe;
+    if (l.itbis === "18") gravado18 += importe;
+    if (l.itbis === "16") gravado16 += importe;
   }
-  t.subtotal = centavos(t.subtotal);
-  t.descuentos = centavos(t.descuentos);
-  t.i18 = centavos(t.i18);
-  t.i16 = centavos(t.i16);
-  t.total = centavos(t.subtotal - t.descuentos + t.i18 + t.i16);
-  return t;
+  const subtotal = centavos(bruto);
+  const i18 = centavos(gravado18 * 0.18);
+  const i16 = centavos(gravado16 * 0.16);
+  importes = centavos(importes);
+  return { subtotal, descuentos: centavos(subtotal - importes), i18, i16, total: centavos(importes + i18 + i16) };
 }
 
 /** Descarga un CSV (con BOM para que Excel respete los acentos). */
