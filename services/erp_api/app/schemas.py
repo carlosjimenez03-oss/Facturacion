@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, PlainSerializer
@@ -353,3 +353,301 @@ class MarcarPresentadaPayload(_Entrada):
     monto: Decimal | None = None
     referencia: str | None = None
     presentada_en: date | None = None
+
+
+# --- Compras (contrato: frontend/src/lib/comprasApi.ts) ---------------------------------------------------------
+
+EstadoAprobacion = Literal["pendiente", "aprobado", "rechazado"]
+EstadoCuentaPagar = Literal["pendiente", "vencida", "pagada"]
+MetodoPago = Literal["efectivo", "transferencia", "tarjeta", "cheque"]
+
+
+class EcfRecibidoResumen(BaseModel):
+    id: UUID
+    rnc_emisor: str
+    razon_social_emisor: str | None = None
+    rnc_comprador: str | None = None
+    encf: str
+    tipo_ecf: int | None = None
+    fecha_emision: date | None = None
+    fecha_limite_pago: date | None = None
+    monto_total: Monto
+    itbis_total: Monto
+    recibido_en: datetime
+    estado_aprobacion: EstadoAprobacion
+    motivo_rechazo: str | None = None
+    aprobado_en: datetime | None = None
+    # Último intento fallido de enviar la aprobación/rechazo (sigue pendiente).
+    error_aprobacion: str | None = None
+    compra606_id: UUID | None = None
+    compra_inventario_id: UUID | None = None
+    # Firma digital del e-CF verificada al recibirlo (None = no verificada).
+    firma_valida: bool | None = None
+    firma_detalle: str | None = None
+    # La aprobación/rechazo se está enviando a la DGII (estado sigue 'pendiente').
+    envio_en_curso: bool = False
+    # Entrega del ACECF aceptado por la DGII al proveedor (best-effort).
+    enviado_al_emisor: bool = False
+    error_envio_emisor: str | None = None
+
+
+class ItemEcfRecibido(BaseModel):
+    linea: int
+    descripcion: str
+    cantidad: Decimal
+    precio_unitario: Decimal
+    monto: Monto
+    bien_o_servicio: Literal["bien", "servicio"]
+    indicador_facturacion: str | None = None
+
+
+class EcfRecibido(EcfRecibidoResumen):
+    items: list[ItemEcfRecibido]
+    subtotal: Monto
+    xml: str
+    respuesta_dgii: dict[str, Any] | None = None
+
+
+class RechazoPayload(_Entrada):
+    motivo: str = Field(..., min_length=1, max_length=250)
+
+
+class VincularPayload(BaseModel):
+    registro606_id: UUID | None = None
+    compra_inventario_id: UUID | None = None
+
+
+class PagoProveedor(BaseModel):
+    id: UUID
+    registro606_id: UUID
+    ncf: str | None = None
+    proveedor_rnc: str | None = None
+    proveedor_nombre: str
+    fecha: date
+    monto: Monto
+    metodo: MetodoPago
+    cuenta_origen: str | None = None
+    referencia: str | None = None
+    notas: str | None = None
+    tipo_retencion_isr: int | None = None
+    tipo_retencion_isr_label: str | None = None
+    retencion_isr: Monto
+    retencion_itbis: Monto
+    anulado: bool
+    anulado_en: datetime | None = None
+    creado_en: datetime
+
+
+class PagoProveedorPayload(_Entrada):
+    registro606_id: UUID
+    fecha: date | None = None
+    # Lo que sale del banco/caja, neto de retenciones. Sin `ge=0` a
+    # propósito: el repositorio valida y responde un 422 con mensaje claro.
+    monto: Decimal
+    metodo: MetodoPago
+    cuenta_origen: str | None = None
+    referencia: str | None = None
+    notas: str | None = None
+    tipo_retencion_isr: int | None = None
+    retencion_isr: Decimal = Decimal("0")
+    retencion_itbis: Decimal = Decimal("0")
+
+
+class CuentaPorPagar(BaseModel):
+    registro606_id: UUID
+    ncf: str
+    tipo_ecf: int | None = None
+    periodo: str
+    origen: str
+    proveedor_rnc: str
+    proveedor_nombre: str
+    contacto_id: UUID | None = None
+    compra_inventario_id: UUID | None = None
+    ecf_recibido_id: UUID | None = None
+    estado_aprobacion: EstadoAprobacion | None = None
+    factura_id: UUID | None = None
+    concepto: str | None = None
+    tipo_bienes_servicios: int | None = None
+    fecha_comprobante: date
+    vence: date
+    monto_facturado: Monto
+    itbis_facturado: Monto
+    total: Monto
+    notas_credito: Monto
+    tipo_retencion_isr: int | None = None
+    tipo_retencion_isr_label: str | None = None
+    retencion_isr: Monto
+    retencion_itbis: Monto
+    retenciones: Monto
+    pagado: Monto
+    pendiente: Monto
+    estado: EstadoCuentaPagar
+    dias_vencida: int
+    fecha_pago: date | None = None
+    forma_pago: int | None = None
+    # Retenciones que declara el propio e-CF (E41 autoemitido), para
+    # proponerlas al registrar el pago.
+    retencion_isr_ecf: Monto
+    retencion_itbis_ecf: Monto
+    # Nota de crédito del proveedor (B04/E34): solo en el detalle
+    # (`/compras/facturas/{id}`), nunca en el listado de cuentas por pagar;
+    # pendiente 0 y descuenta su total de la factura que modifica.
+    es_nota_credito: bool = False
+    ncf_modificado: str | None = None
+    afecta_registro606_id: UUID | None = None
+
+
+class FacturaCompra(CuentaPorPagar):
+    pagos: list[PagoProveedor]
+
+
+class FacturaCompraPayload(_Entrada):
+    proveedor_rnc: str = Field(..., min_length=1)
+    proveedor_nombre: str | None = None
+    contacto_id: UUID | None = None
+    compra_inventario_id: UUID | None = None
+    ncf: str = Field(..., min_length=1)
+    ncf_modificado: str | None = None
+    fecha_comprobante: date
+    vence: date | None = None
+    tipo_bienes_servicios: int
+    concepto: str | None = None
+    monto_servicios: Decimal = Decimal("0")
+    monto_bienes: Decimal = Decimal("0")
+    itbis_facturado: Decimal = Decimal("0")
+    impuesto_selectivo_consumo: Decimal = Decimal("0")
+    otros_impuestos: Decimal = Decimal("0")
+    monto_propina_legal: Decimal = Decimal("0")
+    # Forma de pago del 606 hasta que se pague (por defecto 4, compra a crédito).
+    forma_pago: int | None = None
+
+
+class FacturaCompraActualizar(_Entrada):
+    """Solo los campos enviados se cambian (null borra el valor)."""
+
+    proveedor_nombre: str | None = None
+    contacto_id: UUID | None = None
+    compra_inventario_id: UUID | None = None
+    concepto: str | None = None
+    vence: date | None = None
+    tipo_bienes_servicios: int | None = None
+
+
+class ComprobanteCompra(BaseModel):
+    id: UUID
+    tipo_ecf: Literal[41, 43]
+    encf: str | None = None
+    estado: str
+    dgii_codigo: str | None = None
+    error: str | None = None
+    proveedor_rnc: str | None = None
+    proveedor_nombre: str | None = None
+    concepto: str | None = None
+    lineas: int
+    fecha_emision: date | None = None
+    monto: Monto
+    itbis: Monto
+    total: Monto
+    itbis_retenido: Monto
+    isr_retenido: Monto
+    registro606_id: UUID | None = None
+    fecha_pago_606: date | None = None
+    itbis_retenido_606: Monto | None = None
+    isr_retenido_606: Monto | None = None
+    creado_en: datetime
+
+
+class FilaRetencion(BaseModel):
+    registro606_id: UUID
+    proveedor_rnc: str
+    proveedor_nombre: str
+    ncf: str
+    fecha_comprobante: date | None = None
+    fecha_pago: date | None = None
+    monto_facturado: Monto
+    itbis_facturado: Monto
+    tipo_retencion_isr: int | None = None
+    tipo_retencion_isr_label: str | None = None
+    isr_retenido: Monto
+    itbis_retenido: Monto
+    declaraciones: list[Literal["ir17", "it1"]]
+    estado: Literal["por_declarar", "declarada"]
+
+
+class RetencionesProveedor(BaseModel):
+    proveedor_rnc: str
+    proveedor_nombre: str
+    proveedor_correo: str | None = None
+    proveedor_telefono: str | None = None
+    comprobantes: int
+    isr_retenido: Monto
+    itbis_retenido: Monto
+
+
+class TotalesRetencion(BaseModel):
+    isr_retenido: Monto
+    itbis_retenido: Monto
+
+
+class RetencionesMes(BaseModel):
+    periodo: str
+    filas: list[FilaRetencion]
+    proveedores: list[RetencionesProveedor]
+    totales: TotalesRetencion
+    it1_presentado: bool
+    ir17_presentado: bool
+
+
+class ComprobanteCertificado(BaseModel):
+    registro606_id: UUID
+    ncf: str
+    fecha_comprobante: date | None = None
+    fecha_pago: date | None = None
+    monto_facturado: Monto
+    itbis_facturado: Monto
+    tipo_retencion_isr: int | None = None
+    tipo_retencion_isr_label: str | None = None
+    isr_retenido: Monto
+    itbis_retenido: Monto
+
+
+class AgenteRetencion(BaseModel):
+    rnc: str
+    nombre: str | None = None
+
+
+class ProveedorCertificado(BaseModel):
+    rnc: str
+    tipo_identificacion: Literal["rnc", "cedula"]
+    nombre: str
+    correo: str | None = None
+
+
+class TotalesCertificado(BaseModel):
+    monto_facturado: Monto
+    itbis_facturado: Monto
+    isr_retenido: Monto
+    itbis_retenido: Monto
+    total_retenido: Monto
+
+
+class CertificadoRetencion(BaseModel):
+    periodo: str
+    periodo_nombre: str
+    fecha_emision: date
+    agente: AgenteRetencion
+    proveedor: ProveedorCertificado
+    comprobantes: list[ComprobanteCertificado]
+    totales: TotalesCertificado
+
+
+class SugerenciaRetencion(BaseModel):
+    tipo_retencion_isr: int | None = None
+    tipo_retencion_isr_label: str | None = None
+    isr_pct: Monto
+    retencion_isr: Monto
+    itbis_pct: Monto
+    retencion_itbis: Monto
+    total: Monto
+    neto_a_pagar: Monto
+    regla: str

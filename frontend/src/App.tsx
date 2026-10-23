@@ -21,6 +21,13 @@ import { CotizacionList } from "./pages/ingresos/CotizacionList";
 import { NotasCreditoPage, NotasDebitoPage } from "./pages/ingresos/Notas";
 import { FormatosPage } from "./pages/impuestos/Formatos";
 import { PreCalculoPage } from "./pages/impuestos/PreCalculo";
+import { BandejaPage } from "./pages/compras/Bandeja";
+import { ComprobantesE41Page, ComprobantesE43Page } from "./pages/compras/Comprobantes";
+import { EcfRecibidoDetalle } from "./pages/compras/EcfRecibidoDetalle";
+import { FacturaCompraForm } from "./pages/compras/FacturaCompraForm";
+import { FacturasCompraPage } from "./pages/compras/FacturasCompra";
+import { PagosProveedoresPage } from "./pages/compras/Pagos";
+import { RetencionesPage } from "./pages/compras/Retenciones";
 import { Inicio } from "./pages/Inicio";
 import { Proximamente } from "./pages/Proximamente";
 
@@ -47,6 +54,16 @@ export default function App() {
         <Route path="/cotizaciones/nueva" element={<CotizacionForm />} />
         <Route path="/cotizaciones/:id" element={<CotizacionForm />} />
         <Route path="/cobros" element={<CobrosPage />} />
+
+        <Route path="/bandeja" element={<BandejaPage />} />
+        <Route path="/bandeja/:id" element={<EcfRecibidoDetalle />} />
+        <Route path="/compras/facturas" element={<FacturasCompraPage />} />
+        <Route path="/compras/facturas/nueva" element={<FacturaCompraForm />} />
+        <Route path="/compras/facturas/:id" element={<FacturaCompraForm />} />
+        <Route path="/compras/e41" element={<ComprobantesE41Page />} />
+        <Route path="/compras/e43" element={<ComprobantesE43Page />} />
+        <Route path="/compras/pagos" element={<PagosProveedoresPage />} />
+        <Route path="/compras/retenciones" element={<RetencionesPage />} />
 
         <Route path="/contactos" element={<ContactoList />} />
         <Route path="/contactos/nuevo" element={<ContactoForm />} />

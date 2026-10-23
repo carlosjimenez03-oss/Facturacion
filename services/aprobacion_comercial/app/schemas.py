@@ -11,3 +11,6 @@ class AprobacionComercialResponse(BaseModel):
     mensaje: list[str] = []
     estado: str | None = None
     codigo: str | None = None
+    # No viene de la DGII: el ACECF firmado que se le envió, para que quien
+    # llama (erp-api) lo entregue también al emisor del e-CF.
+    xml_firmado: str | None = None

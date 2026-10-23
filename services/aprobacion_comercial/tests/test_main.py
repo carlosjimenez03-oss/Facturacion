@@ -62,8 +62,11 @@ def test_enviar_aprobacion_ok(client, monkeypatch, credencial_prueba):
 
     assert response.status_code == 200
     assert response.json()["estado"] == "Aprobada"
+    # Devuelve el ACECF firmado (erp-api lo entrega al emisor), pero no lo audita.
+    assert response.json()["xml_firmado"] == "<ACECF>firmado</ACECF>"
     assert len(_fake_registrar_envio.llamadas) == 1
     assert _fake_registrar_envio.llamadas[0]["modulo"] == "aprobacion_comercial"
+    assert "xml_firmado" not in _fake_registrar_envio.llamadas[0]["respuesta"]
 
 
 def test_enviar_aprobacion_error_dgii(client, monkeypatch, credencial_prueba):

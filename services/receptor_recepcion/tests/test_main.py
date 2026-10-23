@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+import asyncpg
 import pytest
 from fastapi.testclient import TestClient
 from lxml import etree
@@ -148,6 +149,63 @@ def test_recibir_ecf_registra_compra_606(client, monkeypatch, credencial_prueba)
     assert llamada["itbis_facturado"] == Decimal("180.00")
 
 
+def test_recibir_ecf_606_sin_itbis_incluido_y_con_propina(client, monkeypatch, credencial_prueba):
+    """IndicadorMontoGravado=1 (líneas con ITBIS) y propina legal: el 606 va
+    sin ITBIS en bienes/servicios y la propina en su casilla, sumando el
+    MontoTotal del e-CF."""
+    llamadas = []
+
+    async def fake_registrar_compra_606(pool, **kwargs):
+        llamadas.append(kwargs)
+
+    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+    xml = (
+        b"<ECF><Encabezado>"
+        b"<IdDoc><eNCF>E310000000003</eNCF><IndicadorMontoGravado>1</IndicadorMontoGravado></IdDoc>"
+        b"<Emisor><RNCEmisor>131234567</RNCEmisor><FechaEmision>15-01-2026</FechaEmision></Emisor>"
+        b"<Comprador><RNCComprador>101672919</RNCComprador></Comprador>"
+        b"<Totales><TotalITBIS>180.00</TotalITBIS><MontoImpuestoAdicional>100.00</MontoImpuestoAdicional>"
+        b"<ImpuestosAdicionales><ImpuestoAdicional><TipoImpuesto>001</TipoImpuesto>"
+        b"<TasaImpuestoAdicional>10</TasaImpuestoAdicional><OtrosImpuestosAdicionales>100.00</OtrosImpuestosAdicionales>"
+        b"</ImpuestoAdicional></ImpuestosAdicionales><MontoTotal>1280.00</MontoTotal></Totales>"
+        b"</Encabezado><DetallesItems>"
+        b"<Item><IndicadorFacturacion>1</IndicadorFacturacion><IndicadorBienoServicio>2</IndicadorBienoServicio>"
+        b"<MontoItem>1180.00</MontoItem></Item>"
+        b"</DetallesItems></ECF>"
+    )
+    respuesta = client.post(
+        "/fe/recepcion/api/ecf",
+        files={"xml": ("e-cf.xml", xml, "text/xml")},
+        headers={"authorization": f"Bearer {_token_valido(credencial_prueba)}"},
+    )
+    assert respuesta.status_code == 200
+    llamada = llamadas[0]
+    assert (llamada["monto_servicios"], llamada["monto_bienes"], llamada["itbis_facturado"]) == (
+        Decimal("1000.00"), Decimal("0.00"), Decimal("180.00"),
+    )
+    assert llamada["monto_propina_legal"] == Decimal("100.00")
+
+
+def test_reenvio_de_un_ecf_rechazado_no_vuelve_al_606(client, monkeypatch, credencial_prueba):
+    llamadas = []
+
+    async def fake_registrar_compra_606(pool, **kwargs):
+        llamadas.append(kwargs)
+
+    async def fake_ecf_rechazado(pool, rnc_emisor, encf):
+        return (rnc_emisor, encf) == ("131234567", "E310000000001")
+
+    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+    monkeypatch.setattr(main, "ecf_rechazado", fake_ecf_rechazado)
+    respuesta = client.post(
+        "/fe/recepcion/api/ecf",
+        files={"xml": ("e-cf.xml", XML_ECF_COMPLETO, "text/xml")},
+        headers={"authorization": f"Bearer {_token_valido(credencial_prueba)}"},
+    )
+    assert respuesta.status_code == 200  # el ARECF se devuelve igual
+    assert llamadas == []
+
+
 def test_recibir_ecf_sin_fecha_emision_no_registra_compra_606(client, monkeypatch, credencial_prueba):
     llamadas = []
 
@@ -181,3 +239,60 @@ def test_recibir_ecf_ok_aunque_falle_registrar_compra_606(client, monkeypatch, c
     )
 
     assert respuesta.status_code == 200
+
+
+def test_recibir_ecf_guarda_el_xml_en_la_bandeja_despues_del_606(client, monkeypatch, credencial_prueba):
+    orden = []
+
+    async def fake_registrar_compra_606(pool, **kwargs):
+        orden.append("606")
+
+    async def fake_registrar_ecf_recibido(pool, xml_bytes, root):
+        orden.append(("bandeja", xml_bytes, root.findtext(".//eNCF")))
+
+    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+    monkeypatch.setattr(main, "registrar_ecf_recibido", fake_registrar_ecf_recibido)
+    token = _token_valido(credencial_prueba)
+
+    respuesta = client.post(
+        "/fe/recepcion/api/ecf",
+        files={"xml": ("e-cf.xml", XML_ECF_COMPLETO, "text/xml")},
+        headers={"authorization": f"Bearer {token}"},
+    )
+
+    assert respuesta.status_code == 200
+    assert orden == ["606", ("bandeja", XML_ECF_COMPLETO, "E310000000001")]
+
+
+class _ConnSinTablas:
+    async def execute(self, *args):
+        raise asyncpg.UndefinedTableError('relation "recepcion.ecf_recibidos" does not exist')
+
+
+class _AcquireSinTablas:
+    async def __aenter__(self):
+        return _ConnSinTablas()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _PoolSinTablas:
+    def acquire(self):
+        return _AcquireSinTablas()
+
+
+def test_recibir_ecf_ok_aunque_la_tabla_de_la_bandeja_no_exista(client, monkeypatch, credencial_prueba):
+    """Base sin migrar (erp-api todavía no arrancó): las inserciones fallan
+    por dentro y la recepción sigue -- todas son best-effort."""
+    monkeypatch.setattr(main.app.state, "db_pool", _PoolSinTablas())
+    token = _token_valido(credencial_prueba)
+
+    respuesta = client.post(
+        "/fe/recepcion/api/ecf",
+        files={"xml": ("e-cf.xml", XML_ECF_COMPLETO, "text/xml")},
+        headers={"authorization": f"Bearer {token}"},
+    )
+
+    assert respuesta.status_code == 200
+    assert "ARECF" in respuesta.text
