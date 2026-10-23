@@ -368,9 +368,10 @@ export function FacturaForm() {
   /** Próximo e-NCF sugerido: el mayor ya usado de este tipo + 1. */
   const proximoEncf = useMemo(() => siguienteEncf(facturas, tipoEcf), [facturas, tipoEcf]);
 
+  // También se reaplica cuando algo deja el e-NCF vacío (p. ej. ?copiar=, que copia los datos con e-NCF nuevo).
   useEffect(() => {
-    if (!encfManual) setForm((prev) => ({ ...prev, encf: proximoEncf }));
-  }, [proximoEncf, encfManual]);
+    if (!encfManual) setForm((prev) => (prev.encf === proximoEncf ? prev : { ...prev, encf: proximoEncf }));
+  }, [proximoEncf, encfManual, form.encf]);
 
   const facturasReferenciables = useMemo(
     () => facturas.filter((f) => f.encf && (f.estado === "aceptado" || f.estado === "enviado")),
@@ -553,9 +554,6 @@ export function FacturaForm() {
     const creada = await api.crear({ tipo_ecf: Number(tipoEcf), encf: form.encf || null, datos, items_inventario });
     setIdGuardado(creada.id);
     void registrarContacto();
-    const aviso = await marcarCotizacion(creada.id);
-    if (aviso) setAvisoForm(aviso);
-    avisoAlSalir.current = aviso;
     return creada.id;
   }
 
@@ -601,7 +599,13 @@ export function FacturaForm() {
         setError("La DGII no aceptaría este comprobante. Corrija lo siguiente y vuelva a emitir (el borrador quedó guardado).");
         return;
       }
-      await api.enviar(fid);
+      const envio = await api.enviar(fid);
+      // La cotización se marca facturada solo cuando la factura llegó a la DGII:
+      // un borrador se puede borrar y dejaría la cotización atada a nada.
+      if (envio.track_id) {
+        const aviso = await marcarCotizacion(fid);
+        avisoAlSalir.current = aviso;
+      }
       recargar();
       navigate(`/facturas/${fid}`, estadoAlSalir());
     } catch (err) {
@@ -650,7 +654,7 @@ export function FacturaForm() {
             ) : (
               <>
                 <b>Factura a partir de la cotización {origen.cotizacion.numero}</b> de {origen.cotizacion.cliente_nombre} por RD${" "}
-                {formatoMonto(origen.cotizacion.total)}. Al guardarla, la cotización quedará marcada como facturada.
+                {formatoMonto(origen.cotizacion.total)}. Al emitirla, la cotización quedará marcada como facturada.
               </>
             )}
           </span>

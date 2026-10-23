@@ -68,7 +68,8 @@ function FormularioCotizacion({ id }: { id?: string }) {
   const [aviso, mostrarAviso] = useAviso();
   const busquedaId = useRef(0);
 
-  const soloLectura = cot != null && cot.estado !== "abierta";
+  // "vencida" se guarda como abierta: se puede editar (p. ej. extender `vence`) o eliminar.
+  const soloLectura = cot != null && cot.estado !== "abierta" && cot.estado !== "vencida";
   const totales = useMemo(() => totalesCotizacion(lineas), [lineas]);
 
   useEffect(() => {
@@ -197,7 +198,7 @@ function FormularioCotizacion({ id }: { id?: string }) {
         producto_id: l.producto_id,
         descripcion: l.descripcion.trim(),
         cantidad: String(Number(l.cantidad)),
-        precio_unitario: (Number(l.precio_unitario) || 0).toFixed(2),
+        precio_unitario: (Number(l.precio_unitario) || 0).toFixed(4),
         descuento_pct: String(Number(l.descuento_pct) || 0),
         itbis: l.itbis,
       })),
@@ -321,7 +322,7 @@ function FormularioCotizacion({ id }: { id?: string }) {
                 Reabrir
               </button>
             )}
-            {cot.estado !== "facturada" && (
+            {cot.estado !== "facturada" && cot.estado !== "vencida" && (
               <button type="button" className="btn btn-o" onClick={() => setEnviar(true)}>
                 Enviar
               </button>
@@ -329,6 +330,19 @@ function FormularioCotizacion({ id }: { id?: string }) {
           </div>
         )}
       </div>
+
+      {cot?.estado === "vencida" && (
+        <div className="al al-w no-imprimir">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 2" />
+          </svg>
+          <span>
+            <b>Esta cotización venció el {fechaLegible(cot.vence)}.</b> Revise los precios y extienda la fecha de vencimiento para
+            retomarla, o elimínela.
+          </span>
+        </div>
+      )}
 
       {soloLectura && cot && (
         <div className="al al-i no-imprimir">
@@ -345,10 +359,6 @@ function FormularioCotizacion({ id }: { id?: string }) {
                     Ver la factura
                   </Link>
                 )}
-              </>
-            ) : cot.estado === "vencida" ? (
-              <>
-                <b>Esta cotización venció el {fechaLegible(cot.vence)}.</b> Para retomarla, cree una nueva cotización con los precios actuales.
               </>
             ) : (
               <>

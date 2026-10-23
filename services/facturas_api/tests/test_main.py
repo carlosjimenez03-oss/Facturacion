@@ -194,6 +194,44 @@ def test_generar_xml_con_errores_no_guarda(client, monkeypatch):
     assert guardado_llamado["si"] is False
 
 
+@pytest.mark.parametrize(
+    ("estado", "track_id"),
+    [("aceptado", "abc"), ("enviado", "abc"), ("rechazado", "abc"), ("error", "abc")],
+)
+def test_generar_xml_rechazado_si_ya_se_envio(client, monkeypatch, estado, track_id):
+    factura = _factura(estado=estado, track_id=track_id)
+
+    async def fake_obtener(pool, fid):
+        return factura
+
+    async def fake_guardar(pool, fid, xml_generado):
+        raise AssertionError("no debía regenerar el XML de una factura enviada")
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+    monkeypatch.setattr(repository, "guardar_xml_generado", fake_guardar)
+
+    response = client.post(f"/facturas/{factura['id']}/generar-xml")
+
+    assert response.status_code == 409
+
+
+def test_generar_xml_permitido_si_el_envio_fallo_sin_track_id(client, monkeypatch):
+    factura = _factura(estado="error", track_id=None)
+
+    async def fake_obtener(pool, fid):
+        return factura
+
+    async def fake_guardar(pool, fid, xml_generado):
+        return {**factura, "estado": "generado", "xml_generado": xml_generado}
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+    monkeypatch.setattr(repository, "guardar_xml_generado", fake_guardar)
+
+    response = client.post(f"/facturas/{factura['id']}/generar-xml")
+
+    assert response.status_code == 200
+
+
 def test_firmar_factura_sin_xml_generado(client, monkeypatch):
     factura = _factura(xml_generado=None)
 

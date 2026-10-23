@@ -156,7 +156,8 @@ export interface CotizacionPayload {
 export type EstadoCuentaCobrar = "pendiente" | "vencida" | "cobrada";
 export type MetodoCobro = "efectivo" | "transferencia" | "tarjeta" | "cheque";
 
-/** Una factura a crédito (TipoPago 2) enviada/aceptada, con lo cobrado y lo pendiente. */
+/** Una factura a crédito (TipoPago 2) enviada/aceptada, con lo cobrado y lo pendiente
+ * (total − notas de crédito que la referencian − cobros). */
 export interface CuentaPorCobrar {
   factura_id: string;
   encf: string | null;
@@ -171,6 +172,8 @@ export interface CuentaPorCobrar {
   estado: EstadoCuentaCobrar;
   /** Días desde el vencimiento (0 si no está vencida). */
   dias_vencida: number;
+  /** Teléfono del contacto con ese RNC, si está registrado. */
+  cliente_telefono: string | null;
 }
 
 export interface Cobro {
@@ -224,7 +227,8 @@ export const erpApi = {
     request<Cliente[]>(`/clientes${consulta({ ...p })}`),
   obtenerCliente: (id: string) => request<Cliente>(`/clientes/${id}`),
   /** 404 si no existe ningún contacto con ese RNC/cédula. */
-  clientePorRnc: (rnc: string) => request<Cliente>(`/clientes/por-rnc/${encodeURIComponent(rnc.replace(/\D/g, ""))}`),
+  clientePorRnc: (rnc: string) =>
+    request<Cliente>(`/clientes/por-rnc/${encodeURIComponent(rnc.replace(/[^0-9A-Za-z]/g, "").toUpperCase())}`),
   crearCliente: (payload: ClientePayload) =>
     request<Cliente>("/clientes", { method: "POST", body: JSON.stringify(payload) }),
   actualizarCliente: (id: string, payload: ClientePayload) =>

@@ -438,7 +438,7 @@ export function CobrosPage() {
                             </button>
                           )}
                           {debe && (
-                            <a className="btn btn-g btn-sm" href={enlaceWhatsApp(textoRecordatorio(c))} target="_blank" rel="noreferrer" title="Abre WhatsApp con el mensaje listo para enviar">
+                            <a className="btn btn-g btn-sm" href={enlaceWhatsApp(textoRecordatorio(c), c.cliente_telefono)} target="_blank" rel="noreferrer" title="Abre WhatsApp con el mensaje listo para enviar">
                               Recordatorio
                             </a>
                           )}

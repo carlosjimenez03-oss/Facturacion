@@ -146,6 +146,8 @@ class CuentaPorCobrar(BaseModel):
     pendiente: Monto
     estado: EstadoCuentaCobrar
     dias_vencida: int
+    # Teléfono del contacto con ese RNC (para el recordatorio por WhatsApp).
+    cliente_telefono: str | None = None
 
 
 class CobroPayload(_Entrada):

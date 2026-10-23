@@ -19,6 +19,9 @@ export function FacturaAcciones({
   const [errores, setErrores] = useState<string[]>([]);
   const [mensaje, setMensaje] = useState<{ texto: string; error: boolean } | null>(null);
   const [procesando, setProcesando] = useState(false);
+  // Igual que facturas-api: el XML de una factura enviada no se regenera (solo si el envío falló sin trackId).
+  const yaEnviada =
+    !["borrador", "generado", "firmado", "error"].includes(factura.estado) || (factura.estado === "error" && Boolean(factura.track_id));
   const [confirmarEnvio, setConfirmarEnvio] = useState(false);
 
   const fallo = (err: unknown) => setMensaje({ texto: err instanceof ApiError ? err.message : String(err), error: true });
@@ -101,7 +104,13 @@ export function FacturaAcciones({
       )}
 
       <div className="row">
-        <button type="button" className="btn btn-o btn-sm" onClick={generarXml} disabled={procesando}>
+        <button
+          type="button"
+          className="btn btn-o btn-sm"
+          onClick={generarXml}
+          disabled={procesando || yaEnviada}
+          title={yaEnviada ? "La factura ya fue enviada a la DGII: su XML no se puede regenerar" : undefined}
+        >
           Generar XML
         </button>
         <button type="button" className="btn btn-o btn-sm" onClick={firmar} disabled={procesando || !factura.xml_generado}>

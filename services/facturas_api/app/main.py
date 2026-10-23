@@ -206,6 +206,18 @@ async def _obtener_o_404(fid: uuid.UUID) -> dict:
 async def generar_xml(factura_id: str):
     fid = _parse_id(factura_id)
     factura = await _obtener_o_404(fid)
+    # Una vez enviada a la DGII, el XML es el que la DGII tiene: regenerarlo
+    # cambiaría FechaHoraFirma (y con ello el código de seguridad del PDF) y
+    # devolvería la factura a 'generado', permitiendo reenviar el mismo e-NCF.
+    # Solo se permite si el envío falló sin llegar a la DGII (sin trackId).
+    enviada = factura["estado"] not in ("borrador", "generado", "firmado", "error") or (
+        factura["estado"] == "error" and factura.get("track_id")
+    )
+    if enviada:
+        raise HTTPException(
+            status_code=409,
+            detail="La factura ya fue enviada a la DGII; su XML no se puede regenerar.",
+        )
 
     xml_bytes, errores = generar_y_validar(factura["tipo_ecf"], factura["datos"])
     if errores:

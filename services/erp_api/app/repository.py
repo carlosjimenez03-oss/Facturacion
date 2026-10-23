@@ -107,9 +107,14 @@ _RNC_COMPRADOR = (
 _NOMBRE_COMPRADOR = "NULLIF(d #>> '{Encabezado,Comprador,RazonSocialComprador}', '')"
 _FECHA_EMISION = _fecha_dgii("{Encabezado,Emisor,FechaEmision}")
 
+# Tipos de e-CF de venta que generan una cuenta por cobrar. Quedan fuera las
+# notas de crédito (34, rebajan la factura que modifican) y los comprobantes
+# de compra/pago (41, 43, 47), donde el "comprador" es el proveedor.
+_TIPOS_CXC = "(31, 32, 33, 44, 45, 46)"
+
 # Cuentas por cobrar: facturas enviadas/aceptadas a crédito (TipoPago 2) con
-# lo cobrado (cobros no anulados) y lo pendiente. Las notas de crédito
-# (tipo 34) no son una cuenta por cobrar aunque traigan TipoPago 2. Sin
+# lo cobrado (cobros no anulados) y lo pendiente, que además descuenta las
+# notas de crédito enviadas/aceptadas que referencian la factura. Sin
 # parámetros: el estado (vencida/pendiente/cobrada) depende de "hoy" y se
 # calcula en cada consulta que usa este CTE.
 _CTE_CXC = f"""
@@ -117,8 +122,18 @@ _CTE_CXC = f"""
         SELECT f.id, f.encf, f.tipo_ecf, f.creado_en, f.datos::jsonb AS d
         FROM facturacion.facturas f
         WHERE f.estado IN ('aceptado', 'enviado')
-          AND f.tipo_ecf <> 34
+          AND f.tipo_ecf IN {_TIPOS_CXC}
           AND f.datos::jsonb #>> '{{Encabezado,IdDoc,TipoPago}}' = '2'
+    ),
+    cxc_notas AS (
+        SELECT d #>> '{{InformacionReferencia,NCFModificado}}' AS encf_afectado,
+               sum({_monto_dgii("{Encabezado,Totales,MontoTotal}")}) AS acreditado
+        FROM (
+            SELECT f.datos::jsonb AS d
+            FROM facturacion.facturas f
+            WHERE f.estado IN ('aceptado', 'enviado') AND f.tipo_ecf = 34
+        ) n
+        GROUP BY 1
     ),
     cxc_cobrado AS (
         SELECT factura_id, sum(monto) AS cobrado
@@ -140,7 +155,8 @@ _CTE_CXC = f"""
             ) AS vence,
             t.total,
             COALESCE(c.cobrado, 0)::numeric(14, 2) AS cobrado,
-            (t.total - COALESCE(c.cobrado, 0))::numeric(14, 2) AS pendiente
+            (t.total - COALESCE(nc.acreditado, 0) - COALESCE(c.cobrado, 0))::numeric(14, 2) AS pendiente,
+            cl.telefono AS cliente_telefono
         FROM cxc_base b
         CROSS JOIN LATERAL (
             SELECT COALESCE({_FECHA_EMISION}, b.creado_en::date) AS fecha_emision
@@ -149,6 +165,8 @@ _CTE_CXC = f"""
             SELECT {_monto_dgii("{Encabezado,Totales,MontoTotal}")} AS total
         ) t
         LEFT JOIN cxc_cobrado c ON c.factura_id = b.id
+        LEFT JOIN cxc_notas nc ON nc.encf_afectado = b.encf
+        LEFT JOIN ventas.clientes cl ON cl.rnc = {_RNC_COMPRADOR}
     )
 """
 

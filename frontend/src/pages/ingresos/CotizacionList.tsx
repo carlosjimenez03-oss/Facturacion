@@ -212,12 +212,12 @@ export function CotizacionList() {
                               Marcar aceptada
                             </button>
                           )}
-                          {c.estado !== "facturada" && (
+                          {c.estado !== "facturada" && c.estado !== "vencida" && (
                             <button type="button" className="btn btn-g btn-sm" onClick={() => setEnviar(c)}>
                               Enviar
                             </button>
                           )}
-                          {c.estado === "abierta" && (
+                          {(c.estado === "abierta" || c.estado === "vencida") && (
                             <button type="button" className="btn btn-g btn-sm" style={{ color: "#B91C1C" }} onClick={() => setEliminar(c)} disabled={ocupado === c.id}>
                               Eliminar
                             </button>

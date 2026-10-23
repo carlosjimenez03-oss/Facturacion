@@ -1,4 +1,4 @@
-import { Route, Routes } from "react-router-dom";
+import { Route, Routes, useLocation } from "react-router-dom";
 import { CompraForm } from "./components/CompraForm";
 import { CompraList } from "./components/CompraList";
 import { FacturaDetailPage } from "./components/FacturaDetailPage";
@@ -22,13 +22,20 @@ import { NotasCreditoPage, NotasDebitoPage } from "./pages/ingresos/Notas";
 import { Inicio } from "./pages/Inicio";
 import { Proximamente } from "./pages/Proximamente";
 
+/** /facturas/nueva?cotizacion=…, ?copiar=…, ?tipo=… comparten ruta: la clave
+ * reinicia el formulario cuando solo cambia la consulta (p. ej. del menú "+"). */
+function FacturaNueva() {
+  const { search } = useLocation();
+  return <FacturaForm key={search} />;
+}
+
 export default function App() {
   return (
     <AppShell>
       <Routes>
         <Route path="/" element={<Inicio />} />
         <Route path="/facturas" element={<FacturaList />} />
-        <Route path="/facturas/nueva" element={<FacturaForm />} />
+        <Route path="/facturas/nueva" element={<FacturaNueva />} />
         <Route path="/facturas/:id/editar" element={<FacturaForm />} />
         <Route path="/facturas/:id" element={<FacturaDetailPage />} />
 
