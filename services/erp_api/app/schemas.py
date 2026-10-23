@@ -199,7 +199,8 @@ class DocumentoVenta(BaseModel):
 
 FormularioPreCalculo = Literal["it1", "ir17", "ir2"]
 FormularioDeclaracion = Literal["606", "607", "608", "it1", "ir17", "ir2"]
-EstadoDeclaracion = Literal["pendiente", "presentada", "vencida"]
+# "no_aplica": 607/608 del emisor 100 % electrónico (EMISOR_100_ELECTRONICO).
+EstadoDeclaracion = Literal["pendiente", "presentada", "vencida", "no_aplica"]
 
 
 class Fila607(BaseModel):
@@ -278,6 +279,8 @@ class TipoAnulacion(BaseModel):
 
 
 class Casilla(BaseModel):
+    # Número de LÍNEA del pre-cálculo ("1", "2", ...), no la casilla del
+    # formulario oficial de la DGII (ver precalculos.py).
     codigo: str
     etiqueta: str
     valor: Monto
@@ -294,7 +297,14 @@ class SeccionPreCalculo(BaseModel):
 class AjusteEditable(BaseModel):
     clave: str
     etiqueta: str
+    # Valor usado en el cálculo: el manual guardado o, si no hay, el sugerido
+    # por el sistema (o 0).
     valor: Monto
+    # True si `valor` es un valor manual guardado; False si es el sugerido.
+    manual: bool
+    # Valor calculado por el sistema (saldo a favor del mes anterior,
+    # valuación del Kardex); null si el sistema no sugiere ninguno.
+    sugerido: Monto | None = None
     ayuda: str | None = None
 
 

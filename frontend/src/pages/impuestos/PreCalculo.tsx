@@ -1,12 +1,13 @@
 // Pre-cálculos IT-1 (ITBIS mensual), IR-2 (ISR de sociedades, anual) e IR-17 (retenciones
-// de ISR), según PreCalculo.dc.html del prototipo. Las casillas, el resultado y el resumen
+// de ISR), según PreCalculo.dc.html del prototipo. Las líneas, el resultado y el resumen
 // los calcula erp-api; aquí se muestran, se editan los ajustes manuales y se copian los
-// valores para transcribirlos en la Oficina Virtual de la DGII.
+// valores para transcribirlos en la Oficina Virtual de la DGII. Los números de línea son
+// de este pre-cálculo, NO las casillas del formulario oficial: se transcribe por concepto.
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { IconAlerta } from "../../layout/icons";
 import { impuestosApi } from "../../lib/impuestosApi";
-import type { Casilla, FormularioPreCalculo, MarcarPresentadaPayload, PreCalculo } from "../../lib/impuestosApi";
+import type { AjusteEditable, Casilla, FormularioPreCalculo, MarcarPresentadaPayload, PreCalculo } from "../../lib/impuestosApi";
 import { EMPRESA_NOMBRE, EMPRESA_RNC, MARCA, formatoMonto, formatoRnc } from "../../lib/marca";
 import { AvisoError, Cargando, Vacio } from "../ingresos/IngresosShell";
 import { hoyIso, mensajeError } from "../ingresos/ingresosUtil";
@@ -34,8 +35,17 @@ const PESTANAS: { id: FormularioPreCalculo; label: string; nombre: string; descr
 
 const ES_NUMERO = /^-?\d+(\.\d+)?$/;
 
+const AVISO_LINEAS =
+  "Los números L1, L2… son líneas de este pre-cálculo, no las casillas del formulario oficial de la DGII: transcriba cada valor buscando su concepto en el formulario.";
+
 /** Valor tal como lo copia el prototipo: sin separador de miles y los negativos entre paréntesis. */
 const valorPlano = (v: string) => montoContable(v).replace(/,/g, "");
+
+/** Valor del campo de un ajuste tal como llega del servidor ("1500.5" -> "1500.5", "0.00" -> "0"). */
+const valorCampo = (a: AjusteEditable) => String(Number(a.valor) || 0);
+
+/** Texto del campo -> valor que se envía: "" (vacío) borra el manual y vuelve al sugerido. */
+const valorEnvio = (v: string) => (v.trim() === "" ? "" : (Number(v) || 0).toFixed(2));
 
 export function PreCalculoPage() {
   const { formulario: param } = useParams<{ formulario: string }>();
@@ -61,7 +71,7 @@ export function PreCalculoPage() {
 
   const aplicar = useCallback((p: PreCalculo) => {
     setDatos(p);
-    setValores(Object.fromEntries(p.ajustes.map((a) => [a.clave, String(Number(a.valor) || 0)])));
+    setValores(Object.fromEntries(p.ajustes.map((a) => [a.clave, valorCampo(a)])));
   }, []);
 
   useEffect(() => {
@@ -105,26 +115,38 @@ export function PreCalculoPage() {
 
   async function copiar() {
     if (!datos) return;
+    // Los números son líneas de este pre-cálculo, no casillas del formulario oficial: se
+    // copian como "Línea N" para que nadie los tome por el número de casilla de la DGII.
     const texto =
-      `${titulo}\n` +
-      datos.secciones.map((s) => s.casillas.map((c) => `${c.codigo}\t${c.etiqueta}\t${valorPlano(c.valor)}`).join("\n")).join("\n") +
-      `\n${datos.resultado.etiqueta}\t${valorPlano(datos.resultado.valor)}`;
+      `${titulo}\n${AVISO_LINEAS}\nLínea\tConcepto\tValor\n` +
+      datos.secciones.map((s) => s.casillas.map((c) => `Línea ${c.codigo}\t${c.etiqueta}\t${valorPlano(c.valor)}`).join("\n")).join("\n") +
+      `\n\t${datos.resultado.etiqueta}\t${valorPlano(datos.resultado.valor)}`;
     if (await copiarTexto(texto)) mostrar("Valores copiados al portapapeles", { detalle: "Péguelos en la Oficina Virtual o en Excel" });
     else setCopiaManual(texto);
   }
 
-  async function guardarAjustes() {
+  /** Envía solo los ajustes indicados (los demás, sugeridos o manuales, no se tocan). */
+  async function enviarAjustes(cambios: Record<string, string>, aviso: string) {
     setGuardando(true);
     setErrorAjustes(null);
     try {
-      const limpios = Object.fromEntries(Object.entries(valores).map(([k, v]) => [k, (Number(v) || 0).toFixed(2)]));
-      aplicar(await impuestosApi.guardarAjustes(formulario, periodo, limpios));
-      mostrar("Ajustes guardados", { detalle: `${pestana!.nombre} recalculado con los valores manuales` });
+      aplicar(await impuestosApi.guardarAjustes(formulario, periodo, cambios));
+      mostrar(aviso, { detalle: `${pestana!.nombre} recalculado` });
     } catch (err) {
       setErrorAjustes(mensajeError(err));
     } finally {
       setGuardando(false);
     }
+  }
+
+  function guardarAjustes() {
+    if (!datos) return;
+    const cambios = Object.fromEntries(datos.ajustes.filter((a) => modificado(a)).map((a) => [a.clave, valorEnvio(valores[a.clave] ?? "")]));
+    void enviarAjustes(cambios, "Ajustes guardados");
+  }
+
+  function restablecer(a: AjusteEditable) {
+    void enviarAjustes({ [a.clave]: "" }, a.sugerido != null ? `${a.etiqueta}: valor sugerido restablecido` : `${a.etiqueta}: valor manual quitado`);
   }
 
   async function marcar(payload: MarcarPresentadaPayload) {
@@ -142,7 +164,13 @@ export function PreCalculoPage() {
     }
   }
 
-  const cambiado = !!datos && datos.ajustes.some((a) => (Number(valores[a.clave]) || 0) !== (Number(a.valor) || 0));
+  /** El campo cambió respecto de lo que devolvió el servidor (vaciarlo cuenta como cambio si había un manual). */
+  function modificado(a: AjusteEditable): boolean {
+    const v = valores[a.clave] ?? "";
+    if (v.trim() === "") return a.manual;
+    return (Number(v) || 0) !== (Number(a.valor) || 0);
+  }
+  const cambiado = !!datos && datos.ajustes.some(modificado);
 
   return (
     <div className="content">
@@ -204,6 +232,7 @@ export function PreCalculoPage() {
 
           <div className="pc-layout">
             <div className="pc-main">
+              {datos.secciones.length > 0 && <p className="hint pc-lineas">{AVISO_LINEAS}</p>}
               {datos.secciones.length === 0 && (
                 <section className="card">
                   <Vacio titulo="Sin movimientos en el período" texto="No hay comprobantes ni compras registradas para calcular este formulario." />
@@ -280,7 +309,7 @@ export function PreCalculoPage() {
                   <div className="card-h">
                     <div>
                       <h3>Ajustes manuales</h3>
-                      <span className="hint">Valores que el sistema no puede conocer</span>
+                      <span className="hint">Valores que el sistema no puede conocer. Deje un campo vacío para volver al valor sugerido.</span>
                     </div>
                   </div>
                   <div className="card-b stack">
@@ -303,8 +332,26 @@ export function PreCalculoPage() {
                           className="inp inp-sm"
                           style={{ textAlign: "right" }}
                           value={valores[a.clave] ?? ""}
+                          placeholder={a.sugerido != null ? Number(a.sugerido).toFixed(2) : "0.00"}
                           onChange={(e) => setValores((v) => ({ ...v, [a.clave]: e.target.value }))}
+                          aria-describedby={`aj-${a.clave}-origen`}
                         />
+                        <span id={`aj-${a.clave}-origen`} className="hint pc-ajuste-origen">
+                          {a.manual ? (
+                            <>
+                              <span className="bd b-borr">Manual</span>
+                              {a.sugerido != null && ` · sugerido RD$ ${montoContable(a.sugerido)}`}
+                              {" · "}
+                              <button type="button" className="btn btn-g btn-sm" onClick={() => restablecer(a)} disabled={guardando}>
+                                Restablecer
+                              </button>
+                            </>
+                          ) : a.sugerido != null ? (
+                            "Sugerido por el sistema"
+                          ) : (
+                            "Sin valor manual"
+                          )}
+                        </span>
                       </div>
                     ))}
                     {errorAjustes && (
@@ -356,11 +403,13 @@ function IconoInfo() {
   );
 }
 
-/** Una casilla del formulario: número, concepto (con explicación) y valor; subtotales y total resaltados. */
+/** Una línea del pre-cálculo: número de línea, concepto (con explicación) y valor; subtotales y total resaltados. */
 function FilaCasilla({ casilla: c }: { casilla: Casilla }) {
   return (
     <div className={c.tipo === "normal" ? "pc-casilla" : `pc-casilla ${c.tipo}`}>
-      <span className="mono pc-c">{c.codigo}</span>
+      <span className="mono pc-c" title={`Línea ${c.codigo} de este pre-cálculo (no es la casilla del formulario oficial)`}>
+        L{c.codigo}
+      </span>
       <span className="pc-l">
         {c.etiqueta}
         {c.ayuda && (

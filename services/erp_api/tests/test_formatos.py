@@ -178,3 +178,45 @@ def test_expandir_rango_encf():
     assert formatos.cantidad_rango("E310000000001", "E310000000100") == 100
     assert formatos.expandir_rango("E310000000005", "E320000000009", 10) == []
     assert formatos.expandir_rango("E310000000009", "E310000000001", 10) == []
+
+
+def test_desglose_una_sola_fuente_por_ecf():
+    # Caso del e2e: E32 sin líneas, solo con totales globales. Antes el
+    # ITBIS (900) salía de Totales y el gravado de las líneas (0).
+    sin_lineas = _ecf(tipo=32, totales={"MontoGravadoTotal": "5000.00", "TotalITBIS": "900.00",
+                                        "MontoTotal": "5900.00"})
+    al_16 = _ecf(totales={"MontoGravadoTotal": "1000", "TotalITBIS": "160", "MontoTotal": "1160"})
+    exportacion = _ecf(tipo=46, totales={"MontoGravadoTotal": "3000", "MontoTotal": "3000"})
+    sin_gravado_total = _ecf(totales={"TotalITBIS": "18", "MontoExento": "50", "MontoTotal": "168"})
+    # Lo que escribe este sistema (buildDatos.ts): líneas + totales globales.
+    # Manda el detalle; el MontoExento global no se mezcla con él.
+    con_lineas = _ecf(items=[_item("1", "1000"), _item("2", "500"), _item("4", "200"), _item("0", "99")],
+                      totales={"MontoGravadoTotal": "1500", "MontoExento": "999", "TotalITBIS": "260",
+                               "MontoTotal": "1960"})
+    # Con desglose por tasa en Totales, mandan los totales aunque haya líneas.
+    por_tasa = _ecf(items=[_item("1", "1")], totales={"MontoGravadoI1": "1000", "MontoExento": "10",
+                                                      "TotalITBIS": "180"})
+
+    def d(factura):
+        r = formatos.desglose_por_tasa(factura["datos"])
+        return tuple(r[k] for k in ("g18", "g16", "g0", "exento", "i18", "i16"))
+
+    assert d(sin_lineas) == (5000, 0, 0, 0, 900, 0)
+    assert d(al_16) == (0, 1000, 0, 0, 0, 160)
+    assert d(exportacion) == (0, 0, 3000, 0, 0, 0)
+    assert d(sin_gravado_total) == (100, 0, 0, 50, 18, 0)
+    assert d(con_lineas) == (1000, 500, 0, 200, 180, 80)
+    assert d(por_tasa) == (1000, 0, 0, 10, 180, 0)
+    assert formatos.fila_607(sin_lineas)["monto_facturado"] == Decimal("5000.00")
+
+
+def test_advertencias_segun_emisor_100_electronico():
+    assert "no le aplica" in formatos.advertencia_ecf_607(True)
+    assert "en cero" not in formatos.advertencia_ecf_607(True)
+    assert "declárelo en cero" in formatos.advertencia_ecf_607(False)
+    assert "no le aplica" in formatos.advertencia_ecf_608(True)
+    assert "declárelo en cero" in formatos.advertencia_ecf_608(False)
+    assert "no le aplica" in formatos.sin_registros_607("202610", True)
+    assert "declare el 607 en cero" in formatos.sin_registros_607("202610", False)
+    assert "no le aplica" in formatos.sin_registros_608("202610", True)
+    assert "declare el 608 en cero" in formatos.sin_registros_608("202610", False)

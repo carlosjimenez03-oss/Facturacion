@@ -81,6 +81,7 @@ export function textoVencimiento(vence: string | null | undefined, declaracion?:
   if (declaracion?.estado === "presentada") {
     return declaracion.presentada_en ? `Presentada el ${fechaDgii(declaracion.presentada_en)}` : "Presentada";
   }
+  if (declaracion?.estado === "no_aplica") return "No aplica a emisores 100 % electrónicos";
   if (!vence) return "";
   const dias = diasHasta(vence);
   if (dias < 0) return `Venció el ${fechaDgii(vence)} · hace ${-dias} ${dias === -1 ? "día" : "días"}`;
@@ -92,12 +93,14 @@ export const ESTADO_DECLARACION: Record<EstadoDeclaracion, { label: string; badg
   pendiente: { label: "Pendiente", badge: "bd b-proc" },
   presentada: { label: "Presentada", badge: "bd b-acep" },
   vencida: { label: "Vencida", badge: "bd b-rech" },
+  no_aplica: { label: "No aplica", badge: "bd b-borr" },
 };
 
 /** Opción del selector de período: "Octubre 2026 · vence 16/11", "Septiembre 2026 · presentado". */
 export function etiquetaPeriodo(nombre: string, declaracion: Declaracion | null): string {
   if (!declaracion) return nombre;
   if (declaracion.estado === "presentada") return `${nombre} · presentado`;
+  if (declaracion.estado === "no_aplica") return `${nombre} · no aplica`;
   if (declaracion.estado === "vencida") return `${nombre} · vencido el ${fechaDgii(declaracion.vence, true)}`;
   return `${nombre} · vence ${fechaDgii(declaracion.vence, true)}`;
 }

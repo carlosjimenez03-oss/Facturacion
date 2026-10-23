@@ -38,6 +38,11 @@ def _rnc_emisor(settings: ErpApiSettings) -> str:
     return re.sub(r"\D", "", settings.emisor_rnc or "")
 
 
+def _emisor(settings: ErpApiSettings) -> dict:
+    """Configuración del emisor que necesitan el 607/608 y las declaraciones."""
+    return {"emisor_100_electronico": settings.emisor_100_electronico}
+
+
 async def _llamar(funcion, *args, **kwargs):
     """Traduce los errores del repositorio a HTTP: 422 datos/período
     inválidos, 404 no encontrado, 409 conflicto."""
@@ -63,13 +68,13 @@ def _txt(nombre: str, contenido: bytes) -> Response:
 
 @router.get("/607", response_model=Formato607)
 async def formato_607(request: Request, periodo: str, settings: ErpApiSettings = Depends(get_settings)):
-    return await _llamar(impuestos_repository.formato_607, _pool(request), periodo, _rnc_emisor(settings))
+    return await _llamar(impuestos_repository.formato_607, _pool(request), periodo, _rnc_emisor(settings), **_emisor(settings))
 
 
 @router.get("/607/txt")
 async def descargar_607(request: Request, periodo: str, settings: ErpApiSettings = Depends(get_settings)):
     nombre, contenido = await _llamar(
-        impuestos_repository.archivo_607, _pool(request), periodo, _rnc_emisor(settings)
+        impuestos_repository.archivo_607, _pool(request), periodo, _rnc_emisor(settings), **_emisor(settings)
     )
     return _txt(nombre, contenido)
 
@@ -84,14 +89,14 @@ async def tipos_anulacion():
 @router.get("/608/txt")
 async def descargar_608(request: Request, periodo: str, settings: ErpApiSettings = Depends(get_settings)):
     nombre, contenido = await _llamar(
-        impuestos_repository.archivo_608, _pool(request), periodo, _rnc_emisor(settings)
+        impuestos_repository.archivo_608, _pool(request), periodo, _rnc_emisor(settings), **_emisor(settings)
     )
     return _txt(nombre, contenido)
 
 
 @router.get("/608", response_model=Formato608)
 async def formato_608(request: Request, periodo: str, settings: ErpApiSettings = Depends(get_settings)):
-    return await _llamar(impuestos_repository.formato_608, _pool(request), periodo, _rnc_emisor(settings))
+    return await _llamar(impuestos_repository.formato_608, _pool(request), periodo, _rnc_emisor(settings), **_emisor(settings))
 
 
 @router.post("/608", response_model=Fila608, status_code=201)
@@ -127,19 +132,32 @@ async def guardar_ajustes(request: Request, formulario: FormularioPreCalculo, pe
 # --- Declaraciones ---------------------------------------------------------
 
 @router.get("/declaraciones", response_model=list[Declaracion])
-async def listar_declaraciones(request: Request, anio: str):
-    return await _llamar(impuestos_repository.listar_declaraciones, _pool(request), anio)
+async def listar_declaraciones(request: Request, anio: str, settings: ErpApiSettings = Depends(get_settings)):
+    return await _llamar(impuestos_repository.listar_declaraciones, _pool(request), anio, **_emisor(settings))
 
 
 @router.post("/declaraciones/{formulario}/{periodo}/presentada", response_model=Declaracion)
 async def marcar_presentada(
-    request: Request, formulario: FormularioDeclaracion, periodo: str, payload: MarcarPresentadaPayload
+    request: Request,
+    formulario: FormularioDeclaracion,
+    periodo: str,
+    payload: MarcarPresentadaPayload,
+    settings: ErpApiSettings = Depends(get_settings),
 ):
     return await _llamar(
-        impuestos_repository.marcar_presentada, _pool(request), formulario, periodo, **payload.model_dump()
+        impuestos_repository.marcar_presentada,
+        _pool(request),
+        formulario,
+        periodo,
+        **payload.model_dump(),
+        **_emisor(settings),
     )
 
 
 @router.delete("/declaraciones/{formulario}/{periodo}/presentada", response_model=Declaracion)
-async def desmarcar_presentada(request: Request, formulario: FormularioDeclaracion, periodo: str):
-    return await _llamar(impuestos_repository.desmarcar_presentada, _pool(request), formulario, periodo)
+async def desmarcar_presentada(
+    request: Request, formulario: FormularioDeclaracion, periodo: str, settings: ErpApiSettings = Depends(get_settings)
+):
+    return await _llamar(
+        impuestos_repository.desmarcar_presentada, _pool(request), formulario, periodo, **_emisor(settings)
+    )

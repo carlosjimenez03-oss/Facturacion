@@ -134,7 +134,7 @@ export interface TipoAnulacion {
 export type FormularioPreCalculo = "it1" | "ir17" | "ir2";
 
 export interface Casilla {
-  /** Número de casilla tal como lo muestra el diseño ("1", "2", …). */
+  /** Número de LÍNEA del pre-cálculo ("1", "2", …): no es la casilla del formulario oficial de la DGII. */
   codigo: string;
   etiqueta: string;
   /** Puede ser negativo (restas). */
@@ -154,7 +154,12 @@ export interface SeccionPreCalculo {
 export interface AjusteEditable {
   clave: string;
   etiqueta: string;
+  /** Valor usado en el cálculo: el manual guardado o, si no hay, el sugerido (o 0). */
   valor: string;
+  /** true si `valor` es un valor manual guardado; false si es el sugerido por el sistema. */
+  manual: boolean;
+  /** Valor que calcula el sistema (saldo a favor del mes anterior, valuación del Kardex); null si no sugiere ninguno. */
+  sugerido: string | null;
   ayuda: string | null;
 }
 
@@ -177,7 +182,8 @@ export interface PreCalculo {
 // --- Declaraciones (calendario y registro de presentadas) -----------------
 
 export type FormularioDeclaracion = "606" | "607" | "608" | "it1" | "ir17" | "ir2";
-export type EstadoDeclaracion = "pendiente" | "presentada" | "vencida";
+/** "no_aplica": 607/608 de un emisor 100 % electrónico (EMISOR_100_ELECTRONICO de erp-api); nunca vence. */
+export type EstadoDeclaracion = "pendiente" | "presentada" | "vencida" | "no_aplica";
 
 export interface Declaracion {
   formulario: FormularioDeclaracion;
@@ -210,7 +216,10 @@ export const impuestosApi = {
 
   preCalculo: (formulario: FormularioPreCalculo, periodo: string) =>
     request<PreCalculo>(`/impuestos/precalculo/${formulario}?periodo=${periodo}`),
-  /** Guarda los valores manuales del período y devuelve el pre-cálculo recalculado. */
+  /**
+   * Guarda los valores manuales del período y devuelve el pre-cálculo recalculado. Solo se envían
+   * las claves que cambian; "" borra el valor manual y vuelve al sugerido por el sistema.
+   */
   guardarAjustes: (formulario: FormularioPreCalculo, periodo: string, valores: Record<string, string>) =>
     request<PreCalculo>(`/impuestos/precalculo/${formulario}/ajustes?periodo=${periodo}`, {
       method: "PUT",
