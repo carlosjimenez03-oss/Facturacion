@@ -4,8 +4,9 @@ Este proyecto se despliega en [Dokploy](https://dokploy.com) como un único
 recurso tipo **Compose**, definido en
 [`docker-compose.dokploy.yml`](../docker-compose.dokploy.yml): los 11 módulos
 del catálogo DGII + `facturas-api` + `inventario-api` + los tres módulos de
-Receptor Electrónico + `formato-606` + el `frontend` (React) + Postgres +
-PostgREST + pgAdmin.
+Receptor Electrónico + `formato-606` + el `frontend` (React). La base de
+datos es **Supabase** (self-hosted, recurso aparte en Dokploy) — ver
+[`SUPABASE.md`](SUPABASE.md).
 
 > Este archivo es distinto de `docker-compose.yml` (+ overrides
 > `docker-compose.{test,qa,prod}.yml`), que son para **desarrollo local**
@@ -26,17 +27,13 @@ PostgREST + pgAdmin.
 |---|---|
 | `EMISOR_RNC` | RNC del emisor autorizado como electrónico por la DGII |
 | `CERTIFICADO_PASSWORD` | Contraseña del certificado `.p12` (ver paso 3) |
-| `POSTGRES_PASSWORD` | Contraseña del usuario de Postgres |
-| `PGADMIN_DEFAULT_EMAIL` | Email de acceso a pgAdmin |
-| `PGADMIN_DEFAULT_PASSWORD` | Contraseña de acceso a pgAdmin |
+| `DATABASE_URL` | Cadena de conexión al Postgres de Supabase (pooler Supavisor, puerto 5432). Ver [`SUPABASE.md`](SUPABASE.md), paso 2 |
 
 Opcionales (con default razonable si se omiten):
 
 | Variable | Default | Descripción |
 |---|---|---|
 | `APP_ENV` | `production` | `test` \| `qa` \| `production` — determina el ambiente DGII (TesteCF/CerteCF/eCF) |
-| `POSTGRES_USER` | `facturacion` | Usuario de Postgres (también usado por PostgREST y por los módulos) |
-| `POSTGRES_DB` | `facturacion` | Nombre de la base de datos |
 | `ALLOWED_ORIGINS` | `["*"]` | Orígenes CORS permitidos, formato JSON |
 | `LOG_LEVEL` | `INFO` | Nivel de log |
 | `DEBUG` | `false` | Modo debug de FastAPI |
@@ -63,88 +60,30 @@ a donde Dokploy clona el repo en el servidor). Pasos:
    usar un volumen persistente de Dokploy apuntado a esa ruta para que
    sobreviva a los redeploys).
 
-## 4. Base de datos: Postgres + PostgREST + pgAdmin
+## 4. Base de datos: Supabase
 
-#### IMPORTANTE: en un servidor ya desplegado, aplicar `004_inventario.sql`, `005_facturas_items_inventario.sql` y `006_compras606.sql` a mano
+La base de datos vive en **Supabase** instalado en Dokploy como recurso
+aparte. Instalación, migración de los datos existentes, configuración de
+`DATABASE_URL` y uso de **Supabase Studio** (ver y editar tablas): ver
+[`SUPABASE.md`](SUPABASE.md).
 
-Todo lo que esté en `db/init/*.sql` (incluyendo estos archivos nuevos) se
-corre **solo la primera vez** que arranca Postgres con un volumen de datos
-vacío (mecanismo estándar de la imagen oficial de Postgres,
-`docker-entrypoint-initdb.d`). Si ya tenías este proyecto desplegado antes de
-estos cambios, el volumen de Postgres YA existe, así que estos archivos
-nuevos **no se van a ejecutar solos** en el próximo redeploy -- `inventario-api`
-no va a poder arrancar (le va a faltar el esquema `inventario`),
-`facturas-api` va a fallar al guardar/enviar facturas con productos
-vinculados (le va a faltar la columna `items_inventario`), y `formato-606`
-no va a poder arrancar (le va a faltar el esquema `compras606`).
-
-Antes de (o justo después de) desplegar esta versión, correr una sola vez,
-contra la base de datos de producción (vía pgAdmin, o `psql`/`docker exec`
-directo al contenedor `postgres`), el contenido completo de:
-
-1. [`db/init/004_inventario.sql`](../db/init/004_inventario.sql)
-2. [`db/init/005_facturas_items_inventario.sql`](../db/init/005_facturas_items_inventario.sql)
-3. [`db/init/006_compras606.sql`](../db/init/006_compras606.sql)
-
-Son idempotentes (`CREATE ... IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`),
-así que correrlos de más no rompe nada -- solo importa correrlos al menos una
-vez antes de usar el módulo de inventario o el de Formato 606.
-
-- **Postgres** inicializa automáticamente el esquema `facturacion` (tabla
-  `envios_dgii`) la primera vez que arranca, vía
-  [`db/init/001_schema.sql`](../db/init/001_schema.sql). El servicio `postgres`
-  se construye desde [`db/Dockerfile`](../db/Dockerfile) (`build: ./db`), que
-  copia ese script dentro de la imagen en `/docker-entrypoint-initdb.d/` — no
-  se usa un bind-mount de `./db/init`, porque algunas plataformas de
-  despliegue (incluyendo Dokploy) no resuelven de forma confiable el path
-  relativo de un bind-mount de subcarpeta del repo.
 - Los módulos `recepcion`, `recepcion_rfce`, `aprobacion_comercial` y
-  `anulacion_encf` registran ahí, de forma best-effort (nunca bloquean la
-  respuesta si falla), cada envío a la DGII: módulo, RNC emisor, e-NCF,
-  trackId, estado/código y la respuesta completa de la DGII.
-- `facturas-api` (backend del frontend) usa la misma base de datos, pero de
-  forma **obligatoria** (no best-effort): las facturas que crea el usuario
-  desde el frontend viven únicamente en la tabla `facturacion.facturas`
-  ([`db/init/002_facturas.sql`](../db/init/002_facturas.sql)) — si
-  `DATABASE_URL` no está disponible, `facturas-api` no arranca.
-- `inventario-api` (catálogo de productos, proveedores, compras y kardex de
-  inventario) usa el esquema `inventario`
-  ([`db/init/004_inventario.sql`](../db/init/004_inventario.sql)), también de
-  forma obligatoria -- sin `DATABASE_URL` alcanzable, no arranca. La relación
-  entre una línea de factura y un producto del catálogo vive en
-  `facturacion.facturas.items_inventario`
-  ([`db/init/005_facturas_items_inventario.sql`](../db/init/005_facturas_items_inventario.sql)),
-  ver "Inventario: reglas de negocio" más abajo.
-- `formato-606` (Compras de Bienes y Servicios, Norma General 07-2018/05-2019)
-  usa el esquema `compras606`
-  ([`db/init/006_compras606.sql`](../db/init/006_compras606.sql)), también de
-  forma obligatoria -- sin `DATABASE_URL` alcanzable, no arranca. `receptor-recepcion`
-  y `facturas-api` (para los tipos 41/43/47 autoemitidos) escriben ahí
-  directamente, de forma best-effort, cada e-CF que debe reportarse en el
-  606; `formato-606` solo lee/clasifica esos renglones y genera el TXT — ver
-  "Formato 606" más abajo y [`docs/dgii/FORMATO_606.md`](dgii/FORMATO_606.md).
-- **PostgREST** expone ese esquema como API REST de **solo lectura** (rol
-  `web_anon`) en el puerto interno `3000`. No requiere autenticación por
-  defecto — ver la nota de seguridad abajo.
-- **pgAdmin** (puerto interno `80`, publicado en el host como `8901`) permite
-  administrar la base visualmente; conectarse ahí al host `postgres`, puerto
-  `5432`, con `POSTGRES_USER`/`POSTGRES_PASSWORD`.
+  `anulacion_encf` registran en `facturacion.envios_dgii`, de forma
+  best-effort (nunca bloquean la respuesta si falla), cada envío a la DGII.
+- `facturas-api` usa `facturacion.facturas` de forma **obligatoria**: si
+  `DATABASE_URL` no está disponible, no arranca.
+- `inventario-api` usa el esquema `inventario` y `formato-606` el esquema
+  `compras606`, ambos de forma obligatoria.
+- Los cambios de esquema futuros se agregan como `db/init/00N_*.sql`
+  idempotentes y se ejecutan una vez en Studio → SQL Editor (en una
+  instalación nueva, en orden desde `001`).
 
 ### Dominios (exponer al público)
 
-`postgres` y `postgrest` NO publican puertos al host (`expose`, no `ports`)
-— son alcanzables solo dentro de la red interna `facturacion`.
-
-`pgadmin` sí publica su puerto al host (`ports: ["8901:80"]`), en vez de usar
-la función de "Domains" de Dokploy (que depende de un Traefik gestionado por
-Dokploy — en instalaciones donde ese Traefik no está desplegado, como cuando
-coexiste con otro reverse proxy ya usando los puertos 80/443, esa función no
-enruta nada). Para darle un dominio propio a pgAdmin en ese caso, apuntar un
-Cloudflare Tunnel (u otro reverse proxy externo) directo a `<IP-del-servidor>:8901`,
-en vez de depender de Dokploy.
-
-**No exponer pgAdmin ni Postgres directamente a Internet** sin al menos
-restringir por IP o poner autenticación adicional delante.
+Para administrar la base visualmente use **Supabase Studio** (dominio del
+servicio `kong` del recurso de Supabase, ver [`SUPABASE.md`](SUPABASE.md)).
+**No exponga el puerto 5432 del pooler de Supabase a Internet** sin
+restringirlo por firewall.
 
 #### IMPORTANTE: no asignar un "Domain" de Dokploy a `facturas-api` ni a `inventario-api` (ni a ningún módulo)
 
@@ -165,8 +104,7 @@ panel de Dokploy: cuando le asignas un Domain a un servicio del Compose (p. ej.
 `apifa.acentosdeco.lat` -> `facturas-api`), Dokploy gestiona el enrutamiento de
 ese contenedor por fuera de `docker compose up` (para conectarlo a la red de
 su Traefik) y, en instalaciones donde ese Traefik no está activo o coexiste
-con otro reverse proxy en 80/443 (exactamente el caso de este servidor, ver
-párrafo de pgAdmin arriba), ese paso de Dokploy puede dejar el contenedor sin
+con otro reverse proxy en 80/443, ese paso de Dokploy puede dejar el contenedor sin
 la red `facturacion` original en el siguiente redeploy. Por eso el fix manual
 (`docker network connect`) soluciona el síntoma una vez, pero vuelve a pasar
 en el próximo despliegue: la causa (el Domain de Dokploy) sigue ahí.
@@ -190,20 +128,8 @@ públicamente por su cuenta (p. ej. para depurar con `curl` o integrarlo con
 otro sistema), usa su puerto ya publicado directo
 (`http://<IP-del-servidor>:8012`, ver sección 5) o -- para HTTPS con
 hostname propio -- un Cloudflare Tunnel (u otro reverse proxy externo, fuera
-de Dokploy) apuntando ahí, igual que se documenta arriba para pgAdmin. Pero
+de Dokploy) apuntando ahí. Pero
 para que el frontend funcione, ninguna de las dos hace falta.
-
-### Nota de seguridad sobre PostgREST
-
-El rol anónimo (`web_anon`) tiene acceso de **solo lectura** a
-`facturacion.envios_dgii` — nadie puede escribir a través de PostgREST (las
-escrituras solo ocurren desde los módulos, vía conexión directa a Postgres).
-Aun así, si le asignas un dominio público a `postgrest`, cualquiera con esa
-URL podrá leer el log de auditoría completo (RNC, e-NCF, respuestas de la
-DGII). Si eso es sensible, no le asignes dominio público (queda accesible
-solo dentro de la red interna), o configura `PGRST_JWT_SECRET` y ajusta los
-roles/grants en `db/init/001_schema.sql` para exigir autenticación antes de
-exponerlo.
 
 ## 5. Puertos de los módulos
 
@@ -290,7 +216,7 @@ desplegado de forma confiable (coexiste con otro reverse proxy en 80/443), y
 asignarle un Domain a un servicio del Compose puede dejarlo sin la red
 `facturacion` interna en el siguiente redeploy. Ese riesgo aplica igual aquí.
 
-**Recomendado:** igual que se documenta para pgAdmin en la sección 4, usar
+**Recomendado:** usar
 un Cloudflare Tunnel (u otro reverse proxy externo, fuera de Dokploy)
 apuntando directo a `http://<IP-del-servidor>:8015` (autenticación),
 `:8016` (recepción) y `:8017` (aprobación comercial), cada uno con su propio
@@ -343,7 +269,7 @@ curl https://<dominio-o-ip>:8001/health
 ```
 
 Y que la auditoría funciona: enviar un e-CF de prueba por `recepcion` y
-verificar la fila en Postgres (vía pgAdmin, o `SELECT * FROM
+verificar la fila en Supabase Studio (Table Editor, o en el SQL Editor `SELECT * FROM
 facturacion.envios_dgii ORDER BY creado_en DESC LIMIT 5;`).
 
 `inventario-api` responde igual:

@@ -62,15 +62,15 @@ Cada módulo firma sus propios XML (cuando aplica) y obtiene su propio token
 de la DGII a través de `libs.ecf_common.auth.token_provider.TokenProvider`
 — sin llamarse entre sí por HTTP.
 
-## Auditoría (PostgreSQL + PostgREST + pgAdmin)
+## Base de datos (Supabase)
 
 Los módulos que envían algo a la DGII (`recepcion`, `recepcion_rfce`,
 `aprobacion_comercial`, `anulacion_encf`) registran cada envío —best-effort,
-nunca bloqueante— en `facturacion.envios_dgii` (Postgres), vía
-`libs.ecf_common.db`. Ese esquema se expone de solo lectura a través de
-**PostgREST**, y **pgAdmin** queda disponible para administrar la base
-visualmente. Ver [`docs/DOKPLOY.md`](docs/DOKPLOY.md) para el despliegue
-completo (incluye Postgres/PostgREST/pgAdmin) en Dokploy.
+nunca bloqueante— en `facturacion.envios_dgii`, vía `libs.ecf_common.db`.
+En producción la base es **Supabase** self-hosted en Dokploy, con **Supabase
+Studio** para ver y editar los datos. Ver [`docs/SUPABASE.md`](docs/SUPABASE.md)
+(instalación, migración y acceso) y [`docs/DOKPLOY.md`](docs/DOKPLOY.md).
+En desarrollo local `docker-compose.yml` sigue levantando un Postgres propio.
 
 ## Desarrollo local
 

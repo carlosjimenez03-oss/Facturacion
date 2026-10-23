@@ -132,8 +132,8 @@ Kubernetes, Cloud Run, etc.).
 El despliegue efectivo del proyecto se hace en [Dokploy](https://dokploy.com)
 con un archivo separado y autocontenido,
 [`docker-compose.dokploy.yml`](../docker-compose.dokploy.yml) (los 11
-módulos + Postgres + PostgREST + pgAdmin). Ver la guía completa en
-[`docs/DOKPLOY.md`](DOKPLOY.md).
+módulos; la base de datos es Supabase, ver [`docs/SUPABASE.md`](SUPABASE.md)).
+Ver la guía completa en [`docs/DOKPLOY.md`](DOKPLOY.md).
 
 ## Flujo de ramas sugerido
 
