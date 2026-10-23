@@ -14,9 +14,10 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import Response
 
 from libs.ecf_common.compras606 import TIPOS_BIENES_SERVICIOS
+from libs.ecf_common.ecf_recibidos import bytes_xml
 
 from . import compras_calculos, compras_repository
-from .aprobacion_client import AprobacionComercialError, enviar_aprobacion_comercial
+from .aprobacion_client import AprobacionComercialError, entregar_acecf_al_emisor, enviar_aprobacion_comercial
 from .compras_repository import CompraNoEncontradaError, ConflictoComprasError
 from .config import ErpApiSettings, get_settings
 from .impuestos_repository import ConflictoImpuestosError
@@ -104,9 +105,10 @@ async def descargar_xml_bandeja(request: Request, ecf_id: str):
     nombre, xml = await _llamar(
         compras_repository.xml_ecf_recibido, _pool(request), _uuid(ecf_id), no_encontrado=_ECF_NO_ENCONTRADO
     )
+    contenido, codificacion = bytes_xml(xml)  # con la codificación que declara el XML
     return Response(
-        content=xml.encode("utf-8"),
-        media_type="text/xml; charset=utf-8",
+        content=contenido,
+        media_type=f"text/xml; charset={codificacion}",
         headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
     )
 
@@ -121,6 +123,18 @@ def _enviar(settings: ErpApiSettings):
     return enviar
 
 
+def _entregar(settings: ErpApiSettings):
+    rnc_comprador = re.sub(r"\D", "", settings.emisor_rnc or "")
+
+    async def entregar(rnc_emisor: str, encf: str, xml: bytes) -> str:
+        return await entregar_acecf_al_emisor(
+            settings.consulta_directorio_url, rnc_emisor=rnc_emisor, nombre_archivo=f"{rnc_comprador}{encf}.xml",
+            xml=xml, timeout=settings.entrega_emisor_timeout_segundos,
+        )
+
+    return entregar
+
+
 async def _decidir(request: Request, ecf_id: str, settings: ErpApiSettings, *, aprobado: bool, motivo: str | None):
     return await _llamar(
         compras_repository.decidir_aprobacion,
@@ -130,6 +144,7 @@ async def _decidir(request: Request, ecf_id: str, settings: ErpApiSettings, *, a
         motivo=motivo,
         rnc_comprador=re.sub(r"\D", "", settings.emisor_rnc or ""),
         enviar=_enviar(settings),
+        entregar=_entregar(settings),
         no_encontrado=_ECF_NO_ENCONTRADO,
     )
 

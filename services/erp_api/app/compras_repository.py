@@ -28,6 +28,7 @@ Igual que `repository.py`, este repositorio SÍ requiere una base de datos.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from collections.abc import Awaitable, Callable
@@ -51,10 +52,14 @@ from libs.ecf_common.compras606 import (
 from libs.ecf_common.ecf_recibidos import datos_606_desde_ecf, items_ecf, parsear_xml
 
 from . import compras_calculos
+from .aprobacion_client import AprobacionComercialError
 from .compras_calculos import CamposPago606, Pago
-from .impuestos_repository import _exigir_no_presentada, validar_periodo_mensual
+from . import impuestos_repository
+from .impuestos_repository import ConflictoImpuestosError, validar_periodo_mensual
 from .precalculos import nombre_periodo
 from .repository import _ZONA_RD, DatosInvalidosError, _monto_dgii, _redondear, hoy
+
+logger = logging.getLogger(__name__)
 
 _CERO = Decimal("0")
 
@@ -65,6 +70,30 @@ class CompraNoEncontradaError(Exception):
 
 class ConflictoComprasError(Exception):
     """La operación no aplica en el estado actual (409)."""
+
+
+_NOMBRE_FORMULARIO = {
+    "606": "Formato 606", "607": "Formato 607", "608": "Formato 608", "it1": "IT-1", "ir17": "IR-17", "ir2": "IR-2",
+}
+
+
+async def _exigir_no_presentada(conn: asyncpg.Connection, formulario: str, periodo: str) -> None:
+    """`impuestos_repository._exigir_no_presentada` (candado del período y
+    409 si ya está presentado) con el mensaje para la pantalla: "El IT-1 de
+    octubre 2026 ya está marcado como presentado…"."""
+    try:
+        await impuestos_repository._exigir_no_presentada(conn, formulario, periodo)
+    except ConflictoImpuestosError:
+        presentada = await conn.fetchval(
+            "SELECT presentada_en FROM impuestos.declaraciones_presentadas WHERE formulario = $1 AND periodo = $2",
+            formulario,
+            periodo,
+        )
+        cuando = f" (el {presentada:%d/%m/%Y})" if presentada else ""
+        raise ConflictoImpuestosError(
+            f"El {_NOMBRE_FORMULARIO.get(formulario, formulario)} de {nombre_periodo(periodo)} ya está marcado "
+            f"como presentado{cuando}: desmárquelo en Impuestos para poder modificarlo"
+        ) from None
 
 
 def _rnc(valor: str | None) -> str:
@@ -85,8 +114,16 @@ _TOTAL_606 = (
     "(r.monto_servicios + r.monto_bienes + r.itbis_facturado + r.impuesto_selectivo_consumo"
     " + r.otros_impuestos + r.monto_propina_legal)"
 )
+# Total por pagar de un renglón `r` del 606 con su e-CF recibido `er`: el
+# MontoTotal del e-CF (lo que el proveedor cobra, con ITBIS, selectivo,
+# otros impuestos y propina) o, sin e-CF, la suma de las casillas del 606.
+_TOTAL_CXP = f"(CASE WHEN er.id IS NOT NULL AND er.monto_total > 0 THEN er.monto_total ELSE {_TOTAL_606} END)"
 # Mismo criterio que `_SIGNO_606` de impuestos_repository.
 _ES_NOTA_CREDITO = "(r.ncf ~* '^(E34|B04)' OR (length(r.ncf) = 19 AND substr(r.ncf, 10, 2) = '04'))"
+# Ventana tras la que un envío de aprobación comercial que quedó 'enviando'
+# (el proceso murió a mitad) se puede volver a intentar. Mayor que el
+# timeout de aprobacion_comercial (60 s) más la entrega al proveedor.
+_ENVIO_VENCIDO = "interval '5 minutes'"
 
 # Datos del proveedor de un renglón `r` del 606 (ver docstring del módulo).
 _JOINS_PROVEEDOR = """
@@ -113,6 +150,8 @@ _NOMBRE_PROVEEDOR = (
 # rechazados comercialmente) con lo pagado y lo pendiente:
 #   pendiente = total − notas de crédito del proveedor que la modifican
 #               − retenciones del 606 − pagos no anulados.
+# `cxp_docs` incluye además las notas de crédito (para su detalle y para
+# editarlas): sin pendiente propio, con la factura que modifican (`afecta`).
 _CTE_CXP = f"""
     cxp_pagos AS (
         SELECT registro606_id, sum(monto) AS pagado
@@ -121,12 +160,14 @@ _CTE_CXP = f"""
         GROUP BY registro606_id
     ),
     cxp_notas AS (
-        SELECT r.rnc_cedula, upper(r.ncf_modificado) AS ncf_afectado, sum({_TOTAL_606}) AS acreditado
+        SELECT r.rnc_cedula, upper(r.ncf_modificado) AS ncf_afectado, sum({_TOTAL_CXP}) AS acreditado
         FROM compras606.registros r
+        LEFT JOIN recepcion.ecf_recibidos er ON er.compra606_id = r.id
         WHERE r.ncf_modificado IS NOT NULL AND {_ES_NOTA_CREDITO}
+          AND COALESCE(er.estado_aprobacion, '') <> 'rechazado'
         GROUP BY 1, 2
     ),
-    cxp AS (
+    cxp_docs AS (
         SELECT
             r.id AS registro606_id,
             r.ncf,
@@ -137,7 +178,8 @@ _CTE_CXP = f"""
             COALESCE(cf.contacto_id, cl.id) AS contacto_id,
             COALESCE(cf.compra_inventario_id, er.compra_inventario_id) AS compra_inventario_id,
             er.id AS ecf_recibido_id,
-            er.estado_aprobacion,
+            CASE WHEN er.estado_aprobacion = 'enviando' THEN 'pendiente' ELSE er.estado_aprobacion END
+                AS estado_aprobacion,
             f.id AS factura_id,
             cf.concepto,
             r.tipo_bienes_servicios,
@@ -149,19 +191,27 @@ _CTE_CXP = f"""
             ) AS vence,
             (r.monto_servicios + r.monto_bienes)::numeric(14, 2) AS monto_facturado,
             r.itbis_facturado,
-            {_TOTAL_606}::numeric(14, 2) AS total,
+            {_TOTAL_CXP}::numeric(14, 2) AS total,
             COALESCE(n.acreditado, 0)::numeric(14, 2) AS notas_credito,
             r.tipo_retencion_isr,
             r.monto_retencion_renta AS retencion_isr,
             r.itbis_retenido AS retencion_itbis,
             (r.itbis_retenido + r.monto_retencion_renta)::numeric(14, 2) AS retenciones,
             COALESCE(p.pagado, 0)::numeric(14, 2) AS pagado,
-            ({_TOTAL_606} - COALESCE(n.acreditado, 0) - r.itbis_retenido - r.monto_retencion_renta
-             - COALESCE(p.pagado, 0))::numeric(14, 2) AS pendiente,
+            CASE WHEN {_ES_NOTA_CREDITO} THEN 0
+                 ELSE {_TOTAL_CXP} - COALESCE(n.acreditado, 0) - r.itbis_retenido - r.monto_retencion_renta
+                      - COALESCE(p.pagado, 0)
+            END::numeric(14, 2) AS pendiente,
             {_fecha_606("r.fecha_pago")} AS fecha_pago,
             r.forma_pago,
             {_monto_dgii("{Encabezado,Totales,TotalISRRetencion}")} AS retencion_isr_ecf,
-            {_monto_dgii("{Encabezado,Totales,TotalITBISRetenido}")} AS retencion_itbis_ecf
+            {_monto_dgii("{Encabezado,Totales,TotalITBISRetenido}")} AS retencion_itbis_ecf,
+            {_ES_NOTA_CREDITO} AS es_nota_credito,
+            r.ncf_modificado,
+            CASE WHEN {_ES_NOTA_CREDITO} AND r.ncf_modificado IS NOT NULL THEN (
+                SELECT a.id FROM compras606.registros a
+                WHERE a.rnc_cedula = r.rnc_cedula AND upper(a.ncf) = upper(r.ncf_modificado)
+            ) END AS afecta_registro606_id
         FROM compras606.registros r
         {_JOINS_PROVEEDOR}
         CROSS JOIN LATERAL (
@@ -169,32 +219,43 @@ _CTE_CXP = f"""
         ) fc
         LEFT JOIN cxp_pagos p ON p.registro606_id = r.id
         LEFT JOIN cxp_notas n ON n.rnc_cedula = r.rnc_cedula AND n.ncf_afectado = upper(r.ncf)
-        WHERE NOT {_ES_NOTA_CREDITO}
-          AND r.ncf !~* '^E43'
+        WHERE r.ncf !~* '^E43'
           AND COALESCE(er.estado_aprobacion, '') <> 'rechazado'
+    ),
+    cxp AS (
+        SELECT * FROM cxp_docs WHERE NOT es_nota_credito
     )
 """
 
-# Estado calculado de cada cuenta por pagar; $1 = hoy.
-_SELECT_CXP_CON_ESTADO = f"""
+# Estado calculado de cada cuenta por pagar (`cxp`) o documento (`cxp_docs`,
+# también las notas de crédito, que quedan 'pagada': no se pagan); $1 = hoy.
+def _select_con_estado(origen: str) -> str:
+    return f"""
     WITH {_CTE_CXP}
     SELECT * FROM (
         SELECT
-            cxp.*,
+            {origen}.*,
             CASE
                 WHEN pendiente <= 0 THEN 'pagada'
                 WHEN vence < $1::date THEN 'vencida'
                 ELSE 'pendiente'
             END AS estado,
             CASE WHEN pendiente > 0 AND vence < $1::date THEN $1::date - vence ELSE 0 END AS dias_vencida
-        FROM cxp
+        FROM {origen}
     ) cuentas
 """
 
 
+_SELECT_CXP_CON_ESTADO = _select_con_estado("cxp")
+_SELECT_DOCS_CON_ESTADO = _select_con_estado("cxp_docs")
+
+
 def _fila_cxp(fila: asyncpg.Record) -> dict[str, Any]:
     datos = dict(fila)
-    for campo in ("registro606_id", "contacto_id", "compra_inventario_id", "ecf_recibido_id", "factura_id"):
+    for campo in (
+        "registro606_id", "contacto_id", "compra_inventario_id", "ecf_recibido_id", "factura_id",
+        "afecta_registro606_id",
+    ):
         if datos.get(campo) is not None:
             datos[campo] = str(datos[campo])
     datos["tipo_ecf"] = compras_calculos.tipo_ecf_de_ncf(datos["ncf"])
@@ -204,10 +265,14 @@ def _fila_cxp(fila: asyncpg.Record) -> dict[str, Any]:
 
 # --- Bandeja de entrada (recepcion.ecf_recibidos) ---------------------------------------------------------
 
-_COLUMNAS_ECF_RECIBIDO = """
+# 'enviando' (la aprobación/rechazo en camino a la DGII) se muestra como
+# 'pendiente' con `envio_en_curso`: la decisión todavía no está tomada.
+_COLUMNAS_ECF_RECIBIDO = f"""
     id, rnc_emisor, razon_social_emisor, rnc_comprador, encf, tipo_ecf, fecha_emision,
     fecha_limite_pago, monto_total, itbis_total, recibido_en, estado_aprobacion, motivo_rechazo,
-    aprobado_en, error_aprobacion, compra606_id, compra_inventario_id
+    aprobado_en, error_aprobacion, compra606_id, compra_inventario_id, firma_valida, firma_detalle,
+    enviado_al_emisor, error_envio_emisor, decision_en_envio,
+    (estado_aprobacion = 'enviando' AND envio_iniciado_en > now() - {_ENVIO_VENCIDO}) AS envio_en_curso
 """
 
 
@@ -216,6 +281,10 @@ def _fila_ecf(fila: asyncpg.Record) -> dict[str, Any]:
     for campo in ("id", "compra606_id", "compra_inventario_id"):
         if datos.get(campo) is not None:
             datos[campo] = str(datos[campo])
+    if datos["estado_aprobacion"] == "enviando":
+        datos["estado_aprobacion"] = "pendiente"
+    datos.pop("decision_en_envio", None)
+    datos["envio_en_curso"] = bool(datos["envio_en_curso"])
     return datos
 
 
@@ -231,8 +300,8 @@ async def listar_ecf_recibidos(
     condiciones = []
     valores: list[Any] = []
     if estado is not None:
-        valores.append(estado)
-        condiciones.append(f"estado_aprobacion = ${len(valores)}")
+        valores.append(["pendiente", "enviando"] if estado == "pendiente" else [estado])
+        condiciones.append(f"estado_aprobacion = ANY(${len(valores)}::text[])")
     if q:
         valores.append(f"%{q}%")
         n = len(valores)
@@ -303,6 +372,117 @@ async def xml_ecf_recibido(pool: asyncpg.Pool, ecf_id: uuid.UUID) -> tuple[str, 
 
 
 EnviarAprobacion = Callable[[str, bytes], Awaitable[dict[str, Any]]]
+# (rnc_emisor, encf, ACECF firmado): entrega al proveedor; lanza si falla.
+EntregarAlEmisor = Callable[[str, str, bytes], Awaitable[Any]]
+
+
+async def _quitar_606_rechazado(conn: asyncpg.Connection, fila: asyncpg.Record, *, borrar: bool) -> None:
+    """Un e-CF rechazado comercialmente no es una compra válida para el
+    comprador: su renglón del 606 (el vinculado o el de su RNC + e-NCF) sale
+    del 606 y con él su ITBIS adelantado del IT-1. Valida (409) que no tenga
+    pagos vigentes y que el 606 / IT-1 (y, si tenía retenciones clasificadas
+    a mano, el IT-1 / IR-17 del mes de pago) no estén presentados; con
+    `borrar`, además lo borra. Dentro de una transacción. El rechazo no se
+    puede deshacer (el ACECF ya está en la DGII), así que no hay que
+    restaurarlo; si el proveedor reenvía el e-CF, receptor_recepcion no lo
+    vuelve a registrar (`ecf_recibidos.ecf_rechazado`)."""
+    registros = await conn.fetch(
+        """
+        SELECT * FROM compras606.registros
+        WHERE id = $1 OR (rnc_cedula = $2 AND upper(ncf) = upper($3))
+        FOR UPDATE
+        """,
+        fila["compra606_id"],
+        fila["rnc_emisor"],
+        fila["encf"],
+    )
+    for registro in registros:
+        pagos = await conn.fetchval(
+            "SELECT count(*) FROM compras.pagos WHERE registro606_id = $1 AND NOT anulado", registro["id"]
+        )
+        if pagos:
+            raise ConflictoComprasError(
+                f"El e-CF {fila['encf']} tiene pagos registrados: anúlelos antes de rechazarlo "
+                "(sus retenciones están en el IT-1/IR-17)"
+            )
+        afectadas = {("606", registro["periodo"])}
+        if registro["itbis_facturado"] or registro["itbis_costo"] or registro["itbis_proporcionalidad"]:
+            afectadas.add(("it1", registro["periodo"]))
+        afectadas |= compras_calculos.declaraciones_afectadas(
+            CamposPago606.desde(registro), CamposPago606(fecha_pago=None, forma_pago=None)
+        )
+        for formulario, periodo in sorted(afectadas):
+            await _exigir_no_presentada(conn, formulario, periodo)
+        if borrar:
+            await conn.execute("UPDATE recepcion.ecf_recibidos SET compra606_id = NULL WHERE compra606_id = $1", registro["id"])
+            await conn.execute("DELETE FROM compras.pagos WHERE registro606_id = $1", registro["id"])
+            await conn.execute("DELETE FROM compras.facturas WHERE registro606_id = $1", registro["id"])
+            await conn.execute("DELETE FROM compras606.registros WHERE id = $1", registro["id"])
+
+
+async def _tomar_envio(
+    conn: asyncpg.Connection, ecf_id: uuid.UUID, *, aprobado: bool, motivo: str | None, rnc_comprador: str
+) -> tuple[asyncpg.Record, bytes]:
+    """Paso 1 de `decidir_aprobacion`, en una transacción corta: valida, arma
+    el ACECF y marca el e-CF 'enviando'. Devuelve (fila, ACECF sin firmar)."""
+    async with conn.transaction():
+        fila = await conn.fetchrow(
+            f"SELECT {_COLUMNAS_ECF_RECIBIDO} FROM recepcion.ecf_recibidos WHERE id = $1 FOR UPDATE", ecf_id
+        )
+        if fila is None:
+            raise CompraNoEncontradaError(str(ecf_id))
+        if fila["estado_aprobacion"] == "enviando" and fila["envio_en_curso"]:
+            raise ConflictoComprasError(
+                f"La {'aprobación' if fila['decision_en_envio'] == 'aprobado' else 'decisión'} comercial del "
+                f"e-CF {fila['encf']} se está enviando a la DGII: espere el resultado"
+            )
+        if fila["estado_aprobacion"] not in ("pendiente", "enviando"):
+            raise ConflictoComprasError(
+                f"El e-CF {fila['encf']} ya fue {fila['estado_aprobacion']} comercialmente"
+            )
+        if fila["fecha_emision"] is None:
+            raise DatosInvalidosError(
+                f"El e-CF {fila['encf']} no tiene una FechaEmision válida y el ACECF la exige: "
+                "no se puede aprobar ni rechazar por este medio"
+            )
+        if not aprobado:
+            await _quitar_606_rechazado(conn, fila, borrar=False)  # falla antes de enviar nada
+        xml = compras_calculos.construir_acecf(
+            rnc_emisor=fila["rnc_emisor"],
+            encf=fila["encf"],
+            fecha_emision=fila["fecha_emision"],
+            monto_total=fila["monto_total"],
+            rnc_comprador=_rnc(fila["rnc_comprador"]) or _rnc(rnc_comprador),
+            aprobado=aprobado,
+            motivo_rechazo=motivo,
+            fecha_hora=datetime.now(_ZONA_RD),
+        )
+        await conn.execute(
+            """
+            UPDATE recepcion.ecf_recibidos
+            SET estado_aprobacion = 'enviando', decision_en_envio = $2, envio_iniciado_en = now(),
+                motivo_rechazo = $3, actualizado_en = now()
+            WHERE id = $1
+            """,
+            ecf_id,
+            "aprobado" if aprobado else "rechazado",
+            motivo,
+        )
+    return fila, xml
+
+
+async def _devolver_a_pendiente(pool: asyncpg.Pool, ecf_id: uuid.UUID, error: str) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE recepcion.ecf_recibidos
+            SET estado_aprobacion = 'pendiente', decision_en_envio = NULL, envio_iniciado_en = NULL,
+                motivo_rechazo = NULL, error_aprobacion = $2, actualizado_en = now()
+            WHERE id = $1 AND estado_aprobacion = 'enviando'
+            """,
+            ecf_id,
+            error,
+        )
 
 
 async def decidir_aprobacion(
@@ -313,78 +493,122 @@ async def decidir_aprobacion(
     motivo: str | None,
     rnc_comprador: str,
     enviar: EnviarAprobacion,
+    entregar: EntregarAlEmisor | None = None,
 ) -> dict[str, Any]:
     """Arma el ACECF (aprobación o rechazo), lo envía con `enviar(encf, xml)`
     -- `aprobacion_comercial`, que lo firma y lo manda a la DGII -- y guarda
-    el resultado. Solo desde 'pendiente' (409 si ya se decidió). Si el envío
-    falla, el e-CF sigue pendiente, se guarda el error y se relanza la
-    excepción de `enviar` (compras.py responde 502).
+    el resultado. Solo desde 'pendiente' (409 si ya se decidió o si se está
+    enviando); 409 también si se rechaza un e-CF con pagos vigentes, y 422
+    si no tiene FechaEmision (el ACECF la exige).
 
-    La fila queda bloqueada (FOR UPDATE) durante el envío: dos clics
-    simultáneos no mandan dos ACECF del mismo e-CF.
+    Tres pasos para no tener la fila bloqueada ni una conexión ocupada
+    durante la llamada HTTP (hasta 60 s; receptor_recepcion debe poder
+    actualizar la fila de un reenvío sin esperar, y 5 aprobaciones lentas
+    no deben agotar el pool):
+
+    1. Transacción corta: valida y marca 'enviando' (dos clics simultáneos
+       no mandan dos ACECF: el segundo ve 'enviando' y recibe 409). Si un
+       envío se queda 'enviando' más de `_ENVIO_VENCIDO` (el proceso murió),
+       se puede volver a intentar.
+    2. Envía, sin conexión tomada.
+    3. Guarda el resultado. Solo `codigo` "1" de la DGII es éxito
+       (`compras_calculos.resultado_aprobacion_dgii`); si no, vuelve a
+       'pendiente' con `error_aprobacion` y lanza AprobacionComercialError
+       (502), o ConflictoComprasError (409) si la DGII dice que el e-CF no
+       requiere aprobación comercial.
+
+    Aceptado por la DGII, entrega el ACECF firmado al proveedor con
+    `entregar` (best-effort: el resultado queda en `enviado_al_emisor` /
+    `error_envio_emisor` y nunca hace fallar la aprobación).
     """
-    if not aprobado and not (motivo or "").strip():
+    motivo = (motivo or "").strip() or None
+    if not aprobado and motivo is None:
         raise DatosInvalidosError("Indique el motivo del rechazo")
-    error: Exception | None = None
     async with pool.acquire() as conn:
-        async with conn.transaction():
-            fila = await _obtener_ecf(conn, ecf_id, bloquear=True)
-            if fila["estado_aprobacion"] != "pendiente":
-                raise ConflictoComprasError(
-                    f"El e-CF {fila['encf']} ya fue {fila['estado_aprobacion']} comercialmente"
-                )
-            xml = compras_calculos.construir_acecf(
-                rnc_emisor=fila["rnc_emisor"],
-                encf=fila["encf"],
-                fecha_emision=fila["fecha_emision"],
-                monto_total=fila["monto_total"],
-                rnc_comprador=_rnc(fila["rnc_comprador"]) or _rnc(rnc_comprador),
-                aprobado=aprobado,
-                motivo_rechazo=(motivo or "").strip() or None,
-                fecha_hora=datetime.now(_ZONA_RD),
-            )
+        fila, xml = await _tomar_envio(conn, ecf_id, aprobado=aprobado, motivo=motivo, rnc_comprador=rnc_comprador)
+    try:
+        respuesta = dict(await enviar(fila["encf"], xml))
+    except Exception as exc:
+        await _devolver_a_pendiente(pool, ecf_id, str(exc))
+        raise
+    xml_firmado = respuesta.pop("xml_firmado", None)
+    resultado, mensajes = compras_calculos.resultado_aprobacion_dgii(respuesta)
+    if resultado != "aceptada":
+        codigo = respuesta.get("codigo")
+        if resultado == "no_requerida":
+            error = f"La DGII indica que el e-CF {fila['encf']} no requiere aprobación comercial: {mensajes}"
+        else:
+            error = f"La DGII no aceptó la aprobación comercial del e-CF {fila['encf']} (código {codigo}): {mensajes}"
+        await _devolver_a_pendiente(pool, ecf_id, error)
+        if resultado == "no_requerida":
+            raise ConflictoComprasError(error)
+        raise AprobacionComercialError(error)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE recepcion.ecf_recibidos
+            SET estado_aprobacion = decision_en_envio, decision_en_envio = NULL, envio_iniciado_en = NULL,
+                aprobado_en = now(), respuesta_aprobacion = $2::jsonb, acecf_xml = $3, error_aprobacion = NULL,
+                actualizado_en = now()
+            WHERE id = $1 AND estado_aprobacion = 'enviando'
+            """,
+            ecf_id,
+            json.dumps(respuesta),
+            xml_firmado,
+        )
+        if not aprobado:
             try:
-                respuesta = await enviar(fila["encf"], xml)
+                async with conn.transaction():
+                    await _quitar_606_rechazado(conn, await _obtener_ecf(conn, ecf_id), borrar=True)
+            except (ConflictoComprasError, ConflictoImpuestosError) as exc:
+                # Cambió algo durante el envío (p. ej. se marcó el IT-1): el rechazo
+                # ya está en la DGII; el renglón queda en el 606 para quitarlo a mano.
+                logger.warning("El e-CF %s se rechazó, pero su renglón del 606 sigue: %s", fila["encf"], exc)
+    if entregar is not None:
+        if xml_firmado:
+            try:
+                await entregar(fila["rnc_emisor"], fila["encf"], xml_firmado.encode("utf-8"))
             except Exception as exc:
-                error = exc
-                await conn.execute(
-                    "UPDATE recepcion.ecf_recibidos SET error_aprobacion = $2, actualizado_en = now() WHERE id = $1",
-                    ecf_id,
-                    str(exc),
-                )
+                logger.warning("No se pudo entregar el ACECF de %s al proveedor: %s", fila["encf"], exc)
+                enviado, error_envio = False, str(exc) or exc.__class__.__name__
             else:
-                await conn.execute(
-                    """
-                    UPDATE recepcion.ecf_recibidos
-                    SET estado_aprobacion = $2, motivo_rechazo = $3, aprobado_en = now(),
-                        respuesta_aprobacion = $4::jsonb, error_aprobacion = NULL, actualizado_en = now()
-                    WHERE id = $1
-                    """,
-                    ecf_id,
-                    "aprobado" if aprobado else "rechazado",
-                    None if aprobado else motivo.strip(),
-                    json.dumps(respuesta),
-                )
-            fila = await _obtener_ecf(conn, ecf_id)
-    if error is not None:
-        raise error
-    return _detalle_ecf(fila)
+                enviado, error_envio = True, None
+        else:
+            enviado, error_envio = False, "aprobacion-comercial no devolvió el ACECF firmado"
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE recepcion.ecf_recibidos
+                SET enviado_al_emisor = $2, error_envio_emisor = $3, actualizado_en = now()
+                WHERE id = $1
+                """,
+                ecf_id,
+                enviado,
+                error_envio,
+            )
+    async with pool.acquire() as conn:
+        return _detalle_ecf(await _obtener_ecf(conn, ecf_id))
 
 
 async def _insertar_606_desde_ecf(conn: asyncpg.Connection, xml: str) -> uuid.UUID:
     datos = datos_606_desde_ecf(parsear_xml(xml))
     if datos is None:
         raise DatosInvalidosError("El e-CF no tiene una FechaEmision válida: regístrelo a mano en el 606")
+    periodo = periodo_de_fecha(datos["fecha_comprobante"])
+    await _exigir_no_presentada(conn, "606", periodo)
+    if datos["itbis_facturado"]:
+        await _exigir_no_presentada(conn, "it1", periodo)
     return await conn.fetchval(
         """
         INSERT INTO compras606.registros
             (periodo, origen, referencia_tipo, referencia_id, rnc_cedula, tipo_id,
-             ncf, ncf_modificado, fecha_comprobante, monto_servicios, monto_bienes, itbis_facturado)
-        VALUES ($1, 'receptor_recepcion', 'ecf_recibido', NULL, $2, $3, $4, $5, $6, $7, $8, $9)
+             ncf, ncf_modificado, fecha_comprobante, monto_servicios, monto_bienes, itbis_facturado,
+             impuesto_selectivo_consumo, otros_impuestos, monto_propina_legal)
+        VALUES ($1, 'receptor_recepcion', 'ecf_recibido', NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
         ON CONFLICT (rnc_cedula, ncf) DO UPDATE SET actualizado_en = compras606.registros.actualizado_en
         RETURNING id
         """,
-        periodo_de_fecha(datos["fecha_comprobante"]),
+        periodo,
         datos["rnc_cedula"],
         tipo_identificacion(datos["rnc_cedula"]),
         datos["ncf"],
@@ -393,6 +617,9 @@ async def _insertar_606_desde_ecf(conn: asyncpg.Connection, xml: str) -> uuid.UU
         datos["monto_servicios"],
         datos["monto_bienes"],
         datos["itbis_facturado"],
+        datos["impuesto_selectivo_consumo"],
+        datos["otros_impuestos"],
+        datos["monto_propina_legal"],
     )
 
 
@@ -402,9 +629,11 @@ async def vincular_ecf_recibido(
     """Vincula el e-CF recibido con su renglón del 606 y, opcionalmente, con
     una compra de inventario (recepción de mercancía).
 
-    - `registro606_id` (opcional): un renglón existente del mismo proveedor.
-      Si no se indica y el e-CF no tiene uno, se busca por (RNC, e-NCF) o se
-      crea a partir del XML (mismos campos que guarda receptor_recepcion).
+    - `registro606_id` (opcional): un renglón existente del mismo proveedor
+      y con el mismo NCF que el e-NCF del e-CF (422 si no: un renglón de otro
+      NCF dejaría sin bandeja al e-CF que sí le corresponde). Si no se
+      indica y el e-CF no tiene uno, se busca por (RNC, e-NCF) o se crea a
+      partir del XML (mismos campos que guarda receptor_recepcion).
     - `compra_inventario_id`: inventario.compras.id; null lo desvincula.
       También queda en la factura de compra (`compras.facturas`).
     """
@@ -415,13 +644,18 @@ async def vincular_ecf_recibido(
                 raise ConflictoComprasError("El e-CF fue rechazado comercialmente: no se registra como compra")
             registro_id = campos.get("registro606_id") or fila["compra606_id"]
             if campos.get("registro606_id"):
-                rnc = await conn.fetchval(
-                    "SELECT rnc_cedula FROM compras606.registros WHERE id = $1", campos["registro606_id"]
+                registro = await conn.fetchrow(
+                    "SELECT rnc_cedula, ncf FROM compras606.registros WHERE id = $1", campos["registro606_id"]
                 )
-                if rnc is None:
+                if registro is None:
                     raise DatosInvalidosError("El renglón del 606 indicado no existe")
-                if rnc != fila["rnc_emisor"]:
+                if registro["rnc_cedula"] != fila["rnc_emisor"]:
                     raise DatosInvalidosError("El renglón del 606 indicado es de otro proveedor")
+                if registro["ncf"].upper() != fila["encf"].upper():
+                    raise DatosInvalidosError(
+                        f"El renglón del 606 indicado tiene el NCF {registro['ncf']}, no el e-NCF {fila['encf']} "
+                        "de este e-CF"
+                    )
             elif registro_id is None:
                 registro_id = await conn.fetchval(
                     "SELECT id FROM compras606.registros WHERE rnc_cedula = $1 AND ncf = $2",
@@ -508,8 +742,14 @@ async def _cuenta(conn: asyncpg.Connection, registro_id: uuid.UUID) -> dict[str,
     return _fila_cxp(fila) if fila is not None else None
 
 
+async def _documento(conn: asyncpg.Connection, registro_id: uuid.UUID) -> dict[str, Any] | None:
+    """Como `_cuenta`, pero también si es una nota de crédito del proveedor."""
+    fila = await conn.fetchrow(f"{_SELECT_DOCS_CON_ESTADO} WHERE registro606_id = $2", hoy(), registro_id)
+    return _fila_cxp(fila) if fila is not None else None
+
+
 async def _factura_compra(conn: asyncpg.Connection, registro_id: uuid.UUID) -> dict[str, Any]:
-    cuenta = await _cuenta(conn, registro_id)
+    cuenta = await _documento(conn, registro_id)
     if cuenta is None:
         raise CompraNoEncontradaError(str(registro_id))
     cuenta["pagos"] = await _pagos(conn, registro606_id=registro_id)
@@ -551,7 +791,16 @@ async def crear_factura_compra(pool: asyncpg.Pool, **campos: Any) -> dict[str, A
     """Registra una factura de compra de un proveedor con NCF/e-NCF propio
     (la de un proveedor informal se emite como E41 desde facturas_api): un
     renglón nuevo del 606 (origen 'compras') + sus datos de gestión. Las
-    retenciones y la fecha de pago NO se ponen aquí: las pone el pago."""
+    retenciones y la fecha de pago NO se ponen aquí: las pone el pago.
+
+    También una **nota de crédito** del proveedor (B04/E34): exige
+    `ncf_modificado` y descuenta su total del pendiente de la factura que
+    modifica (si está registrada; si no, solo queda en el 606). Su forma de
+    pago por defecto es 06 (notas de crédito). Se devuelve con
+    `es_nota_credito` y `afecta_registro606_id`, sin pendiente propio.
+
+    409 si el 606 o el IT-1 (ITBIS adelantado) del período del comprobante
+    ya están marcados como presentados."""
     rnc = _rnc(campos["proveedor_rnc"])
     if not validar_rnc_cedula(rnc):
         raise DatosInvalidosError("RNC o cédula del proveedor inválido (9 u 11 dígitos)")
@@ -560,15 +809,22 @@ async def crear_factura_compra(pool: asyncpg.Pool, **campos: Any) -> dict[str, A
         raise DatosInvalidosError("NCF inválido")
     if compras_calculos.tipo_ecf_de_ncf(ncf) in (41, 43, 47):
         raise DatosInvalidosError("Los comprobantes E41, E43 y E47 se emiten desde Facturas, no se registran aquí")
+    es_nota = compras_calculos.es_nota_credito(ncf)
     ncf_modificado = (campos.get("ncf_modificado") or "").strip().upper() or None
     if ncf_modificado and not validar_ncf(ncf_modificado):
         raise DatosInvalidosError("NCF modificado inválido")
+    if es_nota and not ncf_modificado:
+        raise DatosInvalidosError("Indique el NCF de la factura que modifica la nota de crédito")
+    if ncf_modificado == ncf:
+        raise DatosInvalidosError("El NCF modificado no puede ser el mismo comprobante")
     fecha_comprobante = campos["fecha_comprobante"].strftime("%Y%m%d")
     if not validar_fecha(fecha_comprobante) or not validar_periodo(fecha_comprobante[:6]):
         raise DatosInvalidosError("Fecha del comprobante inválida (desde mayo 2018)")
     if campos["tipo_bienes_servicios"] not in TIPOS_BIENES_SERVICIOS:
         raise DatosInvalidosError("Tipo de bienes y servicios inválido (1-11)")
-    forma_pago = campos.get("forma_pago") or compras_calculos.FORMA_PAGO_CREDITO
+    forma_pago = campos.get("forma_pago") or (
+        compras_calculos.FORMA_PAGO_NOTA_CREDITO if es_nota else compras_calculos.FORMA_PAGO_CREDITO
+    )
     if forma_pago not in FORMAS_PAGO:
         raise DatosInvalidosError("Forma de pago inválida (1-7)")
     _validar_montos(campos, _MONTOS_FACTURA)
@@ -576,9 +832,21 @@ async def crear_factura_compra(pool: asyncpg.Pool, **campos: Any) -> dict[str, A
         raise DatosInvalidosError("Indique el monto de bienes y/o servicios")
     if campos.get("vence") and campos["vence"] < campos["fecha_comprobante"]:
         raise DatosInvalidosError("El vencimiento no puede ser anterior a la fecha del comprobante")
+    periodo = periodo_de_fecha(fecha_comprobante)
     async with pool.acquire() as conn:
         async with conn.transaction():
             await _validar_contacto_y_compra(conn, campos)
+            await _exigir_no_presentada(conn, "606", periodo)
+            if campos["itbis_facturado"]:
+                await _exigir_no_presentada(conn, "it1", periodo)
+            if es_nota:
+                # Bloquea la factura que modifica: serializa con sus pagos, que
+                # validan lo pendiente (del que la nota se descuenta).
+                await conn.fetchval(
+                    "SELECT id FROM compras606.registros WHERE rnc_cedula = $1 AND upper(ncf) = $2 FOR UPDATE",
+                    rnc,
+                    ncf_modificado,
+                )
             try:
                 registro_id = await conn.fetchval(
                     """
@@ -591,7 +859,7 @@ async def crear_factura_compra(pool: asyncpg.Pool, **campos: Any) -> dict[str, A
                             $8, $9, $10, $11, $12, $13, $14)
                     RETURNING id
                     """,
-                    periodo_de_fecha(fecha_comprobante),
+                    periodo,
                     rnc,
                     tipo_identificacion(rnc),
                     campos["tipo_bienes_servicios"],
@@ -627,30 +895,40 @@ async def actualizar_factura_compra(
 ) -> dict[str, Any]:
     """Actualiza solo los campos enviados: los de gestión (compras.facturas)
     y la clasificación del 606 `tipo_bienes_servicios` -- p. ej. al
-    registrar como factura de compra un e-CF de la bandeja. Los montos y el
-    pago no se editan aquí (montos: en el 606; pago: con los pagos)."""
+    registrar como factura de compra un e-CF de la bandeja. Una vez
+    clasificado no se puede volver a null (422), y cambiarlo exige que el
+    606 de su período no esté presentado (409). Los montos y el pago no se
+    editan aquí (montos: en el 606; pago: con los pagos)."""
     async with pool.acquire() as conn:
         async with conn.transaction():
-            fecha = await conn.fetchval(
-                "SELECT fecha_comprobante FROM compras606.registros WHERE id = $1 FOR UPDATE", registro_id
+            registro = await conn.fetchrow(
+                "SELECT fecha_comprobante, periodo, tipo_bienes_servicios FROM compras606.registros"
+                " WHERE id = $1 FOR UPDATE",
+                registro_id,
             )
-            if fecha is None:
+            if registro is None:
                 raise CompraNoEncontradaError(str(registro_id))
             await _validar_contacto_y_compra(conn, campos)
-            if campos.get("vence") and campos["vence"].strftime("%Y%m%d") < fecha:
+            if campos.get("vence") and campos["vence"].strftime("%Y%m%d") < registro["fecha_comprobante"]:
                 raise DatosInvalidosError("El vencimiento no puede ser anterior a la fecha del comprobante")
             if "tipo_bienes_servicios" in campos:
                 tipo = campos["tipo_bienes_servicios"]
+                if tipo is None and registro["tipo_bienes_servicios"] is not None:
+                    raise DatosInvalidosError(
+                        "El comprobante ya está clasificado en el 606: indique otro tipo de bienes y servicios (1-11)"
+                    )
                 if tipo is not None and tipo not in TIPOS_BIENES_SERVICIOS:
                     raise DatosInvalidosError("Tipo de bienes y servicios inválido (1-11)")
-                await conn.execute(
-                    """
-                    UPDATE compras606.registros SET tipo_bienes_servicios = $2, actualizado_en = now()
-                    WHERE id = $1
-                    """,
-                    registro_id,
-                    tipo,
-                )
+                if tipo != registro["tipo_bienes_servicios"]:
+                    await _exigir_no_presentada(conn, "606", registro["periodo"])
+                    await conn.execute(
+                        """
+                        UPDATE compras606.registros SET tipo_bienes_servicios = $2, actualizado_en = now()
+                        WHERE id = $1
+                        """,
+                        registro_id,
+                        tipo,
+                    )
             await conn.execute(
                 "INSERT INTO compras.facturas (registro606_id) VALUES ($1) ON CONFLICT DO NOTHING", registro_id
             )
@@ -666,24 +944,25 @@ async def actualizar_factura_compra(
                     " WHERE registro606_id = $1",
                     *valores,
                 )
-            factura = await _cuenta(conn, registro_id)
+            factura = await _documento(conn, registro_id)
             if factura is None:
-                raise ConflictoComprasError("Este comprobante no es una factura por pagar (nota de crédito, E43 o rechazado)")
+                raise ConflictoComprasError("Este comprobante no es una factura por pagar (E43 o e-CF rechazado)")
             factura["pagos"] = await _pagos(conn, registro606_id=registro_id)
     return factura
 
 
 async def eliminar_factura_compra(pool: asyncpg.Pool, registro_id: uuid.UUID) -> None:
     """Solo las registradas desde Compras (origen 'compras') y sin pagos
-    vigentes: las de un e-CF (recibido o autoemitido) se corrigen en su origen."""
+    vigentes: las de un e-CF (recibido o autoemitido) se corrigen en su
+    origen. Quitar el renglón cambia el 606 y el ITBIS adelantado del IT-1
+    de su período (y, si tenía retenciones clasificadas a mano, el IT-1 /
+    IR-17 del mes de pago): 409 si alguno está marcado como presentado."""
     async with pool.acquire() as conn:
         async with conn.transaction():
-            origen = await conn.fetchval(
-                "SELECT origen FROM compras606.registros WHERE id = $1 FOR UPDATE", registro_id
-            )
-            if origen is None:
+            registro = await conn.fetchrow("SELECT * FROM compras606.registros WHERE id = $1 FOR UPDATE", registro_id)
+            if registro is None:
                 raise CompraNoEncontradaError(str(registro_id))
-            if origen != "compras":
+            if registro["origen"] != "compras":
                 raise ConflictoComprasError(
                     "Solo se eliminan facturas registradas desde Compras; las que vienen de un e-CF se corrigen en su origen"
                 )
@@ -692,6 +971,14 @@ async def eliminar_factura_compra(pool: asyncpg.Pool, registro_id: uuid.UUID) ->
             )
             if pagos:
                 raise ConflictoComprasError("La factura tiene pagos: anúlelos antes de eliminarla")
+            afectadas = {("606", registro["periodo"])}
+            if registro["itbis_facturado"] or registro["itbis_costo"] or registro["itbis_proporcionalidad"]:
+                afectadas.add(("it1", registro["periodo"]))
+            afectadas |= compras_calculos.declaraciones_afectadas(
+                CamposPago606.desde(registro), CamposPago606(fecha_pago=None, forma_pago=None)
+            )
+            for formulario, periodo in sorted(afectadas):
+                await _exigir_no_presentada(conn, formulario, periodo)
             await conn.execute("DELETE FROM compras.pagos WHERE registro606_id = $1", registro_id)
             await conn.execute("DELETE FROM compras.facturas WHERE registro606_id = $1", registro_id)
             await conn.execute("DELETE FROM compras606.registros WHERE id = $1", registro_id)
@@ -811,8 +1098,15 @@ async def _base_606(conn: asyncpg.Connection, registro: asyncpg.Record, hay_pago
 async def _aplicar_606(
     conn: asyncpg.Connection, registro: asyncpg.Record, nuevo: CamposPago606
 ) -> None:
+    """Escribe los campos de pago del renglón del 606. 409 si cambian y el
+    606 de su período (fecha de pago, forma de pago, retenciones son
+    casillas del formato) o el IT-1/IR-17 cuyo total cambia ya están
+    marcados como presentados."""
     anterior = CamposPago606.desde(registro)
-    for formulario, periodo in sorted(compras_calculos.declaraciones_afectadas(anterior, nuevo)):
+    if anterior == nuevo:
+        return
+    afectadas = {("606", registro["periodo"])} | compras_calculos.declaraciones_afectadas(anterior, nuevo)
+    for formulario, periodo in sorted(afectadas):
         await _exigir_no_presentada(conn, formulario, periodo)
     await conn.execute(
         """
@@ -856,7 +1150,9 @@ async def registrar_pago(
     `monto` es lo que se paga (neto de retenciones). Las retenciones se
     aplican una sola vez por factura (en un solo pago); con ellas, la fecha
     de pago del 606 es la de ese pago y el IT-1/IR-17 de ese mes las
-    incluyen. Valida que monto + retenciones no supere lo pendiente.
+    incluyen. Valida que monto + retenciones no supere lo pendiente y que
+    la fecha no sea futura (hora RD). Mientras quede saldo, la forma de
+    pago del 606 sigue siendo 04 (compra a crédito).
     """
     monto = _redondear(monto)
     retencion_isr = _redondear(retencion_isr)
@@ -872,6 +1168,8 @@ async def registrar_pago(
     if monto + retencion_isr + retencion_itbis <= 0:
         raise DatosInvalidosError("El monto del pago debe ser mayor que cero")
     fecha = fecha or hoy()
+    if fecha > hoy():
+        raise DatosInvalidosError("La fecha de pago no puede ser futura: registre el pago cuando se haga")
     fecha_pago = fecha.strftime("%Y%m%d")
     if not validar_fecha(fecha_pago):
         raise DatosInvalidosError("Fecha de pago inválida")
@@ -895,6 +1193,13 @@ async def registrar_pago(
                 raise DatosInvalidosError(
                     "Este comprobante no es una factura por pagar (nota de crédito, gasto menor E43 o e-CF rechazado)"
                 )
+            rechazo_en_envio = await conn.fetchval(
+                "SELECT 1 FROM recepcion.ecf_recibidos WHERE compra606_id = $1 AND estado_aprobacion = 'enviando'"
+                " AND decision_en_envio = 'rechazado'",
+                registro606_id,
+            )
+            if rechazo_en_envio:
+                raise ConflictoComprasError("Se está enviando el rechazo comercial de este e-CF: no se puede pagar")
             if fecha_pago < registro["fecha_comprobante"]:
                 raise DatosInvalidosError("La fecha de pago no puede ser anterior a la fecha del comprobante")
             if retencion_itbis > registro["itbis_facturado"]:
@@ -911,16 +1216,20 @@ async def registrar_pago(
                     "La factura ya tiene retenciones aplicadas en otro pago: anúlelo para cambiarlas"
                 )
             base = await _base_606(conn, registro, hay_pagos=bool(vigentes))
-            nuevo = compras_calculos.campos_pago_606(base, [*vigentes, pago])
+            pagos = [*vigentes, pago]
+            retenciones = compras_calculos.campos_pago_606(base, pagos).retenciones
             disponible = cuenta["total"] - cuenta["notas_credito"] - cuenta["pagado"]
             if disponible - CamposPago606.desde(registro).retenciones <= 0:
                 raise DatosInvalidosError("La factura ya está pagada por completo")
-            maximo = disponible - nuevo.retenciones
+            maximo = disponible - retenciones
             if monto > maximo:
                 raise DatosInvalidosError(
-                    f"El pago ({monto}) más las retenciones ({nuevo.retenciones}) supera lo pendiente de la "
+                    f"El pago ({monto}) más las retenciones ({retenciones}) supera lo pendiente de la "
                     f"factura ({disponible}); el máximo a pagar es {max(maximo, _CERO)}"
                 )
+            nuevo = compras_calculos.campos_pago_606(
+                base, pagos, saldada=monto >= maximo, con_notas_credito=cuenta["notas_credito"] > 0
+            )
             await _aplicar_606(conn, registro, nuevo)
             pago_id = await conn.fetchval(
                 """
@@ -947,7 +1256,7 @@ async def registrar_pago(
 async def anular_pago(pool: asyncpg.Pool, pago_id: uuid.UUID) -> dict[str, Any]:
     """Anula el pago y recalcula el 606 con los pagos que quedan (sin pagos:
     vuelve a los valores de antes del primer pago). 409 si ya estaba
-    anulado o si cambia un IT-1/IR-17 ya marcado como presentado."""
+    anulado o si cambia un 606/IT-1/IR-17 ya marcado como presentado."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             actual = await conn.fetchrow(
@@ -968,7 +1277,17 @@ async def anular_pago(pool: asyncpg.Pool, pago_id: uuid.UUID) -> dict[str, Any]:
             if registro is not None:
                 vigentes = await _pagos_vigentes(conn, registro["id"])
                 base = await _base_606(conn, registro, hay_pagos=True)
-                await _aplicar_606(conn, registro, compras_calculos.campos_pago_606(base, vigentes))
+                cuenta = await _cuenta(conn, registro["id"])
+                saldada, con_notas = True, False
+                if cuenta is not None:
+                    retenciones = compras_calculos.campos_pago_606(base, vigentes).retenciones
+                    saldada = cuenta["total"] - cuenta["notas_credito"] - cuenta["pagado"] - retenciones <= 0
+                    con_notas = cuenta["notas_credito"] > 0
+                await _aplicar_606(
+                    conn,
+                    registro,
+                    compras_calculos.campos_pago_606(base, vigentes, saldada=saldada, con_notas_credito=con_notas),
+                )
             return await _obtener_pago(conn, pago_id)
 
 

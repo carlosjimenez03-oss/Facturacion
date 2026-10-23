@@ -2,7 +2,9 @@
 
 Recibe (de un sistema interno) el XML (ACECF) con la conformidad
 (aprobación/rechazo) del receptor sobre un e-CF recibido de un emisor, lo
-firma con el certificado digital y lo envía a la DGII.
+firma con el certificado digital y lo envía a la DGII. Devuelve la respuesta
+de la DGII más el ACECF firmado (`xml_firmado`), que el receptor también
+debe entregar al emisor (erp-api lo hace, best-effort).
 
 Cada envío se audita (best-effort) en facturacion.envios_dgii vía
 libs.ecf_common.db — ver el docstring de ese módulo.
@@ -86,9 +88,9 @@ async def enviar_aprobacion(
             encf=encf,
             estado=respuesta.estado,
             codigo=respuesta.codigo,
-            respuesta=respuesta.model_dump(),
+            respuesta=respuesta.model_dump(exclude={"xml_firmado"}),
         )
-        return respuesta
+        return respuesta.model_copy(update={"xml_firmado": xml_firmado.decode("utf-8")})
     except DGIIServiceError as exc:
         logger.error("La DGII rechazó la aprobación comercial de %s: %s", encf, exc)
         await registrar_envio(

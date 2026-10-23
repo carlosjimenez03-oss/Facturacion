@@ -139,32 +139,61 @@ def test_descargar_xml(client, monkeypatch):
     assert r.text == "<ECF>ñ</ECF>"
 
 
-def test_aprobar_envia_por_aprobacion_comercial(client, monkeypatch):
+def test_descargar_xml_con_la_codificacion_que_declara(client, monkeypatch):
+    xml = '<?xml version="1.0" encoding="ISO-8859-1"?><ECF>Peña</ECF>'
+
+    async def fake(pool, ecf_id):
+        return "131234567E310000008734.xml", xml
+
+    monkeypatch.setattr(compras_repository, "xml_ecf_recibido", fake)
+    r = client.get(f"/compras/bandeja/{uuid.uuid4()}/xml")
+    assert r.headers["content-type"] == "text/xml; charset=ISO-8859-1"
+    assert r.content == xml.encode("latin-1")
+
+
+def test_aprobar_envia_por_aprobacion_comercial_y_entrega_al_emisor(client, monkeypatch):
     recibido = {}
     enviados = []
+    entregados = []
 
     async def fake_enviar(url, *, encf, xml, timeout):
         enviados.append((url, encf, xml))
         return {"estado": "Aceptado"}
 
-    async def fake_decidir(pool, ecf_id, *, aprobado, motivo, rnc_comprador, enviar):
+    async def fake_entregar(url, *, rnc_emisor, nombre_archivo, xml, timeout):
+        entregados.append((url, rnc_emisor, nombre_archivo, xml, timeout))
+        return "https://proveedor/fe/aprobacioncomercial/api/ecf"
+
+    async def fake_decidir(pool, ecf_id, *, aprobado, motivo, rnc_comprador, enviar, entregar):
         recibido.update(aprobado=aprobado, motivo=motivo, rnc_comprador=rnc_comprador)
         await enviar("E310000008734", b"<ACECF/>")
-        return _detalle(estado_aprobacion="aprobado", aprobado_en=AHORA, respuesta_dgii={"estado": "Aceptado"})
+        await entregar("131234567", "E310000008734", b"<ACECF>firmado</ACECF>")
+        return _detalle(
+            estado_aprobacion="aprobado", aprobado_en=AHORA, respuesta_dgii={"estado": "Aceptado"},
+            enviado_al_emisor=True, firma_valida=True, firma_detalle="Firmado por X (SN 131234567)",
+        )
 
     monkeypatch.setattr(compras, "enviar_aprobacion_comercial", fake_enviar)
+    monkeypatch.setattr(compras, "entregar_acecf_al_emisor", fake_entregar)
     monkeypatch.setattr(compras_repository, "decidir_aprobacion", fake_decidir)
+    monkeypatch.setattr(get_settings(), "consulta_directorio_url", "http://consulta-directorio:8000")
     r = client.post(f"/compras/bandeja/{uuid.uuid4()}/aprobar")
     assert r.status_code == 200
     assert r.json()["estado_aprobacion"] == "aprobado"
+    assert r.json()["enviado_al_emisor"] is True and r.json()["firma_valida"] is True
+    assert r.json()["envio_en_curso"] is False
     assert recibido == {"aprobado": True, "motivo": None, "rnc_comprador": "131897542"}
     assert enviados == [("http://aprobacion-comercial:8000", "E310000008734", b"<ACECF/>")]
+    # El archivo va con NUESTRO RNC (el del comprador que aprueba) + e-NCF.
+    assert entregados == [
+        ("http://consulta-directorio:8000", "131234567", "131897542E310000008734.xml", b"<ACECF>firmado</ACECF>", 30.0)
+    ]
 
 
 def test_rechazar_exige_motivo(client, monkeypatch):
     recibido = {}
 
-    async def fake_decidir(pool, ecf_id, *, aprobado, motivo, rnc_comprador, enviar):
+    async def fake_decidir(pool, ecf_id, *, aprobado, motivo, rnc_comprador, enviar, entregar):
         recibido.update(aprobado=aprobado, motivo=motivo)
         return _detalle(estado_aprobacion="rechazado", motivo_rechazo=motivo)
 
@@ -180,6 +209,7 @@ def test_rechazar_exige_motivo(client, monkeypatch):
     [
         (AprobacionComercialError("DGII caída"), 502),
         (ConflictoComprasError("ya fue aprobado"), 409),
+        (ConflictoComprasError("no requiere aprobación comercial"), 409),
         (CompraNoEncontradaError("x"), 404),
         (DatosInvalidosError("motivo"), 422),
     ],

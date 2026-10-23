@@ -381,6 +381,14 @@ class EcfRecibidoResumen(BaseModel):
     error_aprobacion: str | None = None
     compra606_id: UUID | None = None
     compra_inventario_id: UUID | None = None
+    # Firma digital del e-CF verificada al recibirlo (None = no verificada).
+    firma_valida: bool | None = None
+    firma_detalle: str | None = None
+    # La aprobación/rechazo se está enviando a la DGII (estado sigue 'pendiente').
+    envio_en_curso: bool = False
+    # Entrega del ACECF aceptado por la DGII al proveedor (best-effort).
+    enviado_al_emisor: bool = False
+    error_envio_emisor: str | None = None
 
 
 class ItemEcfRecibido(BaseModel):
@@ -481,6 +489,12 @@ class CuentaPorPagar(BaseModel):
     # proponerlas al registrar el pago.
     retencion_isr_ecf: Monto
     retencion_itbis_ecf: Monto
+    # Nota de crédito del proveedor (B04/E34): solo en el detalle
+    # (`/compras/facturas/{id}`), nunca en el listado de cuentas por pagar;
+    # pendiente 0 y descuenta su total de la factura que modifica.
+    es_nota_credito: bool = False
+    ncf_modificado: str | None = None
+    afecta_registro606_id: UUID | None = None
 
 
 class FacturaCompra(CuentaPorPagar):

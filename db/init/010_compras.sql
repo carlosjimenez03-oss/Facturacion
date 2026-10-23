@@ -13,10 +13,16 @@
 
 -- Bandeja de entrada: e-CF que los proveedores nos emiten, guardados
 -- (best-effort) por services/receptor_recepcion al recibirlos -- ver
--- libs/ecf_common/ecf_recibidos.py. `xml` es el documento tal como llegó.
--- `estado_aprobacion` es la aprobación comercial (ACECF) que decide el
--- usuario y erp-api envía por services/aprobacion_comercial; `aprobado_en`
--- es la fecha de esa decisión (aprobación o rechazo).
+-- libs/ecf_common/ecf_recibidos.py. `xml` es el documento tal como llegó
+-- (decodificado según su declaración); `firma_valida` es la verificación de
+-- su firma digital al recibirlo (NULL = no verificada) y `firma_detalle` el
+-- motivo. `estado_aprobacion` es la aprobación comercial (ACECF) que decide
+-- el usuario y erp-api envía por services/aprobacion_comercial; mientras se
+-- envía queda 'enviando' (`decision_en_envio`, desde `envio_iniciado_en`;
+-- si se queda así más de unos minutos, se puede volver a intentar).
+-- `aprobado_en` es la fecha de la decisión (aprobación o rechazo);
+-- `acecf_xml` el ACECF firmado que aceptó la DGII y `enviado_al_emisor` /
+-- `error_envio_emisor` su entrega (best-effort) al proveedor.
 CREATE SCHEMA IF NOT EXISTS recepcion;
 
 CREATE TABLE IF NOT EXISTS recepcion.ecf_recibidos (
@@ -32,12 +38,19 @@ CREATE TABLE IF NOT EXISTS recepcion.ecf_recibidos (
     itbis_total           numeric(18, 2) NOT NULL DEFAULT 0,
     xml                   text NOT NULL,
     recibido_en           timestamptz NOT NULL DEFAULT now(),
+    firma_valida          boolean,
+    firma_detalle         text,
     estado_aprobacion     text NOT NULL DEFAULT 'pendiente'
-                          CHECK (estado_aprobacion IN ('pendiente', 'aprobado', 'rechazado')),
+                          CHECK (estado_aprobacion IN ('pendiente', 'enviando', 'aprobado', 'rechazado')),
+    decision_en_envio     text CHECK (decision_en_envio IN ('aprobado', 'rechazado')),
+    envio_iniciado_en     timestamptz,
     motivo_rechazo        text,
     aprobado_en           timestamptz,
     respuesta_aprobacion  jsonb,           -- respuesta de la DGII al ACECF
     error_aprobacion      text,            -- último intento fallido de enviar el ACECF
+    acecf_xml             text,            -- ACECF firmado que aceptó la DGII
+    enviado_al_emisor     boolean NOT NULL DEFAULT false,
+    error_envio_emisor    text,
     compra606_id          uuid,            -- compras606.registros.id (sin FK: ese esquema es de formato_606)
     compra_inventario_id  uuid,            -- inventario.compras.id (sin FK: ese esquema es de inventario_api)
     actualizado_en        timestamptz NOT NULL DEFAULT now()

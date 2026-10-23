@@ -102,11 +102,16 @@ async def registrar_compra_606(
     monto_servicios: Decimal,
     monto_bienes: Decimal,
     itbis_facturado: Decimal,
+    impuesto_selectivo_consumo: Decimal = Decimal("0"),
+    otros_impuestos: Decimal = Decimal("0"),
+    monto_propina_legal: Decimal = Decimal("0"),
 ) -> None:
     """Registra un renglón pendiente de clasificar en compras606.registros,
     a partir de los datos que sí trae un e-CF (propio o de un proveedor) --
     los campos que ningún e-CF trae (Tipo de Bienes, Forma de Pago,
-    retenciones) se completan luego desde `services/formato_606`.
+    retenciones) se completan luego desde `services/formato_606`. El
+    selectivo, otros impuestos y la propina legal (casillas 20-22) salen de
+    Totales/ImpuestosAdicionales del e-CF (`ecf_recibidos.datos_606_desde_ecf`).
 
     Best-effort (nunca lanza), igual que `libs.ecf_common.db.registrar_envio`:
     un fallo aquí no debe interrumpir la recepción de un e-CF ni el envío de
@@ -129,8 +134,9 @@ async def registrar_compra_606(
                 """
                 INSERT INTO compras606.registros
                     (periodo, origen, referencia_tipo, referencia_id, rnc_cedula, tipo_id,
-                     ncf, ncf_modificado, fecha_comprobante, monto_servicios, monto_bienes, itbis_facturado)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                     ncf, ncf_modificado, fecha_comprobante, monto_servicios, monto_bienes, itbis_facturado,
+                     impuesto_selectivo_consumo, otros_impuestos, monto_propina_legal)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
                 ON CONFLICT (rnc_cedula, ncf) DO NOTHING
                 """,
                 periodo_de_fecha(fecha_comprobante),
@@ -145,6 +151,9 @@ async def registrar_compra_606(
                 monto_servicios,
                 monto_bienes,
                 itbis_facturado,
+                impuesto_selectivo_consumo,
+                otros_impuestos,
+                monto_propina_legal,
             )
     except Exception:
         logger.exception(

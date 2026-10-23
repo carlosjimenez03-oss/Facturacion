@@ -18,6 +18,13 @@ class ErpApiSettings(EcfBaseSettings):
     aprobacion_comercial_url: str = "http://aprobacion-comercial:8000"
     aprobacion_comercial_timeout_segundos: float = 60.0
 
+    # Consulta Directorio (`consulta_directorio`, GET /directorio/{rnc}): da
+    # la `urlAceptacion` del proveedor para entregarle el ACECF aprobado o
+    # rechazado (best-effort, después de que la DGII lo acepta). En
+    # docker-compose resuelve al nombre del servicio.
+    consulta_directorio_url: str = "http://consulta-directorio:8000"
+    entrega_emisor_timeout_segundos: float = 30.0
+
     # Razón social de la empresa (agente de retención) para el certificado
     # de retención; vacío = el frontend usa la que tenga configurada.
     emisor_razon_social: str = ""

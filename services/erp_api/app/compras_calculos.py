@@ -6,10 +6,11 @@ Ver docs/ERP_API.md, sección "Compras".
 """
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
-from typing import Any
+from typing import Any, Literal
 
 from lxml import etree
 
@@ -21,9 +22,12 @@ _CENTAVO = Decimal("0.01")
 ESTADO_ACECF_APROBADO = "1"
 ESTADO_ACECF_RECHAZADO = "2"
 
-# Campo 23 del 606 (Forma de Pago) según el método del pago.
+# Campo 23 del 606 (Forma de Pago, docs/dgii/FORMATO_606.md): 01 efectivo ·
+# 02 cheques/transferencias/depósito · 03 tarjeta · 04 compra a crédito ·
+# 05 permuta · 06 notas de crédito · 07 mixto.
 _FORMA_PAGO_606 = {"efectivo": 1, "transferencia": 2, "cheque": 2, "tarjeta": 3}
 FORMA_PAGO_CREDITO = 4
+FORMA_PAGO_NOTA_CREDITO = 6
 FORMA_PAGO_MIXTO = 7
 
 
@@ -54,16 +58,17 @@ def construir_acecf(
     Estado 1 = aprobado, 2 = rechazado (con DetalleMotivoRechazo). Igual que
     el ARECF de receptor_recepcion (ver su arecf_builder.py), el XSD oficial
     del ACECF no está en el repositorio: los elementos siguen el formato
-    "Aprobación Comercial" publicado por la DGII; verificar contra el XSD
-    del portal cuando esté disponible.
+    "Aprobación Comercial" publicado por la DGII, que exige FechaEmision
+    (ValueError si falta; el repositorio responde 422 antes de llegar aquí).
     """
+    if fecha_emision is None:
+        raise ValueError("El ACECF exige la FechaEmision del e-CF")
     root = etree.Element("ACECF")
     detalle = etree.SubElement(root, "DetalleAprobacionComercial")
     etree.SubElement(detalle, "Version").text = "1.0"
     etree.SubElement(detalle, "RNCEmisor").text = rnc_emisor
     etree.SubElement(detalle, "eNCF").text = encf
-    if fecha_emision is not None:
-        etree.SubElement(detalle, "FechaEmision").text = fecha_emision.strftime("%d-%m-%Y")
+    etree.SubElement(detalle, "FechaEmision").text = fecha_emision.strftime("%d-%m-%Y")
     etree.SubElement(detalle, "MontoTotal").text = _monto_dgii(monto_total)
     etree.SubElement(detalle, "RNCComprador").text = rnc_comprador
     etree.SubElement(detalle, "Estado").text = ESTADO_ACECF_APROBADO if aprobado else ESTADO_ACECF_RECHAZADO
@@ -71,6 +76,34 @@ def construir_acecf(
         etree.SubElement(detalle, "DetalleMotivoRechazo").text = motivo_rechazo[:250]
     etree.SubElement(detalle, "FechaHoraAprobacionComercial").text = fecha_hora.strftime("%d-%m-%Y %H:%M:%S")
     return etree.tostring(root, xml_declaration=True, encoding="UTF-8", standalone=False)
+
+
+ResultadoAprobacion = Literal["aceptada", "no_requerida", "rechazada"]
+
+# Frases con las que la DGII indica que el e-CF no lleva aprobación comercial.
+_NO_REQUERIDA = ("no requiere", "no aplica", "no es necesari", "no corresponde")
+
+
+def _sin_acentos(texto: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", texto) if unicodedata.category(c) != "Mn").lower()
+
+
+def resultado_aprobacion_dgii(respuesta: dict[str, Any]) -> tuple[ResultadoAprobacion, str]:
+    """Interpreta la respuesta de la DGII al ACECF (`{mensaje[], estado,
+    codigo}`, docs/dgii/SERVICIOS_DGII.md, servicio 8): solo `codigo` "1"
+    es la aprobación comercial recibida; cualquier otro código (2 =
+    rechazada, también cuando no encuentra el e-CF) es un fallo, y si los
+    mensajes dicen que el e-CF no requiere aprobación comercial,
+    'no_requerida'. Devuelve (resultado, mensajes de la DGII en una línea)."""
+    mensajes = respuesta.get("mensaje") or respuesta.get("mensajes") or []
+    if isinstance(mensajes, str):
+        mensajes = [mensajes]
+    texto = "; ".join(str(m) for m in mensajes if m) or str(respuesta.get("estado") or "sin mensaje")
+    if str(respuesta.get("codigo") or "").strip() == "1":
+        return "aceptada", texto
+    if any(frase in _sin_acentos(texto) for frase in _NO_REQUERIDA):
+        return "no_requerida", texto
+    return "rechazada", texto
 
 
 # --- Pagos -> campos de pago del 606 ---------------------------------------------------------
@@ -119,7 +152,9 @@ def forma_pago_606(metodos: set[str]) -> int:
     return formas.pop() if len(formas) == 1 else FORMA_PAGO_MIXTO
 
 
-def campos_pago_606(base: CamposPago606, pagos: list[Pago]) -> CamposPago606:
+def campos_pago_606(
+    base: CamposPago606, pagos: list[Pago], *, saldada: bool = True, con_notas_credito: bool = False
+) -> CamposPago606:
     """Campos de pago del 606 a partir de los pagos vigentes (no anulados).
 
     - Sin pagos: los valores que tenía el renglón antes del primer pago
@@ -128,12 +163,21 @@ def campos_pago_606(base: CamposPago606, pagos: list[Pago]) -> CamposPago606:
       el mes del IT-1/IR-17); si ninguno las lleva, la del último pago.
     - Retenciones: las del pago que las lleva (solo uno puede) o, si
       ninguno, las de `base`.
-    - Forma de pago: la del método de los pagos; 7 (mixto) si hay varios.
+    - Forma de pago: mientras quede saldo (`saldada` False) la compra sigue
+      siendo a crédito (04). Saldada, la del método de los pagos -- más 06
+      (notas de crédito) si una nota del proveedor cubrió parte --, y 07
+      (mixto) si son varias.
     """
     if not pagos:
         return base
     con_retenciones = [p for p in pagos if p.tiene_retenciones]
-    forma = forma_pago_606({p.metodo for p in pagos})
+    if saldada:
+        formas = {_FORMA_PAGO_606[p.metodo] for p in pagos}
+        if con_notas_credito:
+            formas.add(FORMA_PAGO_NOTA_CREDITO)
+        forma = formas.pop() if len(formas) == 1 else FORMA_PAGO_MIXTO
+    else:
+        forma = FORMA_PAGO_CREDITO
     if con_retenciones:
         pago = con_retenciones[0]
         return CamposPago606(

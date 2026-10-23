@@ -16,20 +16,39 @@
 // mes del pago. Anular el pago lo revierte.
 import { ERP_API_URL, ErpApiError } from "./erpApi";
 
+/**
+ * `detail` de un error de FastAPI como texto legible: un string tal cual; la lista de errores de validación
+ * (422, `[{loc, msg}]`) como "campo: mensaje · campo: mensaje" (sin "body" ni el "Value error, " de pydantic).
+ */
+export function textoDetalle(detail: unknown): string {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const textos = detail.map((e) => {
+      if (typeof e === "string") return e;
+      const error = (e ?? {}) as { loc?: (string | number)[]; msg?: string };
+      const campo = (error.loc ?? []).filter((x) => x !== "body").join(".");
+      const msg = (error.msg ?? "").replace(/^Value error, /, "");
+      return campo ? `${campo}: ${msg}` : msg;
+    });
+    if (textos.length) return textos.join(" · ");
+  }
+  return JSON.stringify(detail);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${ERP_API_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
   if (!response.ok) {
-    let detail = response.statusText;
+    let detail: unknown = response.statusText;
     try {
       const body = await response.json();
       detail = body.detail ?? JSON.stringify(body);
     } catch {
       // sin cuerpo JSON, se mantiene statusText
     }
-    throw new ErpApiError(response.status, typeof detail === "string" ? detail : JSON.stringify(detail));
+    throw new ErpApiError(response.status, textoDetalle(detail));
   }
   if (response.status === 204) {
     return undefined as T;
@@ -75,6 +94,18 @@ export interface EcfRecibidoResumen {
   compra606_id: string | null;
   /** Compra de inventario (recepción de mercancía) vinculada. */
   compra_inventario_id: string | null;
+  /**
+   * Firma digital del XML verificada al recibirlo: true = íntegra y el SN del certificado es el RNC emisor;
+   * false = sin firma, alterada o de otro certificado (ver `firma_detalle`); null = no verificada.
+   */
+  firma_valida: boolean | null;
+  firma_detalle: string | null;
+  /** La aprobación/rechazo se está enviando a la DGII (estado_aprobacion sigue "pendiente"); los botones deben esperar. */
+  envio_en_curso: boolean;
+  /** El ACECF aceptado por la DGII se entregó también al proveedor (best-effort; no afecta la aprobación). */
+  enviado_al_emisor: boolean;
+  /** Por qué no se pudo entregar al proveedor. */
+  error_envio_emisor: string | null;
 }
 
 export interface ItemEcfRecibido {
@@ -158,6 +189,16 @@ export interface CuentaPorPagar {
   /** Retenciones que declara el propio e-CF (E41): para proponerlas al pagar. */
   retencion_isr_ecf: string;
   retencion_itbis_ecf: string;
+  /**
+   * Nota de crédito del proveedor (B04/E34), registrada con `crearFactura`: solo aparece en el detalle
+   * (`obtenerFactura`), nunca en cuentas por pagar; pendiente "0.00" y estado "pagada" (no se paga). Su total
+   * se descuenta de la factura que modifica (`notas_credito` de esa factura).
+   */
+  es_nota_credito: boolean;
+  /** NCF de la factura que modifica (solo notas de crédito). */
+  ncf_modificado: string | null;
+  /** registro606_id de esa factura, si está registrada. */
+  afecta_registro606_id: string | null;
 }
 
 export interface FacturaCompra extends CuentaPorPagar {
@@ -382,12 +423,24 @@ export const comprasApi = {
   obtenerEcfRecibido: (id: string) => request<EcfRecibido>(`/compras/bandeja/${id}`),
   /** URL directa de descarga del XML recibido (RNC+e-NCF.xml). */
   urlXmlEcfRecibido: (id: string) => `${ERP_API_URL}/compras/bandeja/${id}/xml`,
-  /** Envía el ACECF (Estado 1) a la DGII. 409 si ya se decidió; 502 si aprobacion_comercial / la DGII falla. */
+  /**
+   * Envía el ACECF (Estado 1) a la DGII y, aceptado, al proveedor (best-effort: `enviado_al_emisor`). Solo el
+   * código "1" de la DGII cuenta como aceptado. 409 si ya se decidió, si se está enviando (`envio_en_curso`) o si la
+   * DGII dice que no requiere aprobación comercial; 422 si el e-CF no tiene FechaEmision; 502 si
+   * aprobacion_comercial falla o la DGII no lo acepta (sigue pendiente con `error_aprobacion`).
+   */
   aprobar: (id: string) => request<EcfRecibido>(`/compras/bandeja/${id}/aprobar`, { method: "POST" }),
-  /** Envía el ACECF (Estado 2) con el motivo (máx. 250 caracteres). */
+  /**
+   * Envía el ACECF (Estado 2) con el motivo (máx. 250 caracteres). Mismos errores que `aprobar`, más 409 si tiene
+   * pagos vigentes (anúlelos antes). Aceptado el rechazo, su renglón del 606 se quita (ya no es una compra válida:
+   * deja de sumar ITBIS adelantado al IT-1); 409 si el 606/IT-1 de ese mes ya está presentado.
+   */
   rechazar: (id: string, motivo: string) =>
     request<EcfRecibido>(`/compras/bandeja/${id}/rechazar`, { method: "POST", body: JSON.stringify({ motivo }) }),
-  /** Asegura su renglón del 606 y, opcionalmente, lo vincula a una compra de inventario. 409 si fue rechazado. */
+  /**
+   * Asegura su renglón del 606 y, opcionalmente, lo vincula a una compra de inventario. 409 si fue rechazado;
+   * 422 si `registro606_id` es de otro proveedor o de otro NCF que el e-NCF del e-CF.
+   */
   vincular: (id: string, payload: VincularPayload = {}) =>
     request<EcfRecibido>(`/compras/bandeja/${id}/vincular`, { method: "POST", body: JSON.stringify(payload) }),
 
@@ -400,21 +453,29 @@ export const comprasApi = {
     periodo?: string;
   }) => request<CuentaPorPagar[]>(`/compras/cuentas-por-pagar${consulta({ ...p })}`),
   obtenerFactura: (registro606Id: string) => request<FacturaCompra>(`/compras/facturas/${registro606Id}`),
-  /** 409 si el NCF de ese proveedor ya está en el 606; 422 si E41/E43/E47 (se emiten en Facturas). */
+  /**
+   * 409 si el NCF de ese proveedor ya está en el 606 o si el 606 / IT-1 del mes del comprobante está presentado;
+   * 422 si E41/E43/E47 (se emiten en Facturas). Una nota de crédito (B04/E34) exige `ncf_modificado` y se devuelve
+   * con `es_nota_credito` (descuenta su total del pendiente de la factura que modifica).
+   */
   crearFactura: (payload: FacturaCompraPayload) =>
     request<FacturaCompra>("/compras/facturas", { method: "POST", body: JSON.stringify(payload) }),
   actualizarFactura: (registro606Id: string, payload: FacturaCompraActualizar) =>
     request<FacturaCompra>(`/compras/facturas/${registro606Id}`, { method: "PUT", body: JSON.stringify(payload) }),
-  /** Solo las creadas con crearFactura y sin pagos vigentes (409). */
+  /** Solo las creadas con crearFactura y sin pagos vigentes (409); 409 también si el 606 / IT-1 de su mes está presentado. */
   eliminarFactura: (registro606Id: string) =>
     request<void>(`/compras/facturas/${registro606Id}`, { method: "DELETE" }),
 
   // Pagos a proveedores
   listarPagos: (p?: { registro606_id?: string; periodo?: string }) =>
     request<PagoProveedor[]>(`/compras/pagos${consulta({ ...p })}`),
+  /**
+   * Actualiza el 606: mientras quede saldo la forma de pago sigue 4 (crédito). 422 si la fecha es futura (hora RD) o
+   * supera lo pendiente; 409 si el 606 del mes del comprobante o el IT-1/IR-17 del mes del pago está presentado.
+   */
   registrarPago: (payload: PagoProveedorPayload) =>
     request<PagoProveedor>("/compras/pagos", { method: "POST", body: JSON.stringify(payload) }),
-  /** Recalcula el 606 con los pagos que quedan. 409 si ya estaba anulado o el IT-1/IR-17 del mes está presentado. */
+  /** Recalcula el 606 con los pagos que quedan. 409 si ya estaba anulado o el 606 / IT-1 / IR-17 afectado está presentado. */
   anularPago: (id: string) => request<PagoProveedor>(`/compras/pagos/${id}/anular`, { method: "POST" }),
 
   // Comprobantes E41 / E43
