@@ -299,7 +299,9 @@ El contrato es [`frontend/src/lib/comprasApi.ts`](../frontend/src/lib/comprasApi
 Rutas en `app/compras.py`, consultas en `app/compras_repository.py`,
 cálculos puros (ACECF, campos de pago del 606, sugerencia de retenciones)
 en `app/compras_calculos.py` y el cliente de `aprobacion_comercial` en
-`app/aprobacion_client.py`.
+`app/aprobacion_client.py`. Las consultas se prueban contra un Postgres
+real en `tests/test_compras_postgres.py` (se salta sin
+`COMPRAS_TEST_DATABASE_URL`, p. ej. `postgresql://postgres@localhost:5432/postgres`).
 
 ### Modelo
 
@@ -311,6 +313,29 @@ en `app/compras_calculos.py` y el cliente de `aprobacion_comercial` en
   [`db/init/010_compras.sql`](../db/init/010_compras.sql));
   `receptor-recepcion` no tiene migraciones y, si la tabla aún no existe,
   solo deja un aviso en el log (`libs/ecf_common/ecf_recibidos.py`).
+  - **El receptor nunca espera por la base:** `ON CONFLICT DO NOTHING` y,
+    para un reenvío, `FOR UPDATE SKIP LOCKED` (si la fila está ocupada no se
+    actualiza), con `lock_timeout` 2 s / `statement_timeout` 10 s.
+  - **Firma:** al guardarlo verifica la firma XML-DSig con el certificado
+    embebido y que su SN sea el `RNCEmisor` (`firma_valida`, motivo en
+    `firma_detalle`). No valida la cadena hasta la CA de INDOTEL (su bundle
+    no está en el repositorio). Nunca cambia el ARECF. Se conserva la
+    primera copia, salvo que su firma no sea válida y llegue otra con firma
+    válida, mientras siga pendiente: entonces la reemplaza y corrige los
+    montos de su 606 (si no tiene pagos y el 606/IT-1 del mes no están
+    presentados; si no, queda un aviso en el log).
+  - **Vínculo con el 606:** solo el renglón del mismo (RNC, e-NCF) que no
+    esté vinculado a otro e-CF.
+  - **XML:** se guarda decodificado según su declaración (ISO-8859-1,
+    UTF-16…), sin caracteres NUL; la descarga lo devuelve con esa misma
+    codificación.
+  - **606 desde el e-CF** (`datos_606_desde_ecf`, el mismo para el
+    receptor y para `vincular`): servicios/bienes = MontoTotal − TotalITBIS
+    − impuestos adicionales, repartido según las líneas por
+    `IndicadorBienoServicio` (sin el ITBIS de cada línea si
+    `IndicadorMontoGravado` = 1). Selectivo (específico + ad valorem),
+    otros impuestos y propina legal (código `001`) van a sus casillas, como
+    en el 607. Así el renglón suma exactamente el MontoTotal.
 - **Factura de compra = un renglón de `compras606.registros`.** Ahí están
   los datos fiscales (proveedor, NCF, montos, retenciones, fecha y forma de
   pago). Llega sola de un e-CF recibido o de un E41/E47 autoemitido
@@ -331,6 +356,14 @@ en `app/compras_calculos.py` y el cliente de `aprobacion_comercial` en
   rechazados comercialmente. `pendiente = total − notas de crédito del
   proveedor que la modifican − retenciones del 606 − pagos no anulados`;
   estado `pendiente`/`vencida`/`pagada` calculado con "hoy" en hora RD.
+  `total` es el `MontoTotal` del e-CF recibido (lo que cobra el proveedor),
+  o la suma de las casillas del 606 si no hay e-CF.
+- **Notas de crédito del proveedor:** llegan como E34 recibido o se
+  registran con `POST /compras/facturas` (B04/E34, `ncf_modificado`
+  obligatorio; forma de pago por defecto 06). No son cuentas por pagar: su
+  detalle (`GET /compras/facturas/{id}`) sale con `es_nota_credito`,
+  `ncf_modificado`, `afecta_registro606_id`, pendiente 0 y estado
+  `pagada`; su total se descuenta de la factura que modifican.
 - **Pagos (`compras.pagos`)**: `monto` es lo que sale del banco (neto de
   retenciones). Las retenciones van en **un solo pago** por factura (409 si
   ya hay otro con retenciones). Cada pago o anulación **recalcula los
@@ -340,12 +373,21 @@ en `app/compras_calculos.py` y el cliente de `aprobacion_comercial` en
   - `itbis_retenido`, `tipo_retencion_isr`, `monto_retencion_renta`: las
     del pago con retenciones o, si ninguno, las que el renglón tenía antes
     del primer pago (p. ej. clasificadas a mano en el 606).
-  - `forma_pago`: 1 efectivo, 2 transferencia/cheque, 3 tarjeta, 7 mixto.
+  - `forma_pago` (casilla 23 del 606): mientras quede saldo, **4**
+    (compra a crédito). Saldada: 1 efectivo, 2 transferencia/cheque, 3
+    tarjeta; 6 (notas de crédito) se suma si una nota cubrió parte, y si hay
+    más de una forma, 7 (mixto).
   - Sin pagos vigentes, el renglón vuelve exactamente a como estaba antes
     del primer pago (`compras.facturas.base_*`, guardado al registrarlo).
-  - 409 si el cambio altera el ITBIS retenido de un IT-1 o el ISR de un
-    IR-17 ya marcado como presentado (mismo candado que el 608); hay que
-    desmarcarlo primero.
+  - 409 si cambia cualquier campo del renglón y el **606** de su período
+    está marcado como presentado, o si altera el ITBIS retenido de un IT-1
+    o el ISR de un IR-17 ya presentado (mismo candado que el 608); hay que
+    desmarcarlo primero. El mensaje nombra la declaración y el mes ("El
+    IT-1 de octubre 2026 ya está marcado como presentado…"). El mismo
+    candado del 606 (y del IT-1 por el ITBIS adelantado) aplica al
+    registrar, eliminar o reclasificar (`tipo_bienes_servicios`) una
+    factura de compra.
+  - La fecha del pago no puede ser futura (hora RD).
 
   **Por qué SQL directo y no `PUT /registros/{id}` de `formato-606`:** el
   pago y el 606 se escriben en la **misma transacción**, con el renglón
@@ -360,13 +402,37 @@ en `app/compras_calculos.py` y el cliente de `aprobacion_comercial` en
   retenciones ≤ pendiente. Si se editan a mano en el 606 los campos de pago
   de una factura con pagos, el próximo pago o anulación los recalcula.
 - **Aprobación comercial:** `aprobar`/`rechazar` arman el ACECF (Estado 1/2,
-  `DetalleMotivoRechazo`, `FechaHoraAprobacionComercial` en hora RD) y lo
-  mandan a `aprobacion-comercial` (`POST /aprobacion`, que lo firma y lo
-  envía a la DGII). Solo desde `pendiente` (409); la fila queda bloqueada
-  durante el envío. Si el módulo o la DGII fallan → 502, sigue `pendiente`
-  y queda `error_aprobacion`. El XSD oficial del ACECF no está en el
-  repositorio: los elementos siguen el formato publicado por la DGII, igual
-  que el ARECF de `receptor-recepcion`.
+  `DetalleMotivoRechazo`, `FechaHoraAprobacionComercial` en hora RD;
+  `FechaEmision` obligatoria: 422 si el e-CF no la tiene) y lo mandan a
+  `aprobacion-comercial` (`POST /aprobacion`, que lo firma, lo envía a la
+  DGII y devuelve el XML firmado). Solo desde `pendiente` (409).
+  - **Sin candados ni conexiones durante el envío:** (1) transacción corta
+    que marca la fila `enviando` (`decision_en_envio`, `envio_iniciado_en`;
+    la API la muestra `pendiente` con `envio_en_curso`); (2) la llamada
+    HTTP, sin conexión tomada; (3) guarda el resultado. Un segundo clic
+    mientras se envía → 409. Si el proceso muere a mitad, a los 5 minutos
+    se puede volver a intentar.
+  - **Solo `codigo` "1" de la DGII es éxito.** Cualquier otro: sigue
+    `pendiente` con `error_aprobacion` (los mensajes de la DGII) y 502; 409
+    si los mensajes dicen que el e-CF no requiere aprobación comercial. Si
+    el módulo falla, también 502.
+  - **Rechazo:** 409 si la factura tiene pagos vigentes (anúlelos antes) o
+    si el 606/IT-1 de su mes (o el IT-1/IR-17 de retenciones clasificadas a
+    mano) está presentado; se valida antes de enviar. Aceptado el rechazo,
+    su renglón del 606 se borra: un e-CF rechazado no es una compra válida
+    para el comprador, así que no va al 606 ni su ITBIS al IT-1. El rechazo
+    no se puede deshacer (el ACECF ya está en la DGII) y, si el proveedor
+    reenvía el e-CF, `receptor-recepcion` no lo vuelve a poner en el 606.
+  - **Entrega al proveedor** (estándar del receptor: el ACECF también va al
+    emisor, a su `POST /fe/aprobacioncomercial/api/ecf`): tras el éxito en la
+    DGII, se busca su `urlAceptacion` en `consulta-directorio` y se le
+    envía el ACECF firmado. Best-effort: el resultado queda en
+    `enviado_al_emisor` / `error_envio_emisor` y nunca hace fallar la
+    aprobación. No se autentica ante el proveedor: si su servicio exige
+    token, la entrega falla con su 401.
+  - El XSD oficial del ACECF no está en el repositorio: los elementos siguen
+    el formato publicado por la DGII, igual que el ARECF de
+    `receptor-recepcion`.
 - **E41/E43:** se emiten con el formulario de facturas (`facturas-api`), que
   al enviarlos ya crea su renglón del 606. `GET /compras/comprobantes` los
   lista con proveedor (solo E41: el Comprador), concepto (primera línea),
@@ -383,12 +449,12 @@ en `app/compras_calculos.py` y el cliente de `aprobacion_comercial` en
 | `GET /compras/bandeja?estado=&q=&periodo=` | e-CF recibidos, más recientes primero. `estado` = `pendiente`/`aprobado`/`rechazado`; `q` busca en e-NCF, RNC y razón social; `periodo` = AAAAMM de emisión |
 | `GET /compras/bandeja/{id}` | Detalle con las líneas del XML, subtotal, el XML y la respuesta de la DGII al ACECF |
 | `GET /compras/bandeja/{id}/xml` | Descarga `RNC+e-NCF.xml` |
-| `POST /compras/bandeja/{id}/aprobar` · `POST /compras/bandeja/{id}/rechazar` `{motivo}` | Envía el ACECF por `aprobacion-comercial`. 409 si ya se decidió; 502 si falla el envío; motivo obligatorio (≤ 250) |
-| `POST /compras/bandeja/{id}/vincular` `{registro606_id?, compra_inventario_id?}` | Asegura su renglón del 606 (lo busca o lo crea desde el XML) y lo vincula a una compra de inventario. 409 si fue rechazado |
+| `POST /compras/bandeja/{id}/aprobar` · `POST /compras/bandeja/{id}/rechazar` `{motivo}` | Envía el ACECF por `aprobacion-comercial` y, aceptado, al proveedor. 409 si ya se decidió, se está enviando, la DGII dice que no requiere aprobación o (rechazo) tiene pagos / 606 presentado; 422 sin FechaEmision; 502 si falla el envío o la DGII no lo acepta; motivo obligatorio (≤ 250) |
+| `POST /compras/bandeja/{id}/vincular` `{registro606_id?, compra_inventario_id?}` | Asegura su renglón del 606 (lo busca o lo crea desde el XML) y lo vincula a una compra de inventario. 409 si fue rechazado; 422 si `registro606_id` es de otro proveedor u otro NCF |
 | `GET /compras/cuentas-por-pagar?estado=&proveedor_rnc=&q=&periodo=` | Facturas de compra con total, retenciones, pagado, pendiente, vence y estado. Sin `estado`: lo no pagado; `todas`: todo |
-| `POST /compras/facturas` | Registra una factura de compra (renglón del 606 origen `compras` + datos de gestión). 409 NCF repetido del proveedor; 422 si es E41/E43/E47 o datos inválidos |
-| `GET /compras/facturas/{registro606_id}` · `PUT` · `DELETE` | Detalle con sus pagos. `PUT` cambia solo lo enviado (gestión + `tipo_bienes_servicios` del 606). `DELETE` solo origen `compras` sin pagos vigentes (409) |
-| `GET /compras/pagos?registro606_id=&periodo=` · `POST /compras/pagos` | Pagos a proveedores; el `POST` actualiza el 606 (ver Modelo). Fecha por defecto = hoy |
+| `POST /compras/facturas` | Registra una factura de compra o nota de crédito (renglón del 606 origen `compras` + datos de gestión). 409 NCF repetido del proveedor o 606/IT-1 del mes presentado; 422 si es E41/E43/E47, nota sin `ncf_modificado` o datos inválidos |
+| `GET /compras/facturas/{registro606_id}` · `PUT` · `DELETE` | Detalle con sus pagos (también de una nota de crédito). `PUT` cambia solo lo enviado (gestión + `tipo_bienes_servicios` del 606; no vuelve a null una vez clasificado: 422). `DELETE` solo origen `compras` sin pagos vigentes (409). 409 si el 606 (o el IT-1) del mes está presentado |
+| `GET /compras/pagos?registro606_id=&periodo=` · `POST /compras/pagos` | Pagos a proveedores; el `POST` actualiza el 606 (ver Modelo). Fecha por defecto = hoy; 422 si es futura |
 | `POST /compras/pagos/{id}/anular` | Anula y recalcula el 606; 409 si ya estaba anulado o el IT-1/IR-17 afectado está presentado |
 | `GET /compras/comprobantes?tipo_ecf=41\|43&estado=&q=&periodo=` | E41 y E43 emitidos |
 | `GET /compras/retenciones?periodo=AAAAMM` | Retenciones del mes por comprobante y por proveedor, con totales |
@@ -410,6 +476,9 @@ el 606.
 
 - `APROBACION_COMERCIAL_URL` (por defecto `http://aprobacion-comercial:8000`)
   y `APROBACION_COMERCIAL_TIMEOUT_SEGUNDOS` (60).
+- `CONSULTA_DIRECTORIO_URL` (por defecto `http://consulta-directorio:8000`)
+  y `ENTREGA_EMISOR_TIMEOUT_SEGUNDOS` (30), para entregar el ACECF al
+  proveedor.
 - `EMISOR_RAZON_SOCIAL` (opcional) para el certificado de retención.
 
 ## Despliegue

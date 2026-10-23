@@ -16,7 +16,6 @@ bandeja de entrada de Compras de `erp_api` (aprobación comercial), ver
 """
 import logging
 from contextlib import asynccontextmanager
-from decimal import Decimal, InvalidOperation
 
 from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,9 +24,9 @@ from lxml import etree
 
 from libs.ecf_common.auth.jwt_tokens import TokenInvalidoError, validar_token
 from libs.ecf_common.auth.signing import CredencialFirma, cargar_certificado_p12, firmar_xml
-from libs.ecf_common.compras606 import fecha_dgii_a_aaaammdd, registrar_compra_606
+from libs.ecf_common.compras606 import registrar_compra_606
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
-from libs.ecf_common.ecf_recibidos import registrar_ecf_recibido, separar_bienes_servicios
+from libs.ecf_common.ecf_recibidos import datos_606_desde_ecf, ecf_rechazado, parsear_xml, registrar_ecf_recibido
 
 from .arecf_builder import construir_arecf
 from .config import ReceptorRecepcionSettings, get_settings
@@ -62,7 +61,7 @@ def health(settings: ReceptorRecepcionSettings = Depends(get_settings)) -> dict:
 
 def _parse_ecf(xml_bytes: bytes) -> etree._Element:
     try:
-        return etree.fromstring(xml_bytes)
+        return parsear_xml(xml_bytes)  # sin entidades ni red: viene de un tercero
     except etree.XMLSyntaxError as exc:
         raise HTTPException(status_code=422, detail=f"XML mal formado: {exc}") from exc
 
@@ -81,31 +80,25 @@ async def _registrar_compra_606_desde_ecf(
 ) -> None:
     """Best-effort: un e-CF con FechaEmision faltante/inválida simplemente no
     se registra en compras606 (se puede agregar a mano luego) -- nunca debe
-    impedir que se devuelva el ARECF, que es la parte obligatoria."""
+    impedir que se devuelva el ARECF, que es la parte obligatoria. Los
+    montos salen de `datos_606_desde_ecf` (los mismos con los que erp-api
+    crea el renglón desde la bandeja): sin ITBIS aunque las líneas lo
+    incluyan (IndicadorMontoGravado=1) y con selectivo, otros impuestos y
+    propina legal en sus casillas."""
     try:
-        fecha_emision = root.findtext(".//FechaEmision")
-        fecha_comprobante = fecha_dgii_a_aaaammdd(fecha_emision) if fecha_emision else None
-        if not fecha_comprobante:
+        datos = datos_606_desde_ecf(root)
+        if datos is None:
             logger.warning("e-CF %s sin FechaEmision válida, no se registra en compras606", encf)
             return
-        ncf_modificado = root.findtext(".//InformacionReferencia/NCFModificado")
-        try:
-            itbis_facturado = Decimal(root.findtext(".//TotalITBIS") or "0")
-        except InvalidOperation:
-            itbis_facturado = Decimal("0")
-        servicios, bienes = separar_bienes_servicios(root)
+        if await ecf_rechazado(pool, rnc_emisor, encf):
+            logger.info("e-CF %s reenviado, pero ya fue rechazado comercialmente: no vuelve al 606", encf)
+            return
         await registrar_compra_606(
             pool,
             origen="receptor_recepcion",
             referencia_tipo="ecf_recibido",
             referencia_id=None,
-            rnc_cedula=rnc_emisor,
-            ncf=encf,
-            ncf_modificado=ncf_modificado,
-            fecha_comprobante=fecha_comprobante,
-            monto_servicios=servicios,
-            monto_bienes=bienes,
-            itbis_facturado=itbis_facturado,
+            **{**datos, "rnc_cedula": rnc_emisor, "ncf": encf},
         )
     except Exception:
         logger.exception("No se pudo registrar el e-CF %s en compras606", encf)
@@ -160,7 +153,9 @@ async def recibir_ecf(
         estado="recibido",
     )
     await _registrar_compra_606_desde_ecf(app.state.db_pool, root, rnc_emisor, encf)
-    # Después del 606, para enlazar su renglón. Best-effort como los dos anteriores.
+    # Después del 606, para enlazar su renglón. Best-effort como los dos
+    # anteriores y sin esperar candados: verifica la firma del e-CF pero
+    # nunca cambia la respuesta (ver libs/ecf_common/ecf_recibidos.py).
     await registrar_ecf_recibido(app.state.db_pool, xml_bytes, root)
 
     return Response(content=arecf_firmado, media_type="text/xml")

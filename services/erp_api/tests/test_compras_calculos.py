@@ -189,3 +189,100 @@ async def test_enviar_aprobacion_comercial_sin_conexion(monkeypatch):
     _con_transporte(monkeypatch, handler)
     with pytest.raises(aprobacion_client.AprobacionComercialError, match="No se pudo contactar"):
         await aprobacion_client.enviar_aprobacion_comercial("http://x", encf="E310000000001", xml=b"<ACECF/>")
+
+
+# --- Revisión fase 3: ACECF, respuesta de la DGII, forma de pago, entrega al emisor ---------------------------------------------------------
+
+def test_acecf_exige_fecha_emision():
+    # El XSD del ACECF la exige (minOccurs=1): el repositorio responde 422 antes.
+    with pytest.raises(ValueError, match="FechaEmision"):
+        _acecf(fecha_emision=None)
+
+
+@pytest.mark.parametrize(
+    "respuesta,resultado",
+    [
+        ({"mensaje": ["Aprobación comercial recibida"], "estado": "Aprobada", "codigo": "1"}, "aceptada"),
+        ({"mensaje": [], "estado": "Aprobada", "codigo": 1}, "aceptada"),
+        ({"mensaje": ["e-CF no encontrado"], "estado": "Rechazada", "codigo": "2"}, "rechazada"),
+        ({"mensaje": ["El e-CF no requiere Aprobación Comercial"], "estado": "Rechazada", "codigo": "2"},
+         "no_requerida"),
+        ({"estado": "Aceptado"}, "rechazada"),  # 2xx sin código: no es éxito
+    ],
+)
+def test_resultado_aprobacion_dgii(respuesta, resultado):
+    assert compras_calculos.resultado_aprobacion_dgii(respuesta)[0] == resultado
+
+
+def test_resultado_aprobacion_dgii_junta_los_mensajes():
+    _, texto = compras_calculos.resultado_aprobacion_dgii({"mensaje": ["uno", "dos"], "codigo": "2"})
+    assert texto == "uno; dos"
+
+
+def test_pago_parcial_sigue_a_credito():
+    pago = Pago(fecha=date(2026, 10, 1), metodo="efectivo")
+    nuevo = compras_calculos.campos_pago_606(BASE, [pago], saldada=False)
+    assert nuevo.forma_pago == compras_calculos.FORMA_PAGO_CREDITO
+    assert nuevo.fecha_pago == "20261001"
+    assert compras_calculos.campos_pago_606(BASE, [pago], saldada=True).forma_pago == 1
+
+
+def test_saldada_con_nota_de_credito_es_mixta():
+    pago = Pago(fecha=date(2026, 10, 1), metodo="transferencia")
+    assert compras_calculos.campos_pago_606(BASE, [pago], con_notas_credito=True).forma_pago == 7
+    assert compras_calculos.FORMA_PAGO_NOTA_CREDITO == 6
+
+
+@pytest.mark.parametrize(
+    "url,esperada",
+    [
+        ("https://prov.com.do", "https://prov.com.do/fe/aprobacioncomercial/api/ecf"),
+        ("https://prov.com.do/", "https://prov.com.do/fe/aprobacioncomercial/api/ecf"),
+        ("https://prov.com.do/fe/aprobacioncomercial/api/ecf", "https://prov.com.do/fe/aprobacioncomercial/api/ecf"),
+    ],
+)
+def test_url_aprobacion_comercial_emisor(url, esperada):
+    assert aprobacion_client.url_aprobacion_comercial_emisor(url) == esperada
+
+
+async def test_entregar_acecf_al_emisor(monkeypatch):
+    llamadas = []
+
+    def handler(request: httpx.Request):
+        llamadas.append((request.method, str(request.url), request.content))
+        if request.url.path == "/directorio/131234567":
+            return httpx.Response(
+                200, json=[{"nombre": "P", "rnc": "131234567", "urlRecepcion": "https://p", "urlAceptacion": "https://p"}]
+            )
+        return httpx.Response(200)
+
+    _con_transporte(monkeypatch, handler)
+    url = await aprobacion_client.entregar_acecf_al_emisor(
+        "http://consulta-directorio:8000", rnc_emisor="131234567", nombre_archivo="131897542E310000000001.xml",
+        xml=b"<ACECF>firmado</ACECF>",
+    )
+    assert url == "https://p/fe/aprobacioncomercial/api/ecf"
+    assert llamadas[1][0] == "POST" and llamadas[1][1] == url
+    assert b'name="xml"; filename="131897542E310000000001.xml"' in llamadas[1][2]
+
+
+def _directorio_y_proveedor_401(request: httpx.Request):
+    if request.url.path.startswith("/directorio"):
+        return httpx.Response(200, json=[{"urlAceptacion": "https://p"}])
+    return httpx.Response(401, text="token requerido")
+
+
+@pytest.mark.parametrize(
+    "handler,mensaje",
+    [
+        (lambda r: httpx.Response(200, json=[]), "no tiene URL de aprobación comercial"),
+        (lambda r: httpx.Response(502, json={"detail": "DGII"}), "Consulta Directorio respondió 502"),
+        (_directorio_y_proveedor_401, "El proveedor respondió 401"),
+    ],
+)
+async def test_entregar_acecf_al_emisor_errores(monkeypatch, handler, mensaje):
+    _con_transporte(monkeypatch, handler)
+    with pytest.raises(aprobacion_client.EntregaEmisorError, match=mensaje):
+        await aprobacion_client.entregar_acecf_al_emisor(
+            "http://x", rnc_emisor="131234567", nombre_archivo="a.xml", xml=b"<ACECF/>"
+        )
