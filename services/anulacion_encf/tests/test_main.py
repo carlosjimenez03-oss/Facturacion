@@ -60,6 +60,9 @@ def test_anular_rango_ok(client, monkeypatch, credencial_prueba):
     assert response.json()["rnc"] == "101672919"
     assert len(_fake_registrar_envio.llamadas) == 1
     assert _fake_registrar_envio.llamadas[0]["modulo"] == "anulacion_encf"
+    # Además de la respuesta de la DGII se guarda el detalle del ANECF
+    # (aquí vacío: el XML de prueba no trae rangos).
+    assert _fake_registrar_envio.llamadas[0]["respuesta"]["rangos"] == []
 
 
 def test_anular_rango_error_dgii(client, monkeypatch, credencial_prueba):
