@@ -29,6 +29,7 @@ datos es **Supabase** (self-hosted, recurso aparte en Dokploy) — ver
 | `CERTIFICADO_PASSWORD` | Contraseña del certificado `.p12` (ver paso 3) |
 | `DATABASE_URL` | Cadena de conexión al Postgres de Supabase (pooler Supavisor, puerto 5432). Ver [`SUPABASE.md`](SUPABASE.md), paso 2 |
 | `SUPABASE_NETWORK` | Red de Docker del recurso de Supabase (p. ej. `facturacion-supabase-soscqp_default`), para llegar a `supavisor` por la red interna. Ver [`SUPABASE.md`](SUPABASE.md), paso 2 |
+| `EMISOR_100_ELECTRONICO` | Opcional, por defecto `true`: la empresa emite solo e-CF, así que el 607 y el 608 aparecen como "No aplica". Póngalo en `false` si todavía emite NCF serie B. Ver [`ERP_API.md`](ERP_API.md) |
 
 Opcionales (con default razonable si se omiten):
 
