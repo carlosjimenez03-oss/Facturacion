@@ -1,0 +1,57 @@
+/* Piezas del detalle de factura que no están en el sistema de diseño base (index.css). */
+
+/* Línea de tiempo "Proceso DGII" */
+.proc{list-style:none;margin:0;padding:20px 20px 8px}
+.proc li{display:flex;gap:14px}
+.proc-eje{display:flex;flex-direction:column;align-items:center}
+.proc-pt{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;flex:none;box-sizing:border-box}
+.proc-pt svg{width:14px;height:14px}
+.proc-pt.ok{background:#0F766E;color:#fff}
+.proc-pt.mal{background:#FEE2E2;color:#B91C1C}
+.proc-pt.esp{background:#FEF9C3;color:#854D0E}
+.proc-pt.pend{background:#fff;border:2px solid #E5E7EB;color:#9CA3AF}
+.proc-pt.esp::after{content:"";width:8px;height:8px;border-radius:50%;background:currentColor}
+.proc-ln{width:2px;flex:1;min-height:28px;background:#99D5CE;margin:4px 0}
+.proc-ln.pend{background:#E5E7EB}
+.proc-tx{padding-bottom:18px;min-width:0}
+.proc-tx b{display:block;font-weight:600;color:#111827;font-size:14px}
+.proc-tx.pend b{color:#6B7280;font-weight:500}
+.proc-det{font-size:12.5px;color:#4B5563;margin-top:4px;overflow-wrap:anywhere}
+
+/* Tarjeta de emisor y cliente */
+.partes{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.partes > div{padding:20px}
+.partes > div + div{border-left:1px solid #EEF0F2}
+.partes-cap{font-size:12px;color:#6B7280;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:8px}
+.partes-nom{font-weight:650;color:#111827}
+.partes-det{color:#6B7280;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+@media (max-width:640px){.partes > div + div{border-left:0;border-top:1px solid #EEF0F2}.partes > div{padding:16px}}
+
+/* Panel de rechazo */
+.card.rech{border-color:#FECACA;background:#FEF2F2}
+.rech-in{padding:20px 22px;display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start}
+.rech-ic{width:40px;height:40px;border-radius:10px;background:#FEE2E2;color:#B91C1C;display:grid;place-items:center;flex:none}
+.rech-ic svg{width:22px;height:22px}
+.rech-main{flex:1 1 420px;min-width:0;display:flex;flex-direction:column;gap:10px}
+.rech-main h2{margin:0;font-size:17px;color:#7F1D1D;font-weight:650}
+.rech-main > div > p{margin:4px 0 0;color:#991B1B;font-size:13.5px}
+.rech-msg{background:#fff;border:1px solid #FECACA;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;gap:6px}
+.rech-cod{font-weight:600;color:#B91C1C;background:#FEE2E2;padding:2px 8px;border-radius:5px}
+.rech-txt{font-size:13.5px;color:#111827;font-weight:600;overflow-wrap:anywhere}
+.rech-fix{font-size:13.5px;color:#4B5563;line-height:1.5}
+.rech-fix b{color:#111827}
+.rech-sec{gap:10px;font-size:13.5px;color:#7F1D1D}
+.rech-acc{flex:0 1 300px;display:flex;flex-direction:column;gap:8px}
+@media (max-width:640px){.rech-in{padding:16px;gap:14px}.rech-acc{flex-basis:100%}}
+
+/* Visor de XML */
+.xml-pre{margin:0;padding:16px 20px;max-height:420px;overflow:auto;background:#F8FAFC;font-size:12px;line-height:1.55;color:#1F2937;white-space:pre;border-radius:0 0 12px 12px}
+
+/* Sección plegable "Acciones avanzadas" */
+details.card > summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 20px}
+details.card > summary::-webkit-details-marker{display:none}
+details.card > summary h2{margin:0;font-size:15px;font-weight:650;color:#111827}
+details.card > summary svg{width:16px;height:16px;color:#9CA3AF;transition:transform .15s}
+details.card[open] > summary{border-bottom:1px solid #EEF0F2}
+details.card[open] > summary svg{transform:rotate(180deg)}
+@media (max-width:640px){details.card > summary .avz-txt{display:none}}

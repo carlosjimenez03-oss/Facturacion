@@ -1,10 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { CODIGOS_MODIFICACION, TIPOS_INGRESOS } from "../lib/catalogos";
+import { erpApi, ErpApiError } from "../lib/erpApi";
+import type { Cliente, Cotizacion } from "../lib/erpApi";
 import { calcularMontoItem, decimal2 } from "../lib/format";
 import { configParaTipo } from "../lib/tipoConfig";
-import { construirDatos, construirItemsInventario, datosAFormState, estadoInicial, nuevoItem } from "../lib/buildDatos";
+import {
+  construirDatos,
+  construirItemsInventario,
+  datosAFormState,
+  desglose,
+  estadoInicial,
+  itemsDesdeCotizacion,
+  nuevoItem,
+  siguienteEncf,
+} from "../lib/buildDatos";
 import type { FormState } from "../lib/buildDatos";
 import { inventarioApi } from "../lib/inventarioApi";
 import { formatoMonto, formatoRnc } from "../lib/marca";
@@ -67,35 +78,36 @@ function fechaLegible(fechaIso: string): string {
   return `${d}/${m}/${a}`;
 }
 
+function diasEntre(desdeIso: string, hastaIso: string): number {
+  return Math.round((new Date(`${hastaIso}T12:00:00`).getTime() - new Date(`${desdeIso}T12:00:00`).getTime()) / 86400000);
+}
+
+const CODIGOS_TIPO = [...TIPOS_VENTA, ...TIPOS_OTROS].map((t) => t.code);
+const ES_FECHA = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Mensaje legible de un error de erp-api (los 422 de FastAPI traen una lista). */
+function mensajeErp(err: unknown): string {
+  if (!(err instanceof ErpApiError)) return "el servicio de clientes y cotizaciones no responde";
+  try {
+    const lista = JSON.parse(err.message) as { msg?: string }[];
+    if (Array.isArray(lista)) return lista.map((e) => e.msg).filter(Boolean).join(" · ") || err.message;
+  } catch {
+    // no era JSON
+  }
+  return err.message;
+}
+
+/** Origen del formulario cuando se abre desde otra pantalla (cotización, copia de una rechazada, nota). */
+type Origen =
+  | { tipo: "cotizacion"; cotizacion: Cotizacion }
+  | { tipo: "copia"; encf: string | null; estado: string }
+  | { tipo: "nota"; encf: string; fecha: string };
+
 function porcentajeDescuento(item: ItemFactura): string {
   const bruto = (Number(item.CantidadItem) || 0) * (Number(item.PrecioUnitarioItem) || 0);
   const desc = Number(item.DescuentoMonto) || 0;
   if (!bruto || !desc) return "";
   return String(Math.round((desc / bruto) * 10000) / 100);
-}
-
-/** Totales con el desglose por tasa que muestra el diseño. */
-function desglose(items: ItemFactura[]) {
-  const t = { subtotal: 0, descuentos: 0, g18: 0, g16: 0, g0: 0, exento: 0, i18: 0, i16: 0, total: 0 };
-  for (const item of items) {
-    const bruto = (Number(item.CantidadItem) || 0) * (Number(item.PrecioUnitarioItem) || 0);
-    const neto = calcularMontoItem(item);
-    t.subtotal += bruto;
-    t.descuentos += bruto - neto;
-    if (item.IndicadorFacturacion === "1") {
-      t.g18 += neto;
-      t.i18 += neto * 0.18;
-    } else if (item.IndicadorFacturacion === "2") {
-      t.g16 += neto;
-      t.i16 += neto * 0.16;
-    } else if (item.IndicadorFacturacion === "3") {
-      t.g0 += neto;
-    } else if (item.IndicadorFacturacion === "4") {
-      t.exento += neto;
-    }
-  }
-  t.total = t.g18 + t.g16 + t.g0 + t.exento + t.i18 + t.i16;
-  return t;
 }
 
 function IconoInfo() {
@@ -122,21 +134,51 @@ export function FacturaForm() {
   const editando = Boolean(id);
   const { facturas, recargar } = useFacturas();
 
+  // Parámetros de /facturas/nueva: ?tipo=34&afecta=E31…&fecha=YYYY-MM-DD, ?cotizacion=<id>, ?cliente=<id>, ?copiar=<id>
+  const [params] = useSearchParams();
+  const param = (clave: string) => (editando ? null : params.get(clave));
+  const tipoParam = param("tipo");
+  const afectaParam = param("afecta")?.trim().toUpperCase().slice(0, 13) || null;
+  const fechaParam = param("fecha");
+  const cotizacionId = param("cotizacion");
+  const clienteId = param("cliente");
+  const copiarId = param("copiar");
+  const tipoInicial = tipoParam && CODIGOS_TIPO.includes(tipoParam) ? tipoParam : "31";
+
   const [idGuardado, setIdGuardado] = useState<string | null>(id ?? null);
-  const [tipoEcf, setTipoEcf] = useState("31");
-  const [form, setForm] = useState<FormState>(() => ({
-    ...estadoInicial("31"),
-    fechaVencimientoSecuencia: leerVencimientoSecuencia("31"),
-  }));
+  const [tipoEcf, setTipoEcf] = useState(tipoInicial);
+  const [form, setForm] = useState<FormState>(() => {
+    const inicial = { ...estadoInicial(tipoInicial), fechaVencimientoSecuencia: leerVencimientoSecuencia(tipoInicial) };
+    if (!afectaParam) return inicial;
+    const fecha = fechaParam && ES_FECHA.test(fechaParam) ? fechaParam : "";
+    return {
+      ...inicial,
+      ncfModificado: afectaParam,
+      fechaNcfModificado: fecha,
+      // Nota de crédito: la DGII pide indicar si pasaron más de 30 días desde la factura original.
+      indicadorNotaCredito: fecha && diasEntre(fecha, inicial.fechaEmision) > 30 ? "1" : "0",
+    };
+  });
   const [encfManual, setEncfManual] = useState(false);
   const [formaPago, setFormaPago] = useState("1");
   const [emisor, setEmisor] = useState<DatosEmisor>(leerEmisor);
   const [editandoEmisor, setEditandoEmisor] = useState(() => !leerEmisor().direccion);
   const [consumidorFinal, setConsumidorFinal] = useState(true);
-  const [clienteEstado, setClienteEstado] = useState<"" | "encontrado" | "nuevo">("");
+  const [clienteEstado, setClienteEstado] = useState<"" | "buscando" | "encontrado" | "nuevo">("");
+  /** Contacto de erp-api elegido para esta factura (null si es nuevo o no se pudo consultar). */
+  const [clienteErp, setClienteErp] = useState<Cliente | null>(null);
+  const [contactosSinConexion, setContactosSinConexion] = useState(false);
+  const [sugerencias, setSugerencias] = useState<Cliente[]>([]);
+  const [origen, setOrigen] = useState<Origen | null>(() =>
+    afectaParam ? { tipo: "nota", encf: afectaParam, fecha: fechaParam && ES_FECHA.test(fechaParam) ? fechaParam : "" } : null,
+  );
+  const [avisoForm, setAvisoForm] = useState<string | null>(null);
+  const cotizacionMarcada = useRef(false);
+  const avisoAlSalir = useRef<string | null>(null);
+  const compradorDeOriginal = useRef(false);
   const [productos, setProductos] = useState<Producto[]>([]);
   const [facturaCompleta, setFacturaCompleta] = useState<FacturaDetalle | null>(null);
-  const [cargando, setCargando] = useState(editando);
+  const [cargando, setCargando] = useState(editando || Boolean(cotizacionId || copiarId));
   const [procesando, setProcesando] = useState<"" | "borrador" | "emitir">("");
   const [confirmar, setConfirmar] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -189,15 +231,142 @@ export function FacturaForm() {
       .finally(() => setCargando(false));
   }, [id]);
 
-  /** Próximo e-NCF sugerido: el mayor ya usado de este tipo + 1. */
-  const proximoEncf = useMemo(() => {
-    const prefijo = `E${tipoEcf}`;
-    let mayor = 0;
-    for (const f of facturas) {
-      if (f.encf?.startsWith(prefijo)) mayor = Math.max(mayor, Number(f.encf.slice(3)) || 0);
+  /** Llena el comprador con un contacto de erp-api y aplica su condición de pago. */
+  function aplicarCliente(c: Cliente) {
+    const pasaporte = c.tipo_identificacion === "pasaporte";
+    setClienteErp(c);
+    setClienteEstado("encontrado");
+    setConsumidorFinal(false);
+    setForm((prev) => ({
+      ...prev,
+      compradorRnc: pasaporte ? "" : (c.rnc ?? prev.compradorRnc),
+      compradorIdentificadorExtranjero: pasaporte ? (c.rnc ?? "") : prev.compradorIdentificadorExtranjero,
+      razonSocialComprador: c.nombre,
+      correoComprador: c.correo ?? "",
+      direccionComprador: c.direccion ?? "",
+      ...(c.condicion_pago_dias > 0 ? { fechaLimitePago: sumarDias(prev.fechaEmision, c.condicion_pago_dias) } : {}),
+    }));
+    if (c.condicion_pago_dias > 0) setFormaPago("4");
+  }
+
+  function aplicarTipo(nuevo: string) {
+    setTipoEcf(nuevo);
+    setEncfManual(false);
+    setForm((prev) => ({ ...prev, tipoEcf: nuevo, fechaVencimientoSecuencia: leerVencimientoSecuencia(nuevo) }));
+  }
+
+  // ?cotizacion=<id>: cliente y líneas de la cotización.
+  useEffect(() => {
+    if (!cotizacionId) return;
+    erpApi
+      .obtenerCotizacion(cotizacionId)
+      .then(async (cot) => {
+        setOrigen({ tipo: "cotizacion", cotizacion: cot });
+        if (cot.estado === "facturada") cotizacionMarcada.current = true;
+        if (!cot.cliente_rnc && !tipoParam) aplicarTipo("32");
+        setConsumidorFinal(!cot.cliente_rnc && !cot.cliente_nombre);
+        setForm((prev) => ({
+          ...prev,
+          compradorRnc: cot.cliente_rnc ?? "",
+          razonSocialComprador: cot.cliente_nombre ?? "",
+          items: cot.items.length > 0 ? itemsDesdeCotizacion(cot.items) : prev.items,
+        }));
+        // Correo, dirección y condición de pago salen del contacto (si erp-api lo tiene).
+        try {
+          if (cot.cliente_id) aplicarCliente(await erpApi.obtenerCliente(cot.cliente_id));
+          else if (cot.cliente_rnc) aplicarCliente(await erpApi.clientePorRnc(cot.cliente_rnc));
+        } catch {
+          // sin contacto: se queda con el nombre y el RNC de la cotización
+        }
+      })
+      .catch((err) => setAvisoForm(`No se pudo cargar la cotización: ${mensajeErp(err)}. Puede llenar la factura a mano.`))
+      .finally(() => setCargando(false));
+  }, [cotizacionId]);
+
+  // ?cliente=<id>: "Facturar" desde Contactos.
+  useEffect(() => {
+    if (!clienteId) return;
+    erpApi
+      .obtenerCliente(clienteId)
+      .then((c) => {
+        if (!c.rnc && !tipoParam) aplicarTipo("32");
+        aplicarCliente(c);
+      })
+      .catch((err) => setAvisoForm(`No se pudo cargar el contacto: ${mensajeErp(err)}.`));
+  }, [clienteId]);
+
+  // ?copiar=<id>: "Corregir y emitir nueva factura" desde una rechazada. Mismos datos, e-NCF nuevo.
+  useEffect(() => {
+    if (!copiarId) return;
+    api
+      .obtener(copiarId)
+      .then((original) => {
+        const tipo = String(original.tipo_ecf);
+        const copia = datosAFormState(tipo, "", original.datos, original.items_inventario);
+        const hoy = estadoInicial(tipo).fechaEmision;
+        const plazo = copia.fechaLimitePago ? diasEntre(copia.fechaEmision, copia.fechaLimitePago) : 0;
+        setTipoEcf(tipo);
+        setEncfManual(false);
+        setForm({
+          ...copia,
+          encf: "",
+          fechaEmision: hoy,
+          fechaLimitePago: plazo > 0 ? sumarDias(hoy, plazo) : copia.fechaLimitePago,
+          fechaVencimientoSecuencia: copia.fechaVencimientoSecuencia || leerVencimientoSecuencia(tipo),
+        });
+        setFormaPago(copia.formasPago[0]?.FormaPago ?? (copia.tipoPago === "2" ? "4" : "1"));
+        setConsumidorFinal(!copia.compradorRnc && !copia.razonSocialComprador);
+        setOrigen({ tipo: "copia", encf: original.encf, estado: original.estado });
+      })
+      .catch((err) => setAvisoForm(`No se pudo copiar la factura: ${err instanceof ApiError ? err.message : String(err)}.`))
+      .finally(() => setCargando(false));
+  }, [copiarId]);
+
+  // ?afecta=<e-NCF>: la nota va al mismo comprador de la factura original.
+  useEffect(() => {
+    if (!afectaParam || compradorDeOriginal.current) return;
+    const original = facturas.find((f) => f.encf === afectaParam);
+    if (!original) return;
+    compradorDeOriginal.current = true;
+    api
+      .obtener(original.id)
+      .then((fac) => {
+        const c = (fac.datos.Encabezado.Comprador ?? {}) as Record<string, unknown>;
+        if (!c.RNCComprador && !c.RazonSocialComprador) return;
+        setConsumidorFinal(false);
+        setForm((prev) =>
+          prev.compradorRnc || prev.razonSocialComprador
+            ? prev
+            : {
+                ...prev,
+                compradorRnc: String(c.RNCComprador ?? ""),
+                razonSocialComprador: String(c.RazonSocialComprador ?? ""),
+                correoComprador: String(c.CorreoComprador ?? ""),
+                direccionComprador: String(c.DireccionComprador ?? ""),
+              },
+        );
+      })
+      .catch(() => undefined);
+  }, [afectaParam, facturas]);
+
+  // Búsqueda de clientes por nombre mientras se escribe la razón social.
+  const nombreBuscado = clienteEstado === "encontrado" ? "" : form.razonSocialComprador.trim();
+  useEffect(() => {
+    if (nombreBuscado.length < 2) {
+      setSugerencias([]);
+      return;
     }
-    return `${prefijo}${String(mayor + 1).padStart(10, "0")}`;
-  }, [facturas, tipoEcf]);
+    const t = window.setTimeout(() => {
+      erpApi
+        .listarClientes({ q: nombreBuscado, activo: true })
+        .then(setSugerencias)
+        .catch(() => setSugerencias([]));
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [nombreBuscado]);
+
+  /** Próximo e-NCF sugerido: el mayor ya usado de este tipo + 1. */
+  const proximoEncf = useMemo(() => siguienteEncf(facturas, tipoEcf), [facturas, tipoEcf]);
 
   useEffect(() => {
     if (!encfManual) setForm((prev) => ({ ...prev, encf: proximoEncf }));
@@ -214,23 +383,75 @@ export function FacturaForm() {
 
   function cambiarTipo(nuevo: string) {
     if (editando || nuevo === tipoEcf) return;
-    setTipoEcf(nuevo);
-    setEncfManual(false);
-    setForm((prev) => ({ ...prev, tipoEcf: nuevo, fechaVencimientoSecuencia: leerVencimientoSecuencia(nuevo) }));
+    aplicarTipo(nuevo);
   }
 
-  function verificarCliente() {
-    const encontrado = buscarCliente(form.compradorRnc);
-    if (encontrado) {
-      setForm((prev) => ({
-        ...prev,
-        razonSocialComprador: encontrado.razonSocial,
-        correoComprador: encontrado.correo,
-        direccionComprador: encontrado.direccion,
-      }));
-      setClienteEstado("encontrado");
-    } else {
-      setClienteEstado("nuevo");
+  /** "Verificar": busca el RNC en Contactos (erp-api). Si el servicio no responde, usa lo recordado en el navegador. */
+  async function verificarCliente() {
+    const rnc = form.compradorRnc.replace(/\D/g, "");
+    if (!rnc) return;
+    setClienteEstado("buscando");
+    try {
+      aplicarCliente(await erpApi.clientePorRnc(rnc));
+      setContactosSinConexion(false);
+    } catch (err) {
+      setClienteErp(null);
+      if (err instanceof ErpApiError && err.status === 404) {
+        setContactosSinConexion(false);
+        setClienteEstado("nuevo");
+        return;
+      }
+      setContactosSinConexion(true);
+      const encontrado = buscarCliente(rnc);
+      if (encontrado) {
+        setForm((prev) => ({
+          ...prev,
+          razonSocialComprador: encontrado.razonSocial,
+          correoComprador: encontrado.correo,
+          direccionComprador: encontrado.direccion,
+        }));
+        setClienteEstado("encontrado");
+      } else {
+        setClienteEstado("nuevo");
+      }
+    }
+  }
+
+  /** Al guardar con un RNC que no está en Contactos, lo agrega. Nunca bloquea ni hace fallar la factura. */
+  async function registrarContacto() {
+    if (!pideComprador || clienteErp) return;
+    const rnc = form.compradorRnc.replace(/\D/g, "");
+    const tipoId = rnc.length === 9 ? "rnc" : rnc.length === 11 ? "cedula" : null;
+    if (!tipoId || !form.razonSocialComprador.trim()) return;
+    try {
+      setClienteErp(await erpApi.clientePorRnc(rnc));
+    } catch (err) {
+      if (!(err instanceof ErpApiError && err.status === 404)) return;
+      try {
+        const creado = await erpApi.crearCliente({
+          tipo: tipoEcf === "41" || tipoEcf === "47" ? "proveedor" : "cliente",
+          tipo_identificacion: tipoId,
+          rnc,
+          nombre: form.razonSocialComprador.trim(),
+          correo: form.correoComprador.trim() || null,
+          direccion: form.direccionComprador.trim() || null,
+        });
+        setClienteErp(creado);
+      } catch {
+        // erp-api caído o rechazó el contacto: la factura ya se guardó, no se interrumpe
+      }
+    }
+  }
+
+  /** Vincula la cotización de origen con la factura recién creada. Devuelve un aviso si falla. */
+  async function marcarCotizacion(facturaId: string): Promise<string | null> {
+    if (origen?.tipo !== "cotizacion" || cotizacionMarcada.current) return null;
+    try {
+      await erpApi.marcarCotizacionFacturada(origen.cotizacion.id, facturaId);
+      cotizacionMarcada.current = true;
+      return null;
+    } catch (err) {
+      return `La factura se guardó, pero la cotización ${origen.cotizacion.numero} no se pudo marcar como facturada (${mensajeErp(err)}). Márquela desde Cotizaciones.`;
     }
   }
 
@@ -326,11 +547,22 @@ export function FacturaForm() {
     }
     if (idGuardado) {
       await api.actualizar(idGuardado, { encf: form.encf || null, datos, items_inventario });
+      void registrarContacto();
       return idGuardado;
     }
     const creada = await api.crear({ tipo_ecf: Number(tipoEcf), encf: form.encf || null, datos, items_inventario });
     setIdGuardado(creada.id);
+    void registrarContacto();
+    const aviso = await marcarCotizacion(creada.id);
+    if (aviso) setAvisoForm(aviso);
+    avisoAlSalir.current = aviso;
     return creada.id;
+  }
+
+  /** Estado de navegación hacia el detalle: lleva el aviso de la cotización si quedó alguno. */
+  function estadoAlSalir() {
+    const detalle = avisoAlSalir.current;
+    return detalle ? { state: { aviso: { texto: "Cotización sin marcar como facturada", detalle, tono: "aviso" } } } : undefined;
   }
 
   async function guardarBorrador() {
@@ -342,7 +574,7 @@ export function FacturaForm() {
     try {
       const fid = await guardar();
       recargar();
-      navigate(`/facturas/${fid}`);
+      navigate(`/facturas/${fid}`, estadoAlSalir());
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -371,7 +603,7 @@ export function FacturaForm() {
       }
       await api.enviar(fid);
       recargar();
-      navigate(`/facturas/${fid}`);
+      navigate(`/facturas/${fid}`, estadoAlSalir());
     } catch (err) {
       recargar();
       setError(err instanceof ApiError ? err.message : String(err));
@@ -406,6 +638,52 @@ export function FacturaForm() {
           </p>
         </div>
       </div>
+
+      {origen?.tipo === "cotizacion" && (
+        <div className={origen.cotizacion.estado === "facturada" ? "al al-w" : "al al-i"}>
+          <IconoInfo />
+          <span>
+            {origen.cotizacion.estado === "facturada" ? (
+              <>
+                <b>La cotización {origen.cotizacion.numero} ya fue facturada.</b> Si continúa, se emitirá otra factura con los mismos datos.
+              </>
+            ) : (
+              <>
+                <b>Factura a partir de la cotización {origen.cotizacion.numero}</b> de {origen.cotizacion.cliente_nombre} por RD${" "}
+                {formatoMonto(origen.cotizacion.total)}. Al guardarla, la cotización quedará marcada como facturada.
+              </>
+            )}
+          </span>
+        </div>
+      )}
+      {origen?.tipo === "copia" && (
+        <div className="al al-i">
+          <IconoInfo />
+          <span>
+            <b>Copia de {origen.encf ?? "la factura"}{origen.estado === "rechazado" ? " (rechazada por la DGII)" : ""}.</b> Corrija los datos antes de
+            emitir: se usará un e-NCF nuevo, porque el anterior no puede reutilizarse.
+          </span>
+        </div>
+      )}
+      {origen?.tipo === "nota" && (
+        <div className="al al-i">
+          <IconoInfo />
+          <span>
+            <b>
+              {tipoEcf === "33" ? "Nota de débito" : tipoEcf === "34" ? "Nota de crédito" : "Comprobante"} que modifica{" "}
+              <span className="mono">{origen.encf}</span>
+              {origen.fecha && ` del ${fechaLegible(origen.fecha)}`}.
+            </b>{" "}
+            Indique las líneas y montos que {tipoEcf === "33" ? "aumentan" : "anulan o reducen"} la factura original.
+          </span>
+        </div>
+      )}
+      {avisoForm && (
+        <div className="al al-w" role="status">
+          <IconoAlerta />
+          <span>{avisoForm}</span>
+        </div>
+      )}
 
       <section className="card">
         <div className="card-h">
@@ -534,13 +812,14 @@ export function FacturaForm() {
                         onChange={(e) => {
                           set("compradorRnc", e.target.value.replace(/[^\d-]/g, ""));
                           setClienteEstado("");
+                          setClienteErp(null);
                         }}
                         onBlur={() => form.compradorRnc && !form.razonSocialComprador && verificarCliente()}
                         placeholder="130452187"
                         inputMode="numeric"
                       />
-                      <button type="button" className="btn btn-o" onClick={verificarCliente} disabled={!form.compradorRnc}>
-                        Verificar
+                      <button type="button" className="btn btn-o" onClick={verificarCliente} disabled={!form.compradorRnc || clienteEstado === "buscando"}>
+                        {clienteEstado === "buscando" ? "Buscando…" : "Verificar"}
                       </button>
                     </div>
                   </div>
@@ -563,14 +842,52 @@ export function FacturaForm() {
                           <path d="M20 6 9 17l-5-5" />
                         </svg>
                         <span style={{ fontWeight: 600, color: "#14532D", fontSize: 13.5 }}>{form.razonSocialComprador}</span>
-                        <button type="button" className="bd b-acep" style={{ marginLeft: "auto", height: 22, border: 0, cursor: "pointer" }} onClick={() => setClienteEstado("nuevo")} title="Editar">
-                          Activo
+                        <button
+                          type="button"
+                          className={clienteErp && !clienteErp.activo ? "bd b-borr" : "bd b-acep"}
+                          style={{ marginLeft: "auto", height: 22, border: 0, cursor: "pointer" }}
+                          onClick={() => setClienteEstado("")}
+                          title="Editar el nombre"
+                        >
+                          {clienteErp ? (clienteErp.activo ? "Activo" : "Inactivo") : "Guardado"}
                         </button>
                       </div>
                     ) : (
-                      <input id="rs" className="inp" value={form.razonSocialComprador} onChange={(e) => set("razonSocialComprador", e.target.value)} placeholder="Nombre o razón social" />
+                      <>
+                        <input
+                          id="rs"
+                          className="inp"
+                          list="clientes-sugeridos"
+                          autoComplete="off"
+                          value={form.razonSocialComprador}
+                          onChange={(e) => {
+                            const elegido = sugerencias.find((c) => c.nombre === e.target.value);
+                            if (elegido) aplicarCliente(elegido);
+                            else set("razonSocialComprador", e.target.value);
+                          }}
+                          placeholder="Nombre o razón social (escriba para buscar)"
+                        />
+                        <datalist id="clientes-sugeridos">
+                          {sugerencias
+                            .filter((c) => (tipoEcf === "41" || tipoEcf === "47" ? c.tipo !== "cliente" : c.tipo !== "proveedor"))
+                            .map((c) => (
+                              <option key={c.id} value={c.nombre}>
+                                {c.rnc ? formatoRnc(c.rnc) : "Sin RNC"}
+                              </option>
+                            ))}
+                        </datalist>
+                      </>
                     )}
-                    {clienteEstado === "nuevo" && <span className="hint">Cliente nuevo: se guardará para la próxima vez.</span>}
+                    {clienteEstado === "nuevo" && (
+                      <span className="hint">
+                        {contactosSinConexion
+                          ? "No hay conexión con Contactos: complete los datos a mano."
+                          : "Cliente nuevo: se agregará a Contactos al guardar la factura."}
+                      </span>
+                    )}
+                    {clienteEstado === "encontrado" && clienteErp && clienteErp.condicion_pago_dias > 0 && (
+                      <span className="hint">Condición del cliente: crédito a {clienteErp.condicion_pago_dias} días.</span>
+                    )}
                   </div>
                   <div className="fld">
                     <label className="lbl" htmlFor="cmail">Correo del cliente</label>
