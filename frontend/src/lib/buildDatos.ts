@@ -8,6 +8,8 @@ export interface FormState {
   fechaVencimientoSecuencia: string;
   tipoIngresos: string;
   tipoPago: string;
+  /** Fecha límite de pago (YYYY-MM-DD) para ventas a crédito (TipoPago 2). */
+  fechaLimitePago: string;
   formasPago: FormaPago[];
 
   rncEmisor: string;
@@ -38,6 +40,7 @@ export function estadoInicial(tipoEcf: string): FormState {
     fechaVencimientoSecuencia: "",
     tipoIngresos: "01",
     tipoPago: "1",
+    fechaLimitePago: "",
     formasPago: [],
     rncEmisor: "",
     razonSocialEmisor: "",
@@ -87,6 +90,9 @@ export function construirDatos(form: FormState, config: TipoEcfConfig): FacturaD
     idDoc.TipoIngresos = form.tipoIngresos;
   }
   idDoc.TipoPago = form.tipoPago;
+  if (form.tipoPago === "2" && form.fechaLimitePago) {
+    idDoc.FechaLimitePago = fechaADgii(form.fechaLimitePago);
+  }
   if (form.formasPago.length > 0) {
     idDoc.TablaFormasPago = { FormaDePago: form.formasPago };
   }
@@ -167,7 +173,7 @@ export function construirDatos(form: FormState, config: TipoEcfConfig): FacturaD
  * en ItemFactura.productoId) que le dice a facturas_api qué producto del
  * catálogo y qué cantidad descontar de inventario por cada línea, al
  * enviar la factura. Líneas sin producto vinculado se omiten (por ahora
- * ItemsEditor obliga a elegir producto en toda línea, pero por si acaso). */
+ * las líneas de servicio sin producto del catálogo no descuentan stock). */
 export function construirItemsInventario(items: ItemFactura[]): ItemInventarioLink[] {
   return items
     .map((item, idx) => ({ item, numeroLinea: String(idx + 1) }))
@@ -183,7 +189,7 @@ export function construirItemsInventario(items: ItemFactura[]): ItemInventarioLi
  * factura ya guardada, para poder recuperar/editar un borrador.
  * `itemsInventario` (aparte de `datos`, ver ItemFactura.productoId) se
  * vuelve a fusionar en cada línea por NumeroLinea, para que el selector de
- * producto de ItemsEditor recupere lo ya elegido. */
+ * producto de FacturaForm recupere lo ya elegido. */
 export function datosAFormState(
   tipoEcf: string,
   encf: string,
@@ -209,6 +215,7 @@ export function datosAFormState(
       : "",
     tipoIngresos: (idDoc.TipoIngresos as string) ?? "01",
     tipoPago: (idDoc.TipoPago as string) ?? "1",
+    fechaLimitePago: idDoc.FechaLimitePago ? fechaDeDgii(String(idDoc.FechaLimitePago)) : "",
     formasPago: tablaFormasPago?.FormaDePago ?? [],
     rncEmisor: (emisor.RNCEmisor as string) ?? "",
     razonSocialEmisor: (emisor.RazonSocialEmisor as string) ?? "",
