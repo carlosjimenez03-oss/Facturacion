@@ -26,57 +26,90 @@ directamente por `asyncpg`: lo único que cambia es la variable
 
 1. En Dokploy, en su proyecto: **Create Service → Template**, busque
    **Supabase** y créelo (es un recurso Compose aparte del de la
-   facturación).
-2. Antes del primer deploy, en la pestaña **Environment** del recurso de
-   Supabase, cambie como mínimo:
-   - `POSTGRES_PASSWORD`: contraseña larga y única (la usará `DATABASE_URL`).
-   - `DASHBOARD_USERNAME` y `DASHBOARD_PASSWORD`: usuario y clave para entrar
-     a Studio.
-   - `JWT_SECRET`, `ANON_KEY`, `SERVICE_ROLE_KEY`: genérelos nuevos (la guía
-     oficial "Self-Hosting with Docker" de Supabase explica cómo); no deje los
-     de ejemplo.
-   - Anote `POOLER_TENANT_ID` (por defecto `your-tenant-id`; puede cambiarlo).
-3. **Domains**: asigne un dominio al servicio **kong** (por ejemplo
-   `supabase.acentosdeco.lat`, puerto `8000`). Por ahí se entra a Studio.
-4. **Deploy** y espere a que todos los contenedores estén en verde.
+   facturación). La plantilla genera los secretos al azar.
+2. En su pestaña **Environment** cambie como mínimo `DASHBOARD_PASSWORD`
+   (larga) y ponga `DISABLE_SIGNUP=true` (la aplicación no usa el login de
+   Supabase). Use para `POSTGRES_PASSWORD` solo letras y números, así no
+   hay que codificarla en la cadena de conexión.
+3. **Deploy** y espere a que todos los contenedores estén *healthy*.
 
-## 2. Armar la cadena de conexión (`DATABASE_URL`)
+### Acceso a Studio con Cloudflare Tunnel
 
-La aplicación se conecta al pooler de Supabase (**Supavisor**) en **modo
-sesión, puerto 5432**:
+Si el servidor publica sus sitios con un Cloudflare Tunnel (rutas tipo
+`front.acentosdeco.lat → http://localhost:8013`), el gateway de Supabase
+(`api-gw`, puerto interno 8000) no es alcanzable desde el túnel: solo vive
+en la red de Docker de Supabase. **No** apunte la ruta a `localhost:8000`:
+ese puerto del servidor puede ser de otro servicio.
 
-```
-postgresql://postgres.<POOLER_TENANT_ID>:<POSTGRES_PASSWORD>@<HOST>:5432/postgres
-```
+1. En Dokploy → recurso de Supabase → **General → Edit compose** (o la
+   pestaña del compose), en el servicio `api-gw` agregue:
 
-- `<HOST>`: la IP privada o pública del servidor de Dokploy (el pooler
-  publica el puerto 5432 en el host). Para confirmarlo, en el servidor:
-  `docker ps --format '{{.Names}}  {{.Ports}}' | grep -i -E 'supavisor|pooler'`
-  debe mostrar `0.0.0.0:5432->5432`. Si no aparece, en el compose de
-  Supabase agregue `ports: ["5432:5432"]` al servicio `supavisor` y redeploy.
-- Si la contraseña tiene caracteres especiales (`@ : / ? #`), escríbalos
-  codificados (`@` → `%40`, `:` → `%3A`, `/` → `%2F`).
-- También funciona el modo transacción (puerto `6543`): la aplicación lo
-  detecta y desactiva la caché de sentencias de `asyncpg`. Use 5432 para el
-  script de migración.
+   ```yaml
+       ports:
+         - "127.0.0.1:8040:8000"
+   ```
 
-Nunca escriba esta cadena en el repositorio ni en chats: va solo en la
+   `127.0.0.1` lo publica solo dentro del servidor (para el túnel), no a
+   Internet. Si el 8040 está ocupado (`ss -ltn | grep :8040`), use otro.
+2. **Deploy** del recurso de Supabase.
+3. En Cloudflare → **Zero Trust → Networks → Tunnels → su túnel → Rutas**,
+   edite `supa.acentosdeco.lat` y cambie el servicio a `http://localhost:8040`.
+4. Abra `https://supa.acentosdeco.lat`: pide `DASHBOARD_USERNAME` /
+   `DASHBOARD_PASSWORD` y abre Studio. (El dominio que Dokploy le asigna a
+   `api-gw` no se usa con el túnel; puede dejarlo o quitarlo.)
+
+## 2. Conexión de la aplicación (`DATABASE_URL` y `SUPABASE_NETWORK`)
+
+La aplicación entra a la red interna de Docker del recurso de Supabase y se
+conecta al pooler **Supavisor** por su nombre, en modo sesión (5432). Así no
+hace falta publicar el puerto de la base en el servidor.
+
+1. Nombre de la red de Supabase. Por SSH en el servidor:
+
+   ```sh
+   docker network ls --format '{{.Name}}' | grep -i supabase
+   ```
+
+   Normalmente es `<nombre-del-recurso>_default`, por ejemplo
+   `facturacion-supabase-soscqp_default`. Ese valor es `SUPABASE_NETWORK`.
+2. Cadena de conexión (`POOLER_TENANT_ID` y `POSTGRES_PASSWORD` están en el
+   Environment del recurso de Supabase):
+
+   ```
+   postgresql://postgres.<POOLER_TENANT_ID>:<POSTGRES_PASSWORD>@supavisor:5432/postgres
+   ```
+
+   Si la contraseña tiene caracteres especiales (`@ : / ? #`), escríbalos
+   codificados (`@` → `%40`, `:` → `%3A`, `/` → `%2F`). El modo transacción
+   (`supavisor:6543`) también funciona: la aplicación desactiva la caché de
+   sentencias de `asyncpg` automáticamente.
+
+Nunca escriba estos valores en el repositorio ni en chats: van solo en la
 pestaña Environment de Dokploy.
 
 ## 3. Migrar los datos actuales
 
-Con la aplicación todavía en la versión anterior (con su `postgres`):
+Con la aplicación todavía en la versión anterior (su contenedor `postgres`
+viejo sigue encendido):
 
-1. Dokploy → recurso de la facturación → **Open Terminal** → elija el
-   contenedor **postgres**.
-2. Pegue el script [`scripts/supabase/migrar_datos.sh`](../scripts/supabase/migrar_datos.sh)
-   en un archivo y ejecútelo con su cadena del paso 2:
+1. Por SSH, conecte temporalmente el `postgres` viejo a la red de Supabase
+   para que pueda verlo:
+
+   ```sh
+   docker ps --format '{{.Names}}' | grep -E 'facturacion.*postgres'
+   docker network connect <SUPABASE_NETWORK> <nombre-del-contenedor-postgres-viejo>
+   ```
+
+2. Dokploy → recurso de la facturación → **Open Terminal** → contenedor
+   **postgres**. Pegue el script
+   [`scripts/supabase/migrar_datos.sh`](../scripts/supabase/migrar_datos.sh)
+   en un archivo y ejecútelo con la cadena del paso 2:
 
    ```sh
    cat > /tmp/migrar.sh <<'FIN'
    (pegue aquí el contenido completo de scripts/supabase/migrar_datos.sh)
    FIN
-   DESTINO_URL='postgresql://postgres.your-tenant-id:SU_CLAVE@IP_DEL_SERVIDOR:5432/postgres' sh /tmp/migrar.sh
+   DESTINO_URL='postgresql://postgres.<POOLER_TENANT_ID>:<POSTGRES_PASSWORD>@supavisor:5432/postgres' sh /tmp/migrar.sh
    ```
 
 3. El script exporta los esquemas `facturacion`, `inventario` y `compras606`
@@ -95,7 +128,7 @@ en orden el contenido de `db/init/001_schema.sql` a `db/init/006_compras606.sql`
 ## 4. Apuntar la aplicación a Supabase
 
 1. Dokploy → recurso de la facturación → **Environment**:
-   - agregue `DATABASE_URL` con la cadena del paso 2;
+   - agregue `DATABASE_URL` y `SUPABASE_NETWORK` con los valores del paso 2;
    - puede borrar `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB`,
      `PGADMIN_DEFAULT_EMAIL` y `PGADMIN_DEFAULT_PASSWORD` (ya no se usan).
 2. Una a `main` el cambio de este documento (o haga **Deploy** si ya está).
@@ -103,13 +136,13 @@ en orden el contenido de `db/init/001_schema.sql` a `db/init/006_compras606.sql`
    ese servicio ya no existe.
 4. Abra el frontend y compruebe que aparecen sus facturas, productos y
    proveedores. Si un servicio no arranca, revise sus logs: un error de
-   conexión casi siempre es `<HOST>`, el puerto o la contraseña de
+   conexión casi siempre es `SUPABASE_NETWORK`, el tenant o la contraseña de
    `DATABASE_URL`.
 
 ## 5. Ver y modificar los datos en Supabase Studio
 
-1. Entre al dominio de **kong** del paso 1 con `DASHBOARD_USERNAME` /
-   `DASHBOARD_PASSWORD`.
+1. Entre al dominio de Studio del paso 1 (`supa.acentosdeco.lat`) con
+   `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD`.
 2. **Table Editor** → en el selector de esquema (arriba a la izquierda) elija
    `facturacion`, `inventario` o `compras606`. Ahí puede ver, filtrar, editar,
    insertar y borrar filas como en una hoja de cálculo.
@@ -133,7 +166,9 @@ aplicación.
   Supabase (por defecto solo expone `public`). No los agregue en
   *Settings → API → Exposed schemas*: la aplicación no lo necesita y
   dejaría leer facturas con la `ANON_KEY`.
-- No publique el puerto 5432 a Internet: si el servidor tiene IP pública,
-  limite el puerto con el firewall a la propia máquina o a su red privada.
+- La base no necesita ningún puerto publicado en el servidor: la aplicación
+  llega a `supavisor` por la red interna. Si la plantilla de Supabase publica
+  5432/6543 en el host y el servidor tiene IP pública, ciérrelos con el
+  firewall.
 - Proteja Studio con una `DASHBOARD_PASSWORD` fuerte; quien entra ahí puede
   modificar todo.

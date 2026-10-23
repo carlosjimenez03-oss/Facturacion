@@ -24,8 +24,9 @@ x-modulo-env: &modulo-env
   CERTIFICADO_PASSWORD: ${CERTIFICADO_PASSWORD:?CERTIFICADO_PASSWORD es requerido}
   ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-["*"]}
   # Base de datos: Postgres de Supabase (self-hosted en Dokploy). Cadena de
-  # conexión del pooler Supavisor -- ver docs/SUPABASE.md. Ejemplo (modo
-  # sesión): postgresql://postgres.<POOLER_TENANT_ID>:<POSTGRES_PASSWORD>@<host>:5432/postgres
+  # conexión del pooler Supavisor por la red interna `supabase` -- ver
+  # docs/SUPABASE.md. Ejemplo (modo sesión):
+  # postgresql://postgres.<POOLER_TENANT_ID>:<POSTGRES_PASSWORD>@supavisor:5432/postgres
   DATABASE_URL: ${DATABASE_URL:?DATABASE_URL es requerido (Postgres de Supabase, ver docs/SUPABASE.md)}
 
 x-modulo-comun: &modulo-comun
@@ -33,7 +34,9 @@ x-modulo-comun: &modulo-comun
   environment: *modulo-env
   volumes:
     - ./certs:/app/certs:ro
-  networks: [facturacion]
+  # `supabase`: red interna del recurso de Supabase en Dokploy, para llegar
+  # al pooler (`supavisor`) por nombre sin publicar el 5432 en el servidor.
+  networks: [facturacion, supabase]
 
 services:
   # --- Base de datos ---
@@ -233,3 +236,8 @@ services:
 
 networks:
   facturacion:
+  # Red creada por el recurso de Supabase (se ve con `docker network ls`, por
+  # ejemplo facturacion-supabase-soscqp_default). Ver docs/SUPABASE.md, paso 2.
+  supabase:
+    external: true
+    name: ${SUPABASE_NETWORK:?SUPABASE_NETWORK es requerido (red de Docker del recurso de Supabase, ver docs/SUPABASE.md)}
