@@ -2,7 +2,8 @@
 // o anual y consumo real del mes. No hay pasarela de pago: "Elegir plan"
 // registra una solicitud en erp-api y explica cómo se completa el pago.
 import { useCallback, useEffect, useState } from "react";
-import { EMPRESA_NOMBRE, formatoMonto } from "../../lib/marca";
+import { formatoMonto } from "../../lib/marca";
+import { useDatosEmpresa } from "../../lib/configuracionApi";
 import { solucionesApi } from "../../lib/solucionesApi";
 import type { Consumo, Periodicidad, Plan, SolicitudPlan, Suscripcion } from "../../lib/solucionesApi";
 import { AvisoError, Cargando, Modal } from "../ingresos/IngresosShell";
@@ -68,6 +69,7 @@ function filasConsumo(c: Consumo): FilaConsumo[] {
 }
 
 export function PlanesPage() {
+  const miEmpresa = useDatosEmpresa();
   const [planes, setPlanes] = useState<Plan[]>([]);
   const [suscripcion, setSuscripcion] = useState<Suscripcion | null>(null);
   const [consumo, setConsumo] = useState<Consumo | null>(null);
@@ -127,7 +129,7 @@ export function PlanesPage() {
         plan: elegido.clave,
         periodicidad,
         forma_pago: formaPago,
-        contacto_nombre: contacto.nombre.trim() || EMPRESA_NOMBRE,
+        contacto_nombre: contacto.nombre.trim() || miEmpresa.nombre,
         contacto_correo: contacto.correo.trim() || null,
         contacto_telefono: contacto.telefono.trim() || null,
       });
@@ -321,7 +323,7 @@ export function PlanesPage() {
                 className="inp"
                 value={contacto.nombre}
                 onChange={(e) => setContacto({ ...contacto, nombre: e.target.value })}
-                placeholder={EMPRESA_NOMBRE}
+                placeholder={miEmpresa.nombre}
               />
             </label>
             <label className="fld">

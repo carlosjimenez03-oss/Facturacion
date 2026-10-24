@@ -959,6 +959,39 @@ Rutas en `app/configuracion.py` (prefijo `/configuracion`) y
 El e-NCF no se reserva aquí: facturas_api sigue recibiendo el que manda el
 formulario, que lo propone a partir de esta información.
 
+## Soluciones (fase 6): POS, portal de clientes, planes y Kontara Ventas
+
+Rutas en `app/soluciones.py`, consultas en `app/soluciones_repository.py`,
+reglas puras en `app/soluciones_calculos.py`; esquema `soluciones`
+(`DDL_SOLUCIONES` = `db/init/016_soluciones.sql`). Contrato:
+`frontend/src/lib/solucionesApi.ts`.
+
+- **Planes**: `GET /suscripcion` (plan, `estado` prueba/activa/prueba_vencida
+  y `dias_restantes`; lo lee la tarjeta de prueba de los menús laterales) y
+  `GET /suscripcion/consumo`. Los **usuarios** del consumo son los usuarios
+  activos de Supabase Auth, contados con la API admin de GoTrue
+  (`app/gotrue_admin.py`) cuando erp-api tiene `SUPABASE_SERVICE_ROLE_KEY`;
+  sin ella llegan `null` y Planes muestra «—».
+- **Portal de clientes**: `/portal/*` (crear, revocar enlaces y datos
+  bancarios) pide sesión como todo `/api-erp`; `/portal/publico/<token>/*`
+  (lo abre el cliente desde `/p/<token>` del frontend) es **público**: nginx
+  tiene una `location /api-erp/portal/publico/` sin `auth_request` y, con
+  `REQUIRE_AUTH=true`, erp-api también la deja pasar (`main.py`). Lo protege
+  el token del enlace (solo se guarda su hash, vence y se revoca).
+- **Canales de Kontara Ventas y del portal** (`app/soluciones_canales.py`,
+  `canales_de_envio`): primero el SMTP y el WhatsApp Cloud API guardados en
+  Configuración → WhatsApp y correo (`configuracion.preferencias`, secretos
+  cifrados, ver `app/configuracion_envio.py`); si un canal no está completo
+  allí, las variables `SMTP_HOST`, `SMTP_PORT`, `SMTP_USUARIO`, `SMTP_CLAVE`,
+  `SMTP_REMITENTE`, `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`. Sin canal
+  los envíos quedan `pendiente_canal`.
+- **Tarea diaria** de Kontara Ventas: `SOLUCIONES_TAREA_ACTIVA` (true por
+  defecto) y `SOLUCIONES_TAREA_INTERVALO_HORAS` (24). El PDF de las facturas
+  lo pide a `FACTURAS_API_URL` (por defecto `http://facturas-api:8000`).
+- **POS**: sesiones de caja y ventas; cada venta es un E32 (o E31 con RNC)
+  emitido por facturas-api con el emisor, el siguiente e-NCF y el vencimiento
+  de la secuencia de Configuración.
+
 ## Despliegue
 
 Servicio `erp-api` en `docker-compose.dokploy.yml` (puerto de host 8019,

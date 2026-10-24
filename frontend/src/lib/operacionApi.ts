@@ -7,14 +7,15 @@
 // decimal, fechas "YYYY-MM-DD", marcas de tiempo ISO 8601 y períodos "AAAAMM".
 import { ERP_API_URL, ErpApiError } from "./erpApi";
 import { textoDetalle } from "./comprasApi";
+import { authHeaders, fetchConSesion } from "./sesion";
 
-/** Cabeceras de todas las peticiones de este cliente (aquí se agrega la autenticación). */
+/** Cabeceras de todas las peticiones de este cliente (la sesión la pone y renueva `fetchConSesion`). */
 function cabeceras(): HeadersInit {
-  return { "Content-Type": "application/json" };
+  return { "Content-Type": "application/json", ...authHeaders() };
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${ERP_API_URL}${path}`, { ...init, headers: { ...cabeceras(), ...init?.headers } });
+  const response = await fetchConSesion(`${ERP_API_URL}${path}`, { ...init, headers: { ...cabeceras(), ...init?.headers } });
   if (!response.ok) {
     let detail: unknown = response.statusText;
     try {

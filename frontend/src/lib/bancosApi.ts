@@ -18,6 +18,7 @@
 // Bancos registra con fecha <= su corte hasta reabrirla.
 import { ERP_API_URL, ErpApiError } from "./erpApi";
 import { textoDetalle } from "./comprasApi";
+import { fetchConSesion } from "./sesion";
 
 async function respuesta<T>(response: Response): Promise<T> {
   if (!response.ok) {
@@ -38,7 +39,7 @@ async function respuesta<T>(response: Response): Promise<T> {
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return respuesta<T>(
-    await fetch(`${ERP_API_URL}${path}`, { headers: { "Content-Type": "application/json" }, ...init }),
+    await fetchConSesion(`${ERP_API_URL}${path}`, { headers: { "Content-Type": "application/json" }, ...init }),
   );
 }
 
@@ -49,7 +50,7 @@ async function enviarArchivo<T>(path: string, archivo: File | Blob, campos: Reco
   for (const [k, v] of Object.entries(campos)) {
     if (v !== undefined && v !== "") form.append(k, v);
   }
-  return respuesta<T>(await fetch(`${ERP_API_URL}${path}`, { method: "POST", body: form }));
+  return respuesta<T>(await fetchConSesion(`${ERP_API_URL}${path}`, { method: "POST", body: form }));
 }
 
 function consulta(params: Record<string, string | number | boolean | undefined | null>): string {

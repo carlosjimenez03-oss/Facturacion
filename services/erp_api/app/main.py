@@ -126,8 +126,16 @@ app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.state.db_pool = None
 
 # REQUIRE_AUTH=true: la API misma exige sesión (ver docs/AUTH.md). /auth/verificar
-# hace su propia verificación (es el que consulta nginx).
-instalar_verificacion_sesion(app, settings, rutas_publicas={"/auth/verificar"})
+# hace su propia verificación (es el que consulta nginx) y el portal público de
+# clientes (/portal/publico/<token>, Soluciones) se abre sin sesión: lo protege
+# su token.
+RUTA_PORTAL_PUBLICO = "/portal/publico/"
+instalar_verificacion_sesion(
+    app,
+    settings,
+    rutas_publicas={"/auth/verificar"},
+    es_publica=lambda ruta: ruta.startswith(RUTA_PORTAL_PUBLICO),
+)
 
 app.add_middleware(
     CORSMiddleware,

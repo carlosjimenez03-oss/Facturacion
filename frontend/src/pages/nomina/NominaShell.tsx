@@ -2,20 +2,14 @@
 // (logo "kontara Nómina", Inicio, Bandeja de entrada, Empleados, Nómina, Pagos, Suscripciones,
 // Configuración, "← Volver a Facturación" y la tarjeta de prueba gratuita).
 //
-// El menú lateral global pertenece al layout (AppShell). Mientras el layout no lo reemplace, cada
-// pantalla de Nómina dibuja su menú como una columna a la izquierda del contenido. Para que el menú
-// de Nómina ocupe el lugar del menú principal, como en el prototipo, AppShell solo tiene que hacer:
-//
-//   const nomina = esRutaNomina(useLocation().pathname);
-//   {nomina ? <NominaSidebar /> : <Sidebar />}
-//   <NominaSidebarGlobal.Provider value={nomina}>{children}</NominaSidebarGlobal.Provider>
-//
-// (NominaSidebar de este archivo; esRutaNomina y NominaSidebarGlobal de ./nominaUtil) y entonces la
-// columna interna desaparece sola.
+// En las rutas /nomina* AppShell dibuja NominaSidebar en el lugar del menú principal y avisa con
+// NominaSidebarGlobal (./nominaUtil), así que NominaShell ya no repite el menú como columna interna.
+// Fuera de AppShell (sin ese contexto) cada pantalla de Nómina dibuja su menú a la izquierda.
 import { useContext, type ReactNode } from "react";
 import { Link, NavLink } from "react-router-dom";
 import "../ingresos/ingresos.css";
 import "./nomina.css";
+import { tarjetaPrueba, useSuscripcion } from "../../lib/solucionesApi";
 import { NominaSidebarGlobal, useAvisosNomina } from "./nominaUtil";
 
 const MENU = [
@@ -50,6 +44,7 @@ function IconoVolver() {
 
 function MenuNomina({ clase }: { clase: string }) {
   const { noLeidos } = useAvisosNomina();
+  const prueba = tarjetaPrueba(useSuscripcion());
   return (
     <aside className={clase} aria-label="Menú de Nómina">
       <div className={clase === "sb" ? "sb-head" : "nm-head"}>
@@ -80,15 +75,17 @@ function MenuNomina({ clase }: { clase: string }) {
           <span className="sb-lbl">← Volver a Facturación</span>
         </Link>
       </nav>
-      <div className="nm-trial">
-        <b>Te quedan 15 días gratis</b>
-        <div className="pb">
-          <span />
+      {prueba && (
+        <div className="nm-trial">
+          <b>{prueba.titulo}</b>
+          <div className="pb">
+            <span style={{ width: `${prueba.avance}%` }} />
+          </div>
+          <Link to="/planes" className="btn btn-sm nm-cta">
+            {prueba.boton}
+          </Link>
         </div>
-        <Link to="/planes" className="btn btn-sm nm-cta">
-          Elegir plan
-        </Link>
-      </div>
+      )}
     </aside>
   );
 }

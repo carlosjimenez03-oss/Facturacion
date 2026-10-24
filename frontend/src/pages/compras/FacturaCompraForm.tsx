@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { IconAlerta } from "../../layout/icons";
+import { bancosApi } from "../../lib/bancosApi";
+import type { CuentaBancaria } from "../../lib/bancosApi";
 import { comprasApi } from "../../lib/comprasApi";
 import type { FacturaCompra, FacturaCompraActualizar, MetodoPago, SugerenciaRetencion } from "../../lib/comprasApi";
 import { erpApi } from "../../lib/erpApi";
@@ -13,6 +15,7 @@ import { AvisoError, Modal } from "../ingresos/IngresosShell";
 import { useAviso } from "../ingresos/useAviso";
 import { centavos, fechaLegible, hoyIso, mensajeError } from "../ingresos/ingresosUtil";
 import { nombrePeriodo } from "../impuestos/impuestosUtil";
+import { etiquetaCuenta } from "../bancos/bancosUtil";
 import { Ayuda, IconoCalendario, IconoDocumento, IconoEscudo, IconoOk } from "./ComprasShell";
 import {
   ESTADO_CXP,
@@ -149,6 +152,8 @@ function NuevaFacturaCompra() {
   const [fechaPago, setFechaPago] = useState(hoyIso);
   const [metodo, setMetodo] = useState<MetodoPago>("transferencia");
   const [cuenta, setCuenta] = useState("");
+  const [cuentaBancariaId, setCuentaBancariaId] = useState("");
+  const [bancos, setBancos] = useState<CuentaBancaria[]>([]);
   const [referencia, setReferencia] = useState("");
   const [sug, setSug] = useState<SugerenciaRetencion | null>(null);
   const [errorSug, setErrorSug] = useState<string | null>(null);
@@ -164,6 +169,17 @@ function NuevaFacturaCompra() {
   const total = centavos(montoAntes + itbisValor);
   const retenciones = sug ? centavos(Number(sug.retencion_isr) + Number(sug.retencion_itbis)) : 0;
   const neto = centavos(total - retenciones);
+  // Igual que Pagos: los pagos son en RD$, solo cuentas activas en pesos.
+  const cuentasBanco = bancos.filter((c) => c.activa && c.moneda === "DOP");
+  const cuentaBanco = cuentasBanco.find((c) => c.id === cuentaBancariaId);
+
+  // Cuentas de Bancos para el pago inmediato (sin Bancos queda solo el texto libre).
+  useEffect(() => {
+    bancosApi
+      .listarCuentas()
+      .then(setBancos)
+      .catch(() => setBancos([]));
+  }, []);
 
   // Busca contactos (proveedores) mientras se escribe el nombre o el RNC.
   useEffect(() => {
@@ -292,7 +308,8 @@ function NuevaFacturaCompra() {
           fecha: fechaPago,
           monto: neto.toFixed(2),
           metodo,
-          cuenta_origen: cuenta.trim() || null,
+          cuenta_origen: cuentaBanco ? etiquetaCuenta(cuentaBanco) : cuenta.trim() || null,
+          cuenta_bancaria_id: cuentaBanco?.id ?? null,
           referencia: referencia.trim() || null,
           tipo_retencion_isr: sug && Number(sug.retencion_isr) > 0 ? sug.tipo_retencion_isr : null,
           retencion_isr: sug ? sug.retencion_isr : "0.00",
@@ -588,10 +605,26 @@ function NuevaFacturaCompra() {
                         ))}
                       </select>
                     </div>
-                    <div className="fld">
-                      <label className="lbl" htmlFor="fc-cta">Cuenta de origen</label>
-                      <input id="fc-cta" className="inp" value={cuenta} placeholder={metodo === "efectivo" ? "Caja chica" : "Banco Popular ****4471"} onChange={(e) => setCuenta(e.target.value)} />
-                    </div>
+                    {cuentasBanco.length > 0 && (
+                      <div className="fld">
+                        <label className="lbl" htmlFor="fc-banco">Cuenta bancaria</label>
+                        <select id="fc-banco" className="inp" value={cuentaBancariaId} onChange={(e) => setCuentaBancariaId(e.target.value)}>
+                          <option value="">Sin cuenta de Bancos</option>
+                          {cuentasBanco.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {etiquetaCuenta(c)}
+                            </option>
+                          ))}
+                        </select>
+                        <span className="hint">{cuentaBanco ? "El pago sale de esta cuenta y se concilia con el extracto." : "Elija la cuenta para verlo en Bancos y conciliarlo."}</span>
+                      </div>
+                    )}
+                    {!cuentaBanco && (
+                      <div className="fld">
+                        <label className="lbl" htmlFor="fc-cta">Cuenta de origen</label>
+                        <input id="fc-cta" className="inp" value={cuenta} placeholder={metodo === "efectivo" ? "Caja chica" : "Banco Popular ****4471"} onChange={(e) => setCuenta(e.target.value)} />
+                      </div>
+                    )}
                     <div className="fld">
                       <label className="lbl" htmlFor="fc-ref">Referencia</label>
                       <input id="fc-ref" className="inp mono" value={referencia} placeholder={metodo === "cheque" ? "N.º de cheque" : "N.º de transacción"} onChange={(e) => setReferencia(e.target.value)} />

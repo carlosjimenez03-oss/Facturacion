@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { cargarEmpresa, nombreEmpresa, useEmpresa } from "../lib/configuracionApi";
 import { ERP_API_URL } from "../lib/erpApi";
+import type { ResumenSincronizacion, ResumenTareas } from "../lib/operacionApi";
 import { EMPRESA_NOMBRE, EMPRESA_RNC, formatoRnc, MARCA, nombreAmbiente } from "../lib/marca";
 import { AUTH_CONFIGURADA, cerrarSesion, fetchConSesion } from "../lib/sesion";
 import { motivoRechazo, useFacturas } from "../lib/useFacturas";
@@ -51,9 +52,9 @@ function iniciales(nombre: string, correo: string): string {
 }
 
 /**
- * Consulta opcional a endpoints de otros módulos (Mis tareas, Centro de
- * sincronización). Si todavía no existen (404) o fallan, devuelve null y la
- * barra sigue como si no estuvieran.
+ * Consulta opcional a endpoints de otros módulos (Mis tareas: GET
+ * /tareas/resumen; Centro de sincronización: GET /sincronizacion/resumen).
+ * Si fallan, devuelve null y la barra sigue como si no estuvieran.
  */
 function useOpcional<T>(ruta: string, cadaMs: number): T | null {
   const [valor, setValor] = useState<T | null>(null);
@@ -74,14 +75,6 @@ function useOpcional<T>(ruta: string, cadaMs: number): T | null {
   return valor;
 }
 
-function contarTareas(r: Record<string, unknown> | null): number | null {
-  if (!r) return null;
-  for (const k of ["pendientes", "total_pendientes", "abiertas", "total"]) {
-    if (typeof r[k] === "number") return r[k] as number;
-  }
-  return null;
-}
-
 export function Topbar() {
   const navigate = useNavigate();
   const sesion = useSesion();
@@ -93,9 +86,11 @@ export function Topbar() {
   const [leidas, setLeidas] = useState(false);
   const toggle = (p: Panel) => setPanel((actual) => (actual === p ? null : p));
 
-  const tareas = contarTareas(useOpcional<Record<string, unknown>>("/tareas/resumen", 120_000));
-  const sincronizacion = useOpcional<{ contingencia?: boolean; modo?: string }>("/sincronizacion/estado", 60_000);
-  const contingencia = Boolean(sincronizacion?.contingencia || sincronizacion?.modo === "contingencia");
+  const resumenTareas = useOpcional<ResumenTareas>("/tareas/resumen", 120_000);
+  const tareas = resumenTareas?.pendientes ?? null;
+  // Modo contingencia calculado por el Centro de sincronización (fallos seguidos con la DGII).
+  const sincronizacion = useOpcional<ResumenSincronizacion>("/sincronizacion/resumen", 60_000);
+  const contingencia = Boolean(sincronizacion?.contingencia.activa);
 
   const ambiente = nombreAmbiente(empresa?.ambiente ?? facturas[0]?.ambiente);
   const nombre = nombreEmpresa(empresa, EMPRESA_NOMBRE);
@@ -238,7 +233,11 @@ export function Topbar() {
                     <span className="chip">{tareas}</span>
                     <span className="pop-txt">
                       <b>Tareas pendientes</b>
-                      <span className="hint">Vencimientos fiscales y pendientes de gestión</span>
+                      <span className="hint">
+                        {resumenTareas && (resumenTareas.vencidas > 0 || resumenTareas.vencen_hoy > 0)
+                          ? `${resumenTareas.vencidas} vencidas · ${resumenTareas.vencen_hoy} vencen hoy`
+                          : "Vencimientos fiscales y pendientes de gestión"}
+                      </span>
                     </span>
                   </button>
                 </div>

@@ -1,6 +1,7 @@
 """Reglas puras de Soluciones (services/erp_api/app/soluciones_calculos.py) y
 la entrega de envíos por canal (soluciones_tareas.entregar_pendientes) con
 canales falsos."""
+import json
 from datetime import date
 from decimal import Decimal
 
@@ -9,9 +10,15 @@ import pytest
 from libs.ecf_common.auth.signing import firmar_xml
 from libs.ecf_common.environments import DGIIEnvironment
 from services.erp_api.app import soluciones_calculos as calc
-from services.erp_api.app import soluciones_tareas
+from services.erp_api.app import soluciones_canales, soluciones_tareas
 from services.erp_api.app.repository import DatosInvalidosError
-from services.erp_api.app.soluciones_canales import CanalError, SolucionesSettings, canales_configurados
+from services.erp_api.app.soluciones_canales import (
+    CanalError,
+    CanalesEnvio,
+    SolucionesSettings,
+    canales_configurados,
+    canales_de_envio,
+)
 
 D = Decimal
 
@@ -115,11 +122,75 @@ def test_canales_configurados():
     assert canales_configurados(s) == {"correo": True, "whatsapp": True}
 
 
+class _PoolPreferencias:
+    """Pool falso para `configuracion_envio.leer_preferencia`: devuelve la
+    preferencia guardada (JSON) de cada clave."""
+
+    def __init__(self, preferencias):
+        self.preferencias = preferencias
+
+    def acquire(self):
+        pool = self
+
+        class _Ctx:
+            async def __aenter__(self):
+                return pool
+
+            async def __aexit__(self, *exc):
+                return False
+
+        return _Ctx()
+
+    async def fetchval(self, query, clave):
+        valor = self.preferencias.get(clave)
+        return json.dumps(valor) if valor is not None else None
+
+
+async def test_canales_de_envio_prefiere_configuracion_y_cae_al_entorno(monkeypatch):
+    entorno = SolucionesSettings(smtp_host="smtp.entorno.do", smtp_remitente="env@ejemplo.do")
+    # Nada guardado en Configuración: las variables de entorno.
+    canales = await canales_de_envio(_PoolPreferencias({}), entorno)
+    assert canales.correo is None and canales.whatsapp is None
+    assert canales.configurados() == {"correo": True, "whatsapp": False}
+
+    # Configuración completa: manda sobre el entorno (correo) y agrega WhatsApp.
+    guardado = {
+        "correo": {"host": "smtp.empresa.do", "remitente": "facturas@empresa.do", "puerto": 465, "seguridad": "ssl"},
+        "whatsapp": {"phone_number_id": "555", "token_cifrado": "cifrado"},
+    }
+    canales = await canales_de_envio(_PoolPreferencias(guardado), SolucionesSettings())
+    assert canales.correo["host"] == "smtp.empresa.do"
+    assert canales.whatsapp["phone_number_id"] == "555"
+    assert canales.configurados() == {"correo": True, "whatsapp": True}
+
+    enviados = []
+
+    async def correo_empresa(config, para, asunto, cuerpo, adjuntos=(), timeout=20.0):
+        enviados.append((config["host"], para, [a[0] for a in adjuntos]))
+
+    monkeypatch.setattr(soluciones_canales.envio, "enviar_correo", correo_empresa)
+    await canales.enviar_correo("c@c.do", "Asunto", "Hola", ("E310000000001.pdf", b"%PDF"))
+    assert enviados == [("smtp.empresa.do", "c@c.do", ["E310000000001.pdf"])]
+
+    # Configuración a medias (sin remitente / sin token): se ignora.
+    incompleto = {"correo": {"host": "smtp.empresa.do"}, "whatsapp": {"phone_number_id": "555"}}
+    canales = await canales_de_envio(_PoolPreferencias(incompleto), SolucionesSettings())
+    assert canales.configurados() == {"correo": False, "whatsapp": False}
+
+
+def _sin_configuracion(monkeypatch):
+    async def canales(pool, settings):
+        return CanalesEnvio(settings)
+
+    monkeypatch.setattr(soluciones_tareas, "canales_de_envio", canales)
+
+
 async def test_entregar_pendientes_sin_canal_no_toca_nada(monkeypatch):
     async def cola(pool, canales):
         assert canales == []
         return []
 
+    _sin_configuracion(monkeypatch)
     monkeypatch.setattr(soluciones_tareas.repo, "envios_por_entregar", cola)
     assert await soluciones_tareas.entregar_pendientes(object(), SolucionesSettings()) == {"enviados": 0, "errores": 0}
 
@@ -148,8 +219,9 @@ async def test_entregar_pendientes_registra_exito_y_error(monkeypatch):
 
     monkeypatch.setattr(soluciones_tareas.repo, "envios_por_entregar", cola)
     monkeypatch.setattr(soluciones_tareas.repo, "registrar_entrega", registrar)
-    monkeypatch.setattr(soluciones_tareas, "enviar_whatsapp", whatsapp_ok)
-    monkeypatch.setattr(soluciones_tareas, "enviar_correo", correo_falla)
+    _sin_configuracion(monkeypatch)
+    monkeypatch.setattr(soluciones_canales, "enviar_whatsapp", whatsapp_ok)
+    monkeypatch.setattr(soluciones_canales, "enviar_correo", correo_falla)
     s = SolucionesSettings(smtp_host="h", smtp_remitente="r@r.do", whatsapp_token="t", whatsapp_phone_number_id="1")
     assert await soluciones_tareas.entregar_pendientes(object(), s) == {"enviados": 1, "errores": 1}
     assert registrados == {"a": None, "b": "SMTP: 550 buzón inexistente"}

@@ -21,9 +21,7 @@ from .soluciones_canales import (
     CanalError,
     FacturasApiError,
     SolucionesSettings,
-    canales_configurados,
-    enviar_correo,
-    enviar_whatsapp,
+    canales_de_envio,
     representacion_impresa,
 )
 
@@ -33,15 +31,17 @@ _LOCK_TAREA_VENTAS = 7_016_001
 
 
 async def entregar_pendientes(pool: asyncpg.Pool, settings: SolucionesSettings) -> dict[str, int]:
-    """Entrega por SMTP / WhatsApp los envíos de los canales configurados.
-    Sin canal no se toca nada: quedan 'pendiente_canal'."""
-    canales = [c for c, ok in canales_configurados(settings).items() if ok]
+    """Entrega por SMTP / WhatsApp (los de Configuración o, si no, los de las
+    variables de entorno) los envíos de los canales configurados. Sin canal
+    no se toca nada: quedan 'pendiente_canal'."""
+    salida = await canales_de_envio(pool, settings)
+    canales = [c for c, ok in salida.configurados().items() if ok]
     resumen = {"enviados": 0, "errores": 0}
     for envio in await repo.envios_por_entregar(pool, canales):
         error = None
         try:
             if envio["canal"] == "whatsapp":
-                await enviar_whatsapp(settings, envio["destino"], envio["mensaje"])
+                await salida.enviar_whatsapp(envio["destino"], envio["mensaje"])
             else:
                 adjunto = None
                 if envio["automatizacion"] == "fidelizacion" and envio["factura_id"]:
@@ -51,7 +51,7 @@ async def entregar_pendientes(pool: asyncpg.Pool, settings: SolucionesSettings) 
                         adjunto = (f"{envio['encf'] or envio['factura_id']}.pdf", pdf)
                     except FacturasApiError as exc:
                         raise CanalError(f"No se pudo adjuntar la representación impresa: {exc}") from exc
-                await enviar_correo(settings, envio["destino"], envio["asunto"], envio["mensaje"], adjunto)
+                await salida.enviar_correo(envio["destino"], envio["asunto"], envio["mensaje"], adjunto)
         except CanalError as exc:
             error = str(exc)
         await repo.registrar_entrega(pool, envio["id"], error=error)

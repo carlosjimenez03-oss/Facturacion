@@ -4,7 +4,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { inventarioApi } from "../../lib/inventarioApi";
-import { EMPRESA_NOMBRE, EMPRESA_RNC, formatoMonto, formatoRnc } from "../../lib/marca";
+import { formatoMonto, formatoRnc } from "../../lib/marca";
+import { useDatosEmpresa } from "../../lib/configuracionApi";
 import { AvisoError, Cargando, Vacio } from "../ingresos/IngresosShell";
 import { useAviso } from "../ingresos/useAviso";
 import { descargarCsv, fechaLegible, hoyIso, mensajeError } from "../ingresos/ingresosUtil";
@@ -96,6 +97,7 @@ function csv(v: Celda, col: Columna): string | number {
 const esNumero = (c: Columna) => !!c.formato && !["texto", "mono"].includes(c.formato);
 
 export function ReportesPage() {
+  const miEmpresa = useDatosEmpresa();
   const { reporte: idParam } = useParams();
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
@@ -243,8 +245,8 @@ export function ReportesPage() {
         <div className="rp-imp">
           <h1>{def.t}</h1>
           <p>
-            {EMPRESA_NOMBRE}
-            {EMPRESA_RNC ? ` · RNC ${formatoRnc(EMPRESA_RNC)}` : ""} · {subtitulo} · Generado el {new Date().toLocaleString("es-DO")}
+            {miEmpresa.razonSocial}
+            {miEmpresa.rnc ? ` · RNC ${formatoRnc(miEmpresa.rnc)}` : ""} · {subtitulo} · Generado el {new Date().toLocaleString("es-DO")}
           </p>
         </div>
         <div className="card-h no-imprimir">

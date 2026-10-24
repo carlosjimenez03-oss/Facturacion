@@ -1,13 +1,15 @@
 import { useEffect, useState } from "react";
 import { erpApi } from "../../lib/erpApi";
 import type { Cliente, CotizacionResumen } from "../../lib/erpApi";
-import { EMPRESA_NOMBRE, formatoMonto } from "../../lib/marca";
+import { formatoMonto } from "../../lib/marca";
+import { useDatosEmpresa } from "../../lib/configuracionApi";
 import { Modal } from "./IngresosShell";
 import { enlaceCorreo, enlaceWhatsApp, fechaLegible } from "./ingresosUtil";
 
 /** Prepara el mensaje de la cotización para WhatsApp o correo. Kontara no lo envía:
  * abre la aplicación del usuario con el texto listo para que él lo mande. */
 export function EnviarCotizacion({ cotizacion, onCerrar }: { cotizacion: CotizacionResumen; onCerrar: () => void }) {
+  const miEmpresa = useDatosEmpresa();
   const [cliente, setCliente] = useState<Cliente | null>(null);
   const [copiado, setCopiado] = useState(false);
 
@@ -24,9 +26,9 @@ export function EnviarCotizacion({ cotizacion, onCerrar }: { cotizacion: Cotizac
       `Saludos, ${cotizacion.cliente_nombre}.\n\n` +
       `Le compartimos la cotización ${cotizacion.numero} por un total de RD$ ${formatoMonto(cotizacion.total)} (ITBIS incluido), ` +
       `válida hasta el ${fechaLegible(cotizacion.vence)}.\n\n` +
-      `Quedamos a su disposición para cualquier consulta.\n${EMPRESA_NOMBRE}`,
+      `Quedamos a su disposición para cualquier consulta.\n${miEmpresa.nombre}`,
   );
-  const asunto = `Cotización ${cotizacion.numero} · ${EMPRESA_NOMBRE}`;
+  const asunto = `Cotización ${cotizacion.numero} · ${miEmpresa.nombre}`;
 
   async function copiar() {
     try {

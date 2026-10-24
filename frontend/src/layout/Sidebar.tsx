@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { comprasApi } from "../lib/comprasApi";
 import { MARCA } from "../lib/marca";
+import { tarjetaPrueba, useSuscripcion } from "../lib/solucionesApi";
 import { IconChevron, IconMenu, IconPanel, Logo } from "./icons";
 import { MENU_PRINCIPAL, MENU_SOLUCIONES, type MenuItem } from "./menu";
 
@@ -42,6 +43,9 @@ export function Sidebar() {
       .then((l) => setPendientesBandeja(l.length))
       .catch(() => setPendientesBandeja(0));
   }, [pathname]);
+
+  // Tarjeta de prueba gratis: días restantes de GET /suscripcion (Planes).
+  const prueba = tarjetaPrueba(useSuscripcion());
 
   const clases = ["sb", contraido ? "collapsed" : "", movilAbierto ? "open" : ""].filter(Boolean).join(" ");
 
@@ -118,15 +122,17 @@ export function Sidebar() {
           <div className="sb-cap">Descubre más soluciones</div>
           {MENU_SOLUCIONES.map(renderItem)}
         </nav>
-        <div className="sb-foot" style={{ marginTop: 24, background: "#F5F7F8", borderColor: "#EEF0F2", gap: 12 }}>
-          <span style={{ fontSize: 14, fontWeight: 500, color: "#111827" }}>Te quedan 15 días gratis</span>
-          <div className="pb" style={{ height: 5 }}>
-            <span style={{ width: "50%", background: "#2BA89D" }} />
+        {prueba && (
+          <div className="sb-foot" style={{ marginTop: 24, background: "#F5F7F8", borderColor: "#EEF0F2", gap: 12 }}>
+            <span style={{ fontSize: 14, fontWeight: 500, color: "#111827" }}>{prueba.titulo}</span>
+            <div className="pb" style={{ height: 5 }}>
+              <span style={{ width: `${prueba.avance}%`, background: "#2BA89D" }} />
+            </div>
+            <Link to="/planes" className="btn btn-sm" style={{ background: "#2BA89D", color: "#fff", width: "100%", justifyContent: "center" }}>
+              {prueba.boton}
+            </Link>
           </div>
-          <Link to="/planes" className="btn btn-sm" style={{ background: "#2BA89D", color: "#fff", width: "100%", justifyContent: "center" }}>
-            Elegir plan
-          </Link>
-        </div>
+        )}
       </aside>
     </div>
   );

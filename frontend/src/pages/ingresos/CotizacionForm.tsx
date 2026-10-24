@@ -3,7 +3,8 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { erpApi } from "../../lib/erpApi";
 import type { Cliente, Cotizacion, CotizacionPayload, TasaItbis } from "../../lib/erpApi";
 import { inventarioApi } from "../../lib/inventarioApi";
-import { EMPRESA_NOMBRE, EMPRESA_RNC, formatoMonto, formatoRnc } from "../../lib/marca";
+import { formatoMonto, formatoRnc } from "../../lib/marca";
+import { useDatosEmpresa } from "../../lib/configuracionApi";
 import type { Producto } from "../../lib/types";
 import { IconAlerta } from "../../layout/icons";
 import { EnviarCotizacion } from "./EnviarCotizacion";
@@ -754,12 +755,13 @@ function CotizacionImpresa({
   notas: string;
   totales: ReturnType<typeof totalesCotizacion>;
 }) {
+  const miEmpresa = useDatosEmpresa();
   return (
     <div className="solo-impresion">
       <div className="imp-h">
         <div>
-          <h1>{EMPRESA_NOMBRE}</h1>
-          {EMPRESA_RNC && <div>RNC {formatoRnc(EMPRESA_RNC)}</div>}
+          <h1>{miEmpresa.nombre}</h1>
+          {miEmpresa.rnc && <div>RNC {formatoRnc(miEmpresa.rnc)}</div>}
         </div>
         <div style={{ textAlign: "right" }}>
           <h1>Cotización</h1>

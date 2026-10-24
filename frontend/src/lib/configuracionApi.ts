@@ -6,6 +6,7 @@
 
 import { useEffect, useState } from "react";
 import { ERP_API_URL, ErpApiError } from "./erpApi";
+import { EMPRESA_NOMBRE, EMPRESA_RNC } from "./marca";
 import { guardarEmisor } from "./preferencias";
 import { fetchConSesion } from "./sesion";
 
@@ -271,4 +272,28 @@ export function useEmpresa(): Empresa | null {
 /** Nombre a mostrar: comercial, o razón social. */
 export function nombreEmpresa(e: Empresa | null, porDefecto: string): string {
   return e?.nombre_comercial || e?.razon_social || porDefecto;
+}
+
+/** Lo que las pantallas e impresos muestran de la empresa. */
+export interface DatosEmpresa {
+  /** Nombre comercial, o la razón social. */
+  nombre: string;
+  razonSocial: string;
+  rnc: string;
+}
+
+/** Datos de Configuración → Empresa; lo que falte, de VITE_EMPRESA_NOMBRE / VITE_EMPRESA_RNC. */
+export function datosEmpresa(e: Empresa | null): DatosEmpresa {
+  const razonSocial = e?.razon_social || EMPRESA_NOMBRE;
+  return { nombre: e?.nombre_comercial || razonSocial, razonSocial, rnc: e?.rnc || EMPRESA_RNC };
+}
+
+/** Para textos armados fuera de un componente (mensajes de correo/WhatsApp): la última empresa leída. */
+export function empresaActual(): DatosEmpresa {
+  return datosEmpresa(empresaCache);
+}
+
+/** `useEmpresa` ya resuelto con el respaldo de las variables VITE_*. */
+export function useDatosEmpresa(): DatosEmpresa {
+  return datosEmpresa(useEmpresa());
 }

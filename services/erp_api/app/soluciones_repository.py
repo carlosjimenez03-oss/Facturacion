@@ -3,8 +3,9 @@
 
 * Planes y suscripción: la prueba gratis (15 días desde el primer uso), las
   solicitudes de plan y el consumo del mes, calculado con datos reales
-  (e-CF enviados a la DGII este mes, usuarios si existe la tabla de la
-  plataforma, y el tamaño de los XML guardados).
+  (e-CF enviados a la DGII este mes, usuarios de Supabase Auth -- los cuenta
+  la ruta con gotrue_admin.py, aquí solo llegan -- y el tamaño de los XML
+  guardados).
 * Portal de clientes: enlaces con token (solo se guarda su hash), revocables
   y con vencimiento, y la vista pública de solo lectura del cliente.
 * Kontara Ventas: activación del módulo, las cuatro automatizaciones y la
@@ -93,22 +94,12 @@ async def obtener_suscripcion(pool: asyncpg.Pool) -> dict[str, Any]:
     return resultado
 
 
-# Tablas de usuarios que puede crear la plataforma (auth); la primera que
-# exista se cuenta. Nombres fijos: nunca vienen del usuario.
-_TABLAS_USUARIOS = ("plataforma.usuarios", "auth.usuarios", "public.usuarios")
-
-
-async def _contar_usuarios(conn: asyncpg.Connection) -> int | None:
-    for tabla in _TABLAS_USUARIOS:
-        if await conn.fetchval("SELECT to_regclass($1)", tabla) is not None:
-            return await conn.fetchval(f"SELECT count(*) FROM {tabla}")
-    return None
-
-
-async def consumo(pool: asyncpg.Pool) -> dict[str, Any]:
+async def consumo(pool: asyncpg.Pool, usuarios: int | None = None) -> dict[str, Any]:
     """Uso real del mes: e-CF enviados a la DGII (con trackId) con fecha de
     emisión este mes, usuarios y bytes de XML guardados (emitidos y
-    recibidos)."""
+    recibidos). `usuarios` = usuarios activos de Supabase Auth (los cuenta
+    soluciones.py con la API admin de GoTrue); None = no se pueden contar
+    (sin SUPABASE_SERVICE_ROLE_KEY) y la pantalla muestra "—"."""
     dia = hoy()
     inicio = dia.replace(day=1)
     fin = (inicio + timedelta(days=32)).replace(day=1)
@@ -136,7 +127,6 @@ async def consumo(pool: asyncpg.Pool) -> dict[str, Any]:
                 "SELECT COALESCE(sum(octet_length(xml) + COALESCE(octet_length(acecf_xml), 0)), 0)"
                 " FROM recepcion.ecf_recibidos"
             )
-        usuarios = await _contar_usuarios(conn)
     plan = (suscripcion["plan"] if suscripcion else None) or calc.PLAN_DE_PRUEBA
     limites = calc.PLANES[plan]
     almacenamiento = int(bytes_emitidos) + int(bytes_recibidos)

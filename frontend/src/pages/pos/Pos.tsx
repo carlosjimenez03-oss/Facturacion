@@ -11,6 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { IconPos } from "../../layout/icons";
 import { api } from "../../lib/api";
+import { configuracionApi, publicarEmpresa } from "../../lib/configuracionApi";
 import { construirDatos, construirItemsInventario, desglose, siguienteEncf } from "../../lib/buildDatos";
 import { erpApi } from "../../lib/erpApi";
 import { inventarioApi } from "../../lib/inventarioApi";
@@ -164,6 +165,26 @@ export function PosPage() {
   useEffect(() => {
     void cargar();
   }, [cargar]);
+
+  // Emisor y vencimiento de la secuencia E31 desde Configuración (igual que
+  // Nueva factura); si erp-api no responde, lo recordado en este navegador.
+  useEffect(() => {
+    configuracionApi
+      .empresa()
+      .then((e) => {
+        publicarEmpresa(e);
+        if (e.configurada)
+          setEmisor({ rnc: e.rnc ?? "", razonSocial: e.razon_social, direccion: e.direccion ?? "", correo: e.correo ?? "" });
+      })
+      .catch(() => undefined);
+    configuracionApi
+      .secuencias()
+      .then((l) => {
+        const e31 = l.find((x) => x.tipo_ecf === 31 && x.configurada);
+        if (e31?.fecha_vencimiento) setVence((v) => ({ ...v, "31": e31.fecha_vencimiento ?? v["31"] }));
+      })
+      .catch(() => undefined);
+  }, []);
 
   const almacenCaja = sesion?.almacen_id || almacenes.find((a) => a.es_principal)?.id || "";
 
@@ -328,8 +349,14 @@ export function PosPage() {
     try {
       if (!actual) {
         setProcesando("Generando el e-CF…");
-        const facturas = await api.listar({ tipo_ecf: Number(tipoEcf) });
-        const encf = siguienteEncf(facturas, tipoEcf);
+        // Siguiente e-NCF: el de la secuencia de Configuración si va por delante de los ya usados.
+        const [facturas, secuencias] = await Promise.all([
+          api.listar({ tipo_ecf: Number(tipoEcf) }),
+          configuracionApi.secuencias().catch(() => []),
+        ]);
+        const local = siguienteEncf(facturas, tipoEcf);
+        const deSecuencia = secuencias.find((x) => String(x.tipo_ecf) === tipoEcf && x.configurada)?.siguiente_encf;
+        const encf = deSecuencia && deSecuencia > local ? deSecuencia : local;
         const form = formularioVenta({
           tipoEcf,
           encf,

@@ -18,7 +18,7 @@
 .nm-trial{margin-top:20px;background:#F5F7F8;border:1px solid #EEF0F2;border-radius:10px;padding:14px 12px;display:flex;flex-direction:column;gap:12px}
 .nm-trial b{font-size:14px;font-weight:500;color:#111827}
 .nm-trial .pb{height:5px}
-.nm-trial .pb span{width:50%;background:#2BA89D}
+.nm-trial .pb span{background:#2BA89D}
 .nm-cta{background:#2BA89D;color:#fff;width:100%}.nm-cta:hover{background:var(--teal);color:#fff}
 .nm-main{min-width:0}
 @media (max-width:1100px){

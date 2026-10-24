@@ -3,11 +3,13 @@
 // indicadores (salario mínimo cotizable y topes de la TSS vigentes).
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { EMPRESA_NOMBRE, formatoMonto } from "../../lib/marca";
+import { useDatosEmpresa } from "../../lib/configuracionApi";
+import { formatoMonto } from "../../lib/marca";
 import { nominaApi, type CostoPagoMes, type EmpresaNomina, type ResumenNomina } from "../../lib/nominaApi";
 import { AvisoError, Cargando } from "../ingresos/IngresosShell";
 import { useAviso } from "../ingresos/useAviso";
 import { mensajeError } from "../ingresos/ingresosUtil";
+import { useSesion } from "../plataforma/useSesion";
 import { Encabezado, NominaShell } from "./NominaShell";
 import { CATEGORIAS, MUNICIPIOS, capitalizar, payloadEmpresa, refrescarAvisos, saludo } from "./nominaUtil";
 
@@ -38,6 +40,8 @@ function IconoFlecha() {
 
 export function NominaInicio() {
   const navigate = useNavigate();
+  const sesion = useSesion();
+  const miEmpresa = useDatosEmpresa();
   const [resumen, setResumen] = useState<ResumenNomina | null>(null);
   const [empresa, setEmpresa] = useState<EmpresaNomina | null>(null);
   const [meses, setMeses] = useState<CostoPagoMes[]>([]);
@@ -90,7 +94,8 @@ export function NominaInicio() {
   const periodo = resumen.periodo;
   const calculado = !!periodo && periodo.estado !== "borrador";
   const nombrePeriodo = capitalizar(periodo?.nombre ?? resumen.periodo_sugerido.nombre);
-  const nombre = resumen.contacto_nombre || EMPRESA_NOMBRE;
+  // Saludo: el nombre del usuario con sesión; si no, el contacto de Nómina o la empresa.
+  const nombre = sesion?.usuario.nombre.trim().split(/\s+/)[0] || resumen.contacto_nombre || miEmpresa.nombre;
 
   async function guardarEmpresa() {
     if (!empresa) return;

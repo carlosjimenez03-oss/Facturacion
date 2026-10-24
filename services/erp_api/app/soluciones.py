@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
 
+from . import gotrue_admin
 from . import soluciones_calculos as calc
 from . import soluciones_repository as repo
 from . import soluciones_tareas
@@ -27,8 +29,7 @@ from .repository import DatosInvalidosError
 from .soluciones_canales import (
     CanalError,
     FacturasApiError,
-    canales_configurados,
-    enviar_correo,
+    canales_de_envio,
     get_soluciones_settings,
     representacion_impresa,
 )
@@ -63,6 +64,8 @@ from .soluciones_schemas import (
     VentaPos,
     VentaPosPayload,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -107,14 +110,16 @@ async def _llamar(funcion, *args, **kwargs):
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
-def _canales() -> Canales:
-    return Canales(**canales_configurados(get_soluciones_settings()))
+async def _canales(request: Request) -> Canales:
+    salida = await canales_de_envio(_pool(request), get_soluciones_settings())
+    return Canales(**salida.configurados())
 
 
 @router.get("/soluciones/canales", response_model=Canales)
-def canales():
-    """Qué canales de salida hay configurados (SMTP / WhatsApp Cloud API)."""
-    return _canales()
+async def canales(request: Request):
+    """Qué canales de salida hay configurados (SMTP / WhatsApp Cloud API de
+    Configuración → WhatsApp y correo, o de las variables de entorno)."""
+    return await _canales(request)
 
 
 # --- Planes y suscripción ---------------------------------------------------------
@@ -139,9 +144,24 @@ async def obtener_suscripcion(request: Request):
     return await repo.obtener_suscripcion(_pool(request))
 
 
+async def _usuarios_activos() -> int | None:
+    """Usuarios activos de la empresa en Supabase Auth (Configuración →
+    Usuarios), por la API admin de GoTrue. None si erp-api no tiene
+    SUPABASE_SERVICE_ROLE_KEY o GoTrue no responde."""
+    settings = get_settings()
+    if not gotrue_admin.configurado(settings):
+        return None
+    try:
+        usuarios = await gotrue_admin.listar_usuarios(settings)
+    except (gotrue_admin.GoTrueError, gotrue_admin.GoTrueNoConfiguradoError) as exc:
+        logger.warning("No se pudieron contar los usuarios de Supabase Auth: %s", exc)
+        return None
+    return sum(1 for u in usuarios if u["activo"])
+
+
 @router.get("/suscripcion/consumo", response_model=Consumo)
 async def obtener_consumo(request: Request):
-    return await repo.consumo(_pool(request))
+    return await repo.consumo(_pool(request), usuarios=await _usuarios_activos())
 
 
 _INSTRUCCIONES_TRANSFERENCIA = [
@@ -205,16 +225,16 @@ async def guardar_config_portal(request: Request, payload: ConfigPortalPayload):
 
 
 @router.post("/portal/enviar-correo", status_code=202)
-async def enviar_correo_portal(payload: CorreoPayload):
+async def enviar_correo_portal(request: Request, payload: CorreoPayload):
     """Envía el enlace por el SMTP configurado; sin SMTP responde 409 y el
     frontend ofrece abrir el correo del usuario (mailto)."""
-    settings = get_soluciones_settings()
-    if not canales_configurados(settings)["correo"]:
+    salida = await canales_de_envio(_pool(request), get_soluciones_settings())
+    if not salida.configurados()["correo"]:
         raise HTTPException(status_code=409, detail="No hay un servidor de correo (SMTP) configurado")
     if not calc.correo_valido(payload.para):
         raise HTTPException(status_code=422, detail="Correo del destinatario inválido")
     try:
-        await enviar_correo(settings, payload.para, payload.asunto, payload.mensaje)
+        await salida.enviar_correo(payload.para, payload.asunto, payload.mensaje)
     except CanalError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"enviado": True}
@@ -285,12 +305,12 @@ async def portal_xml(request: Request, token: str, factura_id: str):
 
 @router.get("/ventas-auto", response_model=EstadoVentas)
 async def estado_ventas(request: Request):
-    return await repo.estado_ventas(_pool(request)) | {"canales": _canales()}
+    return await repo.estado_ventas(_pool(request)) | {"canales": await _canales(request)}
 
 
 @router.post("/ventas-auto/activar", response_model=EstadoVentas)
 async def activar_ventas(request: Request, payload: ActivarPayload):
-    return await repo.activar_ventas(_pool(request), payload.activo) | {"canales": _canales()}
+    return await repo.activar_ventas(_pool(request), payload.activo) | {"canales": await _canales(request)}
 
 
 @router.put("/ventas-auto/automatizaciones/{clave}", response_model=Automatizacion)

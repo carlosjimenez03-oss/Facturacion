@@ -250,6 +250,21 @@ services:
       # frontend. Vacía = la pantalla explica cómo hacerlo en Studio.
       SUPABASE_URL: ${SUPABASE_GATEWAY_URL:-http://api-gw:8000}
       SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      # facturas-api por la red interna: PDF de las facturas para el envío
+      # automático por correo, el portal público de clientes y Kontara Ventas.
+      FACTURAS_API_URL: ${FACTURAS_API_URL:-http://facturas-api:8000}
+      # Kontara Ventas (Soluciones): tarea diaria que genera y entrega los
+      # envíos de las automatizaciones activas (false = solo a mano). Los
+      # canales salen de Configuración → WhatsApp y correo; SMTP_* /
+      # WHATSAPP_* son el respaldo si allí no hay nada (docs/ERP_API.md).
+      SOLUCIONES_TAREA_ACTIVA: ${SOLUCIONES_TAREA_ACTIVA:-true}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USUARIO: ${SMTP_USUARIO:-}
+      SMTP_CLAVE: ${SMTP_CLAVE:-}
+      SMTP_REMITENTE: ${SMTP_REMITENTE:-}
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
     # Único servicio que ESCRIBE el certificado activo (los demás lo montan
     # de solo lectura, ver x-modulo-comun).
     volumes:

@@ -6,7 +6,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { erpApi } from "../../lib/erpApi";
 import type { Cliente } from "../../lib/erpApi";
-import { EMPRESA_NOMBRE, formatoMonto, formatoRnc } from "../../lib/marca";
+import { formatoMonto, formatoRnc } from "../../lib/marca";
+import { empresaActual } from "../../lib/configuracionApi";
 import { solucionesApi } from "../../lib/solucionesApi";
 import type { Canales, ConfigPortal, EnlacePortal, MetodoPagoPortal, PortalPublico } from "../../lib/solucionesApi";
 import { AvisoError, IconoBuscar, Modal } from "../ingresos/IngresosShell";
@@ -28,7 +29,7 @@ const CONFIG_VACIA: ConfigPortal = { banco: "", tipo_cuenta: "", numero_cuenta: 
 function mensajeEnlace(cliente: Cliente, url: string): string {
   return (
     `Saludos, ${cliente.nombre}.\n\n` +
-    `Desde este enlace puede consultar sus facturas electrónicas (e-CF) con ${EMPRESA_NOMBRE}, descargarlas en PDF y XML ` +
+    `Desde este enlace puede consultar sus facturas electrónicas (e-CF) con ${empresaActual().nombre}, descargarlas en PDF y XML ` +
     `y ver su saldo pendiente:\n${url}\n\n¡Gracias por su preferencia!`
   );
 }
@@ -181,7 +182,7 @@ export function PortalClientesPage() {
     if (!cliente?.correo || !url) return;
     setEnviandoCorreo(true);
     try {
-      await solucionesApi.enviarCorreo({ para: cliente.correo, asunto: `Sus facturas con ${EMPRESA_NOMBRE}`, mensaje: mensajeEnlace(cliente, url) });
+      await solucionesApi.enviarCorreo({ para: cliente.correo, asunto: `Sus facturas con ${empresaActual().nombre}`, mensaje: mensajeEnlace(cliente, url) });
       setEnviar(false);
       mostrarToast(`Enlace enviado a ${cliente.nombre}`, { detalle: cliente.correo });
     } catch (err) {
@@ -554,7 +555,7 @@ export function PortalClientesPage() {
             </a>
             <a
               className="btn btn-o"
-              href={enlaceCorreo(`Sus facturas con ${EMPRESA_NOMBRE}`, mensajeEnlace(cliente, url), cliente.correo)}
+              href={enlaceCorreo(`Sus facturas con ${empresaActual().nombre}`, mensajeEnlace(cliente, url), cliente.correo)}
               onClick={() => setEnviar(false)}
             >
               Abrir mi correo

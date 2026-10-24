@@ -175,11 +175,13 @@ cuántas del período siguen sin aprobar.
 Nómina tiene su propio menú (logo «kontara Nómina», Inicio, Bandeja de
 entrada con el contador de no leídos, Empleados, Nómina, Pagos,
 Suscripciones, Configuración, «← Volver a Facturación» y la tarjeta de
-prueba). Mientras el layout global no lo dibuje, cada pantalla lo muestra
-como columna a la izquierda (`NominaShell`). Para que reemplace al menú
-principal como en el prototipo, `AppShell` puede renderizar
-`<NominaSidebar />` en las rutas `/nomina*` (`esRutaNomina`) y envolver el
-contenido en `<NominaSidebarGlobal.Provider value={true}>`.
+prueba con los días que quedan de `GET /suscripcion`). En las rutas
+`/nomina*` (`esRutaNomina`) `AppShell` dibuja `<NominaSidebar />` en el lugar
+del menú principal y envuelve el contenido en
+`<NominaSidebarGlobal.Provider value={true}>`, así que `NominaShell` no
+repite el menú; fuera de `AppShell` lo muestra como columna a la izquierda.
+El saludo de Inicio usa el nombre del usuario con sesión (Supabase Auth); si
+no hay, el contacto de Nómina o el nombre de la empresa de Configuración.
 
 «Leído» de los avisos de la bandeja vive en `localStorage` de cada
 navegador. Suscripciones es un marcador que lleva a `/planes`.

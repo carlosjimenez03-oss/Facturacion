@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from services.erp_api.app import main, soluciones
 from services.erp_api.app import soluciones_repository as repo
 from services.erp_api.app.repository import DatosInvalidosError
-from services.erp_api.app.soluciones_canales import FacturasApiError, get_soluciones_settings
+from services.erp_api.app.soluciones_canales import CanalesEnvio, FacturasApiError, get_soluciones_settings
 from services.erp_api.app.soluciones_repository import ConflictoSolucionesError, NoEncontradoError
 
 AHORA = datetime(2026, 10, 24, 12, 0, tzinfo=timezone.utc)
@@ -34,6 +34,8 @@ def client(monkeypatch):
     monkeypatch.setattr(main, "aplicar_migraciones", fake_aplicar_migraciones)
     monkeypatch.setattr(get_soluciones_settings(), "soluciones_tarea_activa", False)
     monkeypatch.setattr(get_soluciones_settings(), "smtp_host", "")
+    # Sin nada en Configuración → WhatsApp y correo: solo las variables de entorno.
+    monkeypatch.setattr(soluciones, "canales_de_envio", _async(lambda pool, settings: CanalesEnvio(settings)))
     with TestClient(main.app) as c:
         yield c
 
@@ -298,3 +300,19 @@ def test_el_lifespan_arranca_y_detiene_la_tarea_diaria(monkeypatch):
     with TestClient(main.app) as c:
         assert c.get("/health").status_code == 200
     assert estados == ["iniciada", "detenida"]
+
+
+async def test_usuarios_activos_de_supabase_auth(monkeypatch):
+    # Sin SUPABASE_SERVICE_ROLE_KEY no se cuentan ("—" en Planes).
+    monkeypatch.setattr(soluciones.gotrue_admin, "configurado", lambda settings: False)
+    assert await soluciones._usuarios_activos() is None
+
+    monkeypatch.setattr(soluciones.gotrue_admin, "configurado", lambda settings: True)
+    monkeypatch.setattr(
+        soluciones.gotrue_admin, "listar_usuarios", _async([{"activo": True}, {"activo": False}, {"activo": True}])
+    )
+    assert await soluciones._usuarios_activos() == 2
+
+    caido = soluciones.gotrue_admin.GoTrueError(502, "Supabase Auth no responde")
+    monkeypatch.setattr(soluciones.gotrue_admin, "listar_usuarios", _async(error=caido))
+    assert await soluciones._usuarios_activos() is None

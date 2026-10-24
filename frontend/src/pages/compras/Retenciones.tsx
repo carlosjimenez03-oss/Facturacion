@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { comprasApi } from "../../lib/comprasApi";
 import type { CertificadoRetencion, RetencionesMes, RetencionesProveedor } from "../../lib/comprasApi";
-import { EMPRESA_NOMBRE, EMPRESA_RNC, formatoMonto, formatoRnc } from "../../lib/marca";
+import { formatoMonto, formatoRnc } from "../../lib/marca";
+import { empresaActual, useDatosEmpresa } from "../../lib/configuracionApi";
 import { AvisoError, Cargando, Estadistica, Vacio } from "../ingresos/IngresosShell";
 import { useAviso } from "../ingresos/useAviso";
 import { descargarCsv, enlaceCorreo, enlaceWhatsApp, fechaLegible, mensajeError } from "../ingresos/ingresosUtil";
@@ -260,7 +261,7 @@ function FilaProveedor({ p, periodo, ocupado, onCertificado }: { p: RetencionesP
     `Saludos, ${p.proveedor_nombre}.\n\n` +
     `Le informamos que en ${nombrePeriodo(periodo)} le retuvimos RD$ ${formatoMonto(total)} ` +
     `(ISR RD$ ${formatoMonto(p.isr_retenido)} · ITBIS RD$ ${formatoMonto(p.itbis_retenido)}) en ${p.comprobantes} ${p.comprobantes === 1 ? "comprobante" : "comprobantes"}. ` +
-    `Le enviamos el certificado de retención correspondiente.\n\n${EMPRESA_NOMBRE}`;
+    `Le enviamos el certificado de retención correspondiente.\n\n${empresaActual().nombre}`;
   return (
     <tr>
       <td>
@@ -294,8 +295,9 @@ function FilaProveedor({ p, periodo, ocupado, onCertificado }: { p: RetencionesP
 
 /** Certificado de retención para imprimir o guardar como PDF (oculto en pantalla). */
 function CertificadoImpreso({ cert }: { cert: CertificadoRetencion }) {
-  const agente = cert.agente.nombre || EMPRESA_NOMBRE;
-  const agenteRnc = cert.agente.rnc || EMPRESA_RNC;
+  const miEmpresa = useDatosEmpresa();
+  const agente = cert.agente.nombre || miEmpresa.razonSocial;
+  const agenteRnc = cert.agente.rnc || miEmpresa.rnc;
   return (
     <div className="solo-impresion">
       <div className="imp-h">

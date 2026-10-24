@@ -89,7 +89,8 @@ def _con_secreto(actual: dict[str, Any], campo_cifrado: str, nuevo: str | None, 
     return valor
 
 
-def _secreto(valor: dict[str, Any], campo_cifrado: str) -> str:
+def secreto(valor: dict[str, Any], campo_cifrado: str) -> str:
+    """Descifra un secreto guardado (contraseña SMTP, token de WhatsApp); "" si no hay."""
     cifrado = valor.get(campo_cifrado)
     if not cifrado:
         return ""
@@ -203,7 +204,7 @@ async def enviar_correo(
     for nombre, contenido, tipo in adjuntos:
         principal, _, sub = tipo.partition("/")
         mensaje.add_attachment(contenido, maintype=principal, subtype=sub, filename=nombre)
-    contrasena = _secreto(config, "contrasena_cifrada")
+    contrasena = secreto(config, "contrasena_cifrada")
     try:
         await asyncio.to_thread(_enviar_smtp, config, contrasena, mensaje, timeout)
     except (smtplib.SMTPException, OSError) as exc:
@@ -212,13 +213,17 @@ async def enviar_correo(
 
 # --- WhatsApp (Meta Cloud API) ---------------------------------------------------------
 
+def numero_whatsapp(numero: str) -> str:
+    """Solo dígitos; un número dominicano de 10 dígitos lleva delante el 1."""
+    destino = "".join(c for c in numero if c.isdigit())
+    return "1" + destino if len(destino) == 10 else destino
+
+
 async def enviar_whatsapp_prueba(config: dict[str, Any], numero: str, timeout: float = 15.0) -> dict[str, Any]:
-    token = _secreto(config, "token_cifrado")
+    token = secreto(config, "token_cifrado")
     if not (token and config.get("phone_number_id")):
         raise EnvioError("WhatsApp no está conectado: falta el token o el phone number id de Meta")
-    destino = "".join(c for c in numero if c.isdigit())
-    if len(destino) == 10:
-        destino = "1" + destino  # número dominicano sin el 1
+    destino = numero_whatsapp(numero)
     cuerpo = {
         "messaging_product": "whatsapp",
         "to": destino,

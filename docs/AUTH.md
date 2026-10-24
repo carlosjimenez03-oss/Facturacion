@@ -26,6 +26,7 @@ Navegador ── https://front.acentosdeco.lat ── Cloudflare Tunnel ── 1
    │ ← access_token (JWT HS256, 1 h) + refresh_token                  │
    │                                                                  ├─ /api*       → auth_request → erp-api /auth/verificar (204/401)
    │ GET /api-erp/... Authorization: Bearer <access_token>            │                 → facturas-api / inventario-api / formato-606 / erp-api
+   │                                                                  ├─ /api-erp/portal/publico/* → erp-api (PÚBLICO: portal de clientes, lo protege su token)
    │                                                                  └─ /fe/*       → receptores (PÚBLICO, sin sesión)
 ```
 
@@ -46,6 +47,10 @@ Navegador ── https://front.acentosdeco.lat ── Cloudflare Tunnel ── 1
 - Los servicios del Receptor Electrónico (`/fe/autenticacion/...`,
   `/fe/recepcion/...`, `/fe/aprobacioncomercial/...`) los llaman la DGII y los
   proveedores: **nunca** piden sesión.
+- El portal de clientes (Soluciones) se abre sin sesión: la página `/p/<token>`
+  del frontend llama `/api-erp/portal/publico/<token>/...`, que nginx reenvía
+  sin `auth_request` (location propia) y erp-api con `REQUIRE_AUTH=true` deja
+  pasar. El resto de `/api-erp/portal/*` sí pide sesión.
 
 ## Pasos en Dokploy y Supabase (en este orden)
 
@@ -125,6 +130,7 @@ sesión. Compruebe desde fuera:
 ```bash
 curl -i https://front.acentosdeco.lat/api-erp/configuracion/empresa   # 401 {"detail":"Inicie sesión para continuar"}
 curl -i https://front.acentosdeco.lat/fe/autenticacion/api/semilla    # 200 (receptor público)
+curl -i https://front.acentosdeco.lat/api-erp/portal/publico/xxx      # 404 (portal público: sin 401)
 ```
 
 ### 4. Defensa en profundidad (opcional): `REQUIRE_AUTH`

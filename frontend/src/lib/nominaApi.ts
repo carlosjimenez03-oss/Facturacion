@@ -8,14 +8,15 @@
 // y marcas de tiempo ISO 8601. Ver docs/NOMINA.md.
 import { textoDetalle } from "./comprasApi";
 import { ERP_API_URL, ErpApiError } from "./erpApi";
+import { authHeaders, fetchConSesion } from "./sesion";
 
-/** Encabezados comunes de todas las llamadas de Nómina (aquí se agregará la autorización). */
+/** Encabezados comunes de todas las llamadas de Nómina (la sesión la pone y renueva `fetchConSesion`). */
 function encabezados(extra?: HeadersInit): HeadersInit {
-  return { "Content-Type": "application/json", ...(extra ?? {}) };
+  return { "Content-Type": "application/json", ...authHeaders(), ...(extra ?? {}) };
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${ERP_API_URL}${path}`, { ...init, headers: encabezados(init?.headers) });
+  const response = await fetchConSesion(`${ERP_API_URL}${path}`, { ...init, headers: encabezados(init?.headers) });
   if (!response.ok) {
     let detail: unknown = response.statusText;
     try {

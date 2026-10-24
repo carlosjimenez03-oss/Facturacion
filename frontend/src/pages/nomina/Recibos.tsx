@@ -2,7 +2,8 @@
 // el diálogo del navegador (una hoja por recibo) o se guardan como PDF desde ahí.
 import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { EMPRESA_NOMBRE, formatoMonto, formatoRnc } from "../../lib/marca";
+import { formatoMonto, formatoRnc } from "../../lib/marca";
+import { empresaActual } from "../../lib/configuracionApi";
 import { nominaApi, type EmpresaNomina, type LineaNomina, type Periodo } from "../../lib/nominaApi";
 import { AvisoError, Cargando } from "../ingresos/IngresosShell";
 import { fechaLegible, mensajeError } from "../ingresos/ingresosUtil";
@@ -29,7 +30,7 @@ function Recibo({ p, l, empresa }: { p: Periodo; l: LineaNomina; empresa: Empres
           <div className="mut">{capitalizar(p.nombre)} · del {fechaLegible(p.fecha_inicio)} al {fechaLegible(p.fecha_fin)}</div>
         </div>
         <div style={{ textAlign: "right" }}>
-          <b>{empresa?.razon_social || EMPRESA_NOMBRE}</b>
+          <b>{empresa?.razon_social || empresaActual().razonSocial}</b>
           {empresa?.rnc && <div className="mut">RNC {formatoRnc(empresa.rnc)}</div>}
           <div className="mut">Fecha de pago: {fechaLegible(p.fecha_pago)}</div>
         </div>

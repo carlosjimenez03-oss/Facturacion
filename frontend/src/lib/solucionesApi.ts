@@ -3,13 +3,19 @@
 // services/erp_api/app/soluciones.py y soluciones_schemas.py (mismos nombres
 // y tipos). Montos como string decimal ("1250.00"), fechas "YYYY-MM-DD" y
 // marcas de tiempo ISO 8601.
+import { useEffect, useState } from "react";
 import { ERP_API_URL, ErpApiError } from "./erpApi";
+import { fetchConSesion } from "./sesion";
 
-/** Único punto de salida HTTP de este cliente: aquí se agregan los headers
- * de autenticación cuando existan (una línea). Las rutas `/portal/publico`
- * no los necesitan (se abren sin sesión), pero tampoco les estorban. */
+/** Rutas del portal que el cliente abre sin sesión (nginx no las protege). */
+const RUTA_PUBLICA = "/portal/publico/";
+
+/** Único punto de salida HTTP de este cliente: todo va con la sesión
+ * (`fetchConSesion`) salvo el portal público, que sale con `fetch` sin
+ * token: así un 401 ahí nunca cierra la sesión de quien lo abra. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${ERP_API_URL}${path}`, {
+  const enviar = path.startsWith(RUTA_PUBLICA) ? fetch : fetchConSesion;
+  const response = await enviar(`${ERP_API_URL}${path}`, {
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
   });
@@ -361,3 +367,41 @@ export const solucionesApi = {
 };
 
 export { ErpApiError };
+
+// --- suscripción compartida (tarjeta de prueba de los menús laterales) ---
+
+let suscripcionPromesa: Promise<Suscripcion | null> | null = null;
+
+/** GET /suscripcion una vez por carga de página (null si erp-api no responde). */
+function cargarSuscripcion(): Promise<Suscripcion | null> {
+  suscripcionPromesa ??= solucionesApi.suscripcion().catch(() => {
+    suscripcionPromesa = null;
+    return null;
+  });
+  return suscripcionPromesa;
+}
+
+export function useSuscripcion(): Suscripcion | null {
+  const [suscripcion, setSuscripcion] = useState<Suscripcion | null>(null);
+  useEffect(() => {
+    let vivo = true;
+    void cargarSuscripcion().then((s) => vivo && setSuscripcion(s));
+    return () => {
+      vivo = false;
+    };
+  }, []);
+  return suscripcion;
+}
+
+/** Texto, avance (0-100) y botón de la tarjeta de prueba gratis; null = no mostrarla. */
+export function tarjetaPrueba(s: Suscripcion | null): { titulo: string; avance: number; boton: string } | null {
+  if (!s) return null;
+  if (s.estado === "activa") return { titulo: `Plan ${s.plan_nombre ?? "activo"}`, avance: 100, boton: "Ver plan y consumo" };
+  if (s.estado === "prueba_vencida" || !s.dias_restantes) return { titulo: "Su prueba gratis terminó", avance: 0, boton: "Elegir plan" };
+  const total = Math.max(1, Math.round((Date.parse(s.prueba_fin) - Date.parse(s.prueba_inicio)) / 86_400_000) + 1);
+  return {
+    titulo: s.dias_restantes === 1 ? "Te queda 1 día gratis" : `Te quedan ${s.dias_restantes} días gratis`,
+    avance: Math.min(100, Math.max(0, Math.round((s.dias_restantes / total) * 100))),
+    boton: "Elegir plan",
+  };
+}

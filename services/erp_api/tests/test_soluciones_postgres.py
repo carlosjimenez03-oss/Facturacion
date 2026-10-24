@@ -121,7 +121,9 @@ async def test_consumo_cuenta_ecf_enviados_del_mes_y_bytes_de_xml(pool):
     c = await repo.consumo(pool)
     assert c["ecf_emitidos"] == 2
     assert c["ecf_limite"] == 2000  # en prueba: límites del plan Pyme
-    assert c["usuarios"] is None  # sin tabla de usuarios de la plataforma
+    assert c["usuarios"] is None  # sin SUPABASE_SERVICE_ROLE_KEY no se cuentan
+    c = await repo.consumo(pool, usuarios=3)
+    assert (c["usuarios"], c["usuarios_limite"], c["usuarios_porcentaje"]) == (3, 5, 60)
     assert c["almacenamiento_bytes"] == 4 * len("<ECF>x</ECF>")
 
 

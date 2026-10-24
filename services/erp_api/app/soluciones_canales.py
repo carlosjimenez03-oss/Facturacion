@@ -2,21 +2,29 @@
 WhatsApp (WhatsApp Cloud API de Meta), y el cliente HTTP de `facturas_api`
 para la representación impresa que se descarga en el portal de clientes.
 
-Los canales son opcionales: sin SMTP_HOST / WHATSAPP_TOKEN los envíos de
-Kontara Ventas quedan 'pendiente_canal' (nunca se marcan enviados sin que un
-canal los haya entregado). Cuando exista la configuración de la empresa
-(plataforma), `canales_configurados` es el único punto a cambiar.
+Los canales salen de Configuración → WhatsApp y correo (lo que el usuario
+guardó en `configuracion.preferencias`, ver configuracion_envio.py: SMTP
+propio de la empresa y WhatsApp Cloud API con su token cifrado); si allí no
+hay nada configurado, de las variables de entorno SMTP_* / WHATSAPP_* de
+abajo. `canales_de_envio` es el único punto que decide. Sin ningún canal los
+envíos de Kontara Ventas quedan 'pendiente_canal' (nunca se marcan enviados
+sin que un canal los haya entregado).
 """
 from __future__ import annotations
 
 import asyncio
 import smtplib
+from dataclasses import dataclass
 from email.message import EmailMessage
 from functools import lru_cache
+from typing import Any
 
+import asyncpg
 import httpx
 
 from libs.ecf_common.settings import EcfBaseSettings, load_settings
+
+from . import configuracion_envio as envio
 
 
 class SolucionesSettings(EcfBaseSettings):
@@ -25,7 +33,7 @@ class SolucionesSettings(EcfBaseSettings):
     facturas_api_url: str = "http://facturas-api:8000"
     facturas_api_timeout_segundos: float = 60.0
 
-    # Correo saliente (opcional).
+    # Correo saliente (opcional; respaldo de Configuración → WhatsApp y correo).
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_usuario: str = ""
@@ -33,7 +41,7 @@ class SolucionesSettings(EcfBaseSettings):
     smtp_remitente: str = ""
     smtp_starttls: bool = True
 
-    # WhatsApp Cloud API (opcional). Ojo: fuera de la ventana de 24 h de
+    # WhatsApp Cloud API (opcional; respaldo de Configuración). Ojo: fuera de la ventana de 24 h de
     # conversación, Meta exige plantillas aprobadas; un texto libre fuera de
     # esa ventana lo rechaza y el envío queda en 'error' con su motivo.
     whatsapp_token: str = ""
@@ -61,10 +69,70 @@ class FacturasApiError(Exception):
 
 
 def canales_configurados(settings: SolucionesSettings) -> dict[str, bool]:
+    """Canales de las variables de entorno (el respaldo de `canales_de_envio`)."""
     return {
         "correo": bool(settings.smtp_host and settings.smtp_remitente),
         "whatsapp": bool(settings.whatsapp_token and settings.whatsapp_phone_number_id),
     }
+
+
+@dataclass(frozen=True)
+class CanalesEnvio:
+    """Canales con los que se entrega cada envío. `correo` / `whatsapp` son
+    las preferencias guardadas en Configuración cuando están completas
+    (formato de configuracion_envio.py); None = se usan las variables de
+    entorno de `settings`."""
+
+    settings: SolucionesSettings
+    correo: dict[str, Any] | None = None
+    whatsapp: dict[str, Any] | None = None
+
+    def configurados(self) -> dict[str, bool]:
+        entorno = canales_configurados(self.settings)
+        return {
+            "correo": self.correo is not None or entorno["correo"],
+            "whatsapp": self.whatsapp is not None or entorno["whatsapp"],
+        }
+
+    async def enviar_correo(
+        self, para: str, asunto: str, cuerpo: str, adjunto: tuple[str, bytes] | None = None
+    ) -> None:
+        if self.correo is None:
+            await enviar_correo(self.settings, para, asunto, cuerpo, adjunto)
+            return
+        adjuntos = [(adjunto[0], adjunto[1], "application/pdf")] if adjunto else []
+        try:
+            await envio.enviar_correo(self.correo, para, asunto, cuerpo, adjuntos, timeout=30)
+        except envio.EnvioError as exc:
+            raise CanalError(f"SMTP: {exc}") from exc
+
+    async def enviar_whatsapp(self, telefono: str, texto: str) -> None:
+        if self.whatsapp is None:
+            await enviar_whatsapp(self.settings, telefono, texto)
+            return
+        try:
+            token = envio.secreto(self.whatsapp, "token_cifrado")
+        except envio.EnvioError as exc:
+            raise CanalError(f"WhatsApp: {exc}") from exc
+        await _post_whatsapp(
+            envio.META_GRAPH_URL, self.whatsapp["phone_number_id"], token, envio.numero_whatsapp(telefono), texto
+        )
+
+
+async def canales_de_envio(pool: asyncpg.Pool, settings: SolucionesSettings) -> CanalesEnvio:
+    """Canales efectivos: Configuración → WhatsApp y correo primero; si un
+    canal no está completo allí (o el esquema `configuracion` aún no existe),
+    el de las variables de entorno."""
+    try:
+        correo = await envio.leer_preferencia(pool, "correo", envio.CORREO_POR_DEFECTO)
+        whatsapp = await envio.leer_preferencia(pool, "whatsapp", envio.WHATSAPP_POR_DEFECTO)
+    except (asyncpg.UndefinedTableError, asyncpg.InvalidSchemaNameError):
+        return CanalesEnvio(settings)
+    return CanalesEnvio(
+        settings,
+        correo=correo if envio.correo_publico(correo)["configurado"] else None,
+        whatsapp=whatsapp if envio.whatsapp_publico(whatsapp)["conectado"] else None,
+    )
 
 
 def _enviar_correo_sync(
@@ -96,12 +164,18 @@ async def enviar_correo(
 
 
 async def enviar_whatsapp(settings: SolucionesSettings, telefono: str, texto: str) -> None:
-    url = f"{settings.whatsapp_api_url.rstrip('/')}/{settings.whatsapp_phone_number_id}/messages"
+    await _post_whatsapp(
+        settings.whatsapp_api_url, settings.whatsapp_phone_number_id, settings.whatsapp_token, telefono, texto
+    )
+
+
+async def _post_whatsapp(api_url: str, phone_number_id: str, token: str, telefono: str, texto: str) -> None:
+    url = f"{api_url.rstrip('/')}/{phone_number_id}/messages"
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             respuesta = await client.post(
                 url,
-                headers={"Authorization": f"Bearer {settings.whatsapp_token}"},
+                headers={"Authorization": f"Bearer {token}"},
                 json={"messaging_product": "whatsapp", "to": telefono, "type": "text", "text": {"body": texto}},
             )
     except httpx.HTTPError as exc:
