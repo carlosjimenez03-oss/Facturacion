@@ -34,6 +34,7 @@ from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
 from libs.ecf_common.db import cerrar_pool, crear_pool
 
 from . import (
+    ambiente_dgii,
     bancos,
     compras,
     configuracion,
@@ -164,6 +165,7 @@ app.include_router(tareas.router)
 app.include_router(sincronizacion.router)
 app.include_router(reportes.router)
 app.include_router(configuracion.router)
+app.include_router(ambiente_dgii.router)
 app.include_router(plataforma.router)
 app.include_router(nomina.router)
 app.include_router(soluciones.router)

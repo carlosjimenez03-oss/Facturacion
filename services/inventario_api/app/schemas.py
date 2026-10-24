@@ -205,6 +205,13 @@ class SalidaPorFacturaResponse(BaseModel):
     movimientos: list[Movimiento] = Field(default_factory=list)
 
 
+class ReversoPorFacturaRequest(BaseModel):
+    """Reverso de la salida de una factura que la DGII rechazó."""
+
+    factura_id: str
+    documento: str | None = None  # e-NCF, para la columna Documento del Kardex
+
+
 # --- Almacenes ---------------------------------------------------------
 
 class AlmacenCrear(BaseModel):

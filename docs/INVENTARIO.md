@@ -190,7 +190,7 @@ Los correlativos usan secuencias: una operación rechazada consume número
 | `GET /movimientos` | + `almacen_id`, `lote_id`, `referencia_tipo`, `referencia_id`, `desde`, `hasta`. |
 | `GET /kardex?producto_id` | `almacen_id`, `desde`, `hasta`, `metodo` (`promedio`/`peps`), `tipo`, `referencia_tipo`, `formato=csv`. Ver abajo. |
 | `GET /valuacion` | valor total, por almacén y por categoría; contadores `sin_existencia` / `bajo_minimo`. Ver "Valuación con existencia negativa". |
-| `POST /movimientos/validar-disponibilidad`, `POST /movimientos/salida-por-factura` | uso interno de facturas-api (ver abajo). |
+| `POST /movimientos/validar-disponibilidad`, `POST /movimientos/salida-por-factura`, `POST /movimientos/reverso-por-factura` | uso interno de facturas-api (ver abajo). |
 
 Errores: 404 no existe (también un almacén o lote referenciado en el
 cuerpo), 409 la operación no aplica (estado, almacén inactivo, duplicado,
@@ -253,7 +253,23 @@ cual, junto con el e-NCF como `documento` del Kardex.
   varios movimientos). Procesa primero las líneas con lote explícito. Si
   falla (inventario-api caído, o una réplica vieja durante un despliegue
   solapado), facturas-api deja la factura con `inventario_sincronizado =
-  false`; reenviar la misma factura es seguro.
+  false`; reenviar la misma factura es seguro. facturas-api la llama tras
+  el envío exitoso a la DGII o, si la factura se **emite en contingencia**,
+  al emitirla (la venta ya se entregó al comprador); el envío posterior en
+  lote no la repite.
+- `reverso-por-factura` (`{factura_id, documento}`) devuelve la mercancía
+  de una factura que la **DGII rechazó** (estado definitivo `rechazado`:
+  esa venta se vuelve a facturar con otro e-NCF): cada salida de la factura
+  vuelve a su almacén y lote como entrada al costo con que salió
+  (`referencia_tipo = 'reverso_factura'`, Kardex "Reverso de venta (e-CF
+  rechazado)"), igual que la anulación de un ajuste. Es idempotente con el
+  mismo advisory lock por factura que la salida: si ya hay un reverso
+  devuelve sus movimientos; si la factura no tiene salidas no hace nada.
+  Después de un reverso, `salida-por-factura` de esa factura sigue
+  devolviendo las salidas existentes sin descontar. Si inventario-api no
+  responde, facturas-api deja `inventario_reverso_pendiente = true` y lo
+  reintenta su tarea de fondo. El reporte de productos más vendidos excluye
+  las facturas revertidas.
 
 El **vendedor** del prototipo de factura no es de inventario: queda para el
 módulo de ventas.

@@ -17,7 +17,7 @@ interpretaciones.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
@@ -303,6 +303,18 @@ def acumular_ventas(facturas: list[dict[str, Any]]) -> VentasItbis:
 
 
 @dataclass
+class PapelIt1:
+    """Facturas en papel (serie B) del período que entran al IT-1 (ya
+    sumadas en las ventas): su parte, para la línea aparte del desglose, y
+    las que no entran porque ya tienen su e-CF de reemplazo aceptado
+    [(NCF, e-NCF)]."""
+
+    ventas: VentasItbis
+    cantidad: int = 0
+    regularizadas: list[tuple[str, str]] = field(default_factory=list)
+
+
+@dataclass
 class Compras606:
     itbis_facturado: Decimal = _CERO
     itbis_costo: Decimal = _CERO
@@ -363,9 +375,13 @@ def calcular_it1(
     ajustes: dict[str, Decimal],
     saldo_favor_sugerido: Decimal,
     hoy: date,
+    papel: PapelIt1 | None = None,
 ) -> tuple[dict[str, Any], Decimal]:
     """Devuelve (pre-cálculo, nuevo saldo a favor) -- el saldo a favor es el
-    valor sugerido de "saldo a favor anterior" del mes siguiente."""
+    valor sugerido de "saldo a favor anterior" del mes siguiente.
+
+    `ventas` ya incluye las facturas en papel (serie B) de `papel`, que
+    además salen en líneas de detalle (5.1 y 8.1: "de ellas", no suman)."""
     total_ingresos = ventas.g18 + ventas.g16 + ventas.exportaciones + ventas.exentas
     itbis_facturado = ventas.i18 + ventas.i16
     proporcionalidad = itbis_adelantado_admitido(ventas, compras)
@@ -387,6 +403,15 @@ def calcular_it1(
             f"Queda un saldo a favor de RD${_fmt(nuevo_saldo_favor)} para el mes siguiente; las retenciones "
             "efectuadas a proveedores se pagan igual."
         )
+    if papel and papel.regularizadas:
+        lista = ", ".join(f"{ncf} → {encf}" for ncf, encf in papel.regularizadas[:5])
+        if len(papel.regularizadas) > 5:
+            lista += "…"
+        advertencias.append(
+            f"{len(papel.regularizadas)} factura(s) en papel (serie B) del período ya tienen su e-CF de reemplazo "
+            f"aceptado ({lista}) y no se cuentan aparte: esa venta la declara el e-CF, en el período de su fecha "
+            "de emisión."
+        )
     fecha_vence = vence("it1", periodo)
     pct = redondear(proporcion * 100)
     secciones = [
@@ -400,11 +425,13 @@ def calcular_it1(
                 "proporcionalidad, salvo las exentas por destino (ventas a regímenes especiales, E44"
                 + (f": RD${_fmt(ventas.exentas_por_destino)}" if ventas.exentas_por_destino else "") + ").")),
             casilla("5", "Total de ingresos", total_ingresos, "subtotal"),
+            *_lineas_papel_ingresos(papel),
         ]},
         {"numero": "II", "titulo": "ITBIS facturado", "casillas": [
             casilla("6", "ITBIS 18%", ventas.i18),
             casilla("7", "ITBIS 16%", ventas.i16),
             casilla("8", "Total ITBIS facturado", itbis_facturado, "subtotal"),
+            *_lineas_papel_itbis(papel),
         ]},
         {"numero": "III", "titulo": "ITBIS adelantado", "casillas": [
             casilla("9", "ITBIS pagado en compras y servicios", adelantado, ayuda=(
@@ -438,8 +465,9 @@ def calcular_it1(
         "titulo": f"Pre-cálculo IT-1 · {nombre_periodo(periodo)}",
         "subtitulo": f"Declaración jurada mensual del ITBIS · vence el {fecha_larga(fecha_vence)}",
         "nota": (
-            "Calculado con los e-CF de venta aceptados por la DGII (607) y las compras registradas en el 606 del "
-            "período. Se actualiza en tiempo real."
+            "Calculado con los e-CF de venta aceptados por la DGII (607)"
+            + (", las facturas en papel (serie B) de la contingencia" if papel and papel.cantidad else "")
+            + " y las compras registradas en el 606 del período. Se actualiza en tiempo real."
         ),
         "vence": fecha_vence,
         "secciones": secciones,
@@ -456,6 +484,29 @@ def calcular_it1(
         "advertencias": advertencias,
     }
     return precalculo, nuevo_saldo_favor
+
+
+def _lineas_papel_ingresos(papel: PapelIt1 | None) -> list[dict]:
+    if not papel or not papel.cantidad:
+        return []
+    v = papel.ventas
+    return [casilla(
+        "5.1", f"De ellos: facturas en papel (serie B) · {papel.cantidad} comprobante(s)",
+        v.g18 + v.g16 + v.exportaciones + v.exentas, "detalle", ayuda=(
+            "Ventas registradas en facturas en papel (NCF serie B) durante una contingencia sin sistema, ya "
+            "incluidas en las líneas 1 a 4: el IT-1 declara todas las ventas. Cuando su e-CF de reemplazo "
+            "(código de modificación 4) es aceptado por la DGII, la venta la declara el e-CF y la factura en "
+            "papel deja de contarse aquí."),
+    )]
+
+
+def _lineas_papel_itbis(papel: PapelIt1 | None) -> list[dict]:
+    if not papel or not papel.cantidad:
+        return []
+    return [casilla(
+        "8.1", "De él: ITBIS de facturas en papel (serie B)", papel.ventas.i18 + papel.ventas.i16, "detalle",
+        ayuda="ITBIS de las facturas en papel del período, ya incluido en las líneas 6 y 7.",
+    )]
 
 
 # --- IR-17 ---------------------------------------------------------

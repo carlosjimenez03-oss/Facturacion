@@ -31,6 +31,15 @@ distinto (formato RFCE, ver services/recepcion_rfce) en vez del e-CF
 completo. Este servicio siempre genera y envía el e-CF COMPLETO tipo 32 vía
 `recepcion` -- el flujo de RFCE es una funcionalidad aparte, ya existente,
 fuera del alcance de este módulo.
+
+Ambiente DGII (fase 7, ver app.ambiente): la factura guarda el ambiente
+activo al crearse (Configuración → Ambiente DGII o, sin fila, APP_ENV) y se
+envía, consulta y timbra siempre en ese ambiente; `GET /facturas?ambiente=`
+filtra por él.
+
+Inventario: la salida de mercancía se registra tras el envío exitoso o, si
+la factura se emite en contingencia, al emitirla (ya se entregó al
+comprador); un rechazo de la DGII la revierte (ver app.envio).
 """
 import asyncio
 import logging
@@ -41,11 +50,14 @@ from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
+from libs.ecf_common.ambiente import AmbienteInvalidoError, validar_ambiente
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
+from libs.ecf_common.environments import dgii_environment_for
 
 from . import (
+    ambiente,
     contingencia,
     contingencia_repository,
     envio,
@@ -162,11 +174,12 @@ def _parse_id(factura_id: str) -> uuid.UUID:
 
 
 @app.get("/health")
-def health(settings: FacturasApiSettings = Depends(get_settings)) -> dict:
+async def health() -> dict:
+    activo = await ambiente.ACTIVO.actual(_pool())
     return {
         "status": "ok",
-        "app_env": settings.app_env,
-        "dgii_environment": settings.dgii_environment.value,
+        "app_env": activo,
+        "dgii_environment": dgii_environment_for(activo).value,
     }
 
 
@@ -191,7 +204,7 @@ async def crear_factura(payload: FacturaCrear, settings: FacturasApiSettings = D
         factura = await secuencias_encf.crear_factura(
             _pool(),
             tipo_ecf=payload.tipo_ecf,
-            ambiente=settings.app_env,
+            ambiente=await ambiente.ACTIVO.actual(_pool()),
             rnc_emisor=settings.emisor_rnc,
             encf=payload.encf,
             asignar_encf=payload.asignar_encf,
@@ -208,11 +221,17 @@ async def crear_factura(payload: FacturaCrear, settings: FacturasApiSettings = D
 async def listar_facturas(
     tipo_ecf: int | None = None,
     estado: str | None = None,
+    ambiente: str | None = Query(None, description="test | qa | production (también testecf, certecf, ecf)"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ):
+    if ambiente:
+        try:
+            ambiente = validar_ambiente(ambiente)
+        except AmbienteInvalidoError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await repository.listar_facturas(
-        _pool(), tipo_ecf=tipo_ecf, estado=estado, limite=limit, offset=offset
+        _pool(), tipo_ecf=tipo_ecf, estado=estado, ambiente=ambiente or None, limite=limit, offset=offset
     )
 
 
@@ -234,7 +253,9 @@ async def actualizar_factura(factura_id: str, payload: FacturaActualizar):
             detail=f"Solo se pueden editar facturas en estado 'borrador' (estado actual: {actual['estado']})",
         )
     try:
-        await secuencias_encf.validar_encf_para_actualizar(_pool(), fid, actual["rnc_emisor"], payload.encf)
+        await secuencias_encf.validar_encf_para_actualizar(
+            _pool(), fid, actual["rnc_emisor"], payload.encf, actual["ambiente"]
+        )
     except secuencias_encf.EncfNoDisponibleError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return await repository.actualizar_datos(
@@ -332,7 +353,8 @@ async def obtener_representacion_impresa(
     fid = _parse_id(factura_id)
     factura = await _obtener_o_404(fid)
     try:
-        pdf_bytes = generar_pdf(factura, settings.dgii_environment)
+        # El QR apunta al ambiente donde se emitió la factura.
+        pdf_bytes = generar_pdf(factura, ambiente.dgii_de_factura(factura, settings))
     except RepresentacionImpresaError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -376,6 +398,11 @@ async def enviar_factura(factura_id: str, settings: FacturasApiSettings = Depend
     encf = factura.get("encf")
     if not encf:
         raise HTTPException(status_code=422, detail="La factura no tiene un eNCF asignado")
+    if not factura.get("track_id"):
+        try:
+            await ambiente.validar_para_enviar(_pool(), factura)
+        except ambiente.AmbienteDistintoError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
 
     items_inventario = factura.get("items_inventario") or []
     if items_inventario:
@@ -411,6 +438,7 @@ async def enviar_factura(factura_id: str, settings: FacturasApiSettings = Depend
             error = detalle or "La DGII no responde"
             await contingencia.registrar_falla_segura(_pool(), error)
             actualizada = await repository.marcar_contingencia(_pool(), fid, error=error)
+            await envio.registrar_salida_inventario(_pool(), actualizada, settings)
             return _respuesta_contingencia(actualizada)
 
     resultado = await envio.enviar_a_recepcion(settings, factura, firmado=firmado)
@@ -424,6 +452,9 @@ async def enviar_factura(factura_id: str, settings: FacturasApiSettings = Depend
             except FacturaNoEncontradaError as exc:
                 # Ya tenía trackId (reenvío de una factura que llegó a la DGII).
                 raise HTTPException(status_code=502, detail=resultado.error) from exc
+            # Emitida en contingencia: es una venta entregada al comprador,
+            # la mercancía sale ya (el envío en lote no la repite).
+            await envio.registrar_salida_inventario(_pool(), actualizada, settings)
             return _respuesta_contingencia(actualizada)
         actualizada = await repository.registrar_resultado_envio(
             _pool(), fid, estado="error", error=resultado.error
@@ -517,7 +548,7 @@ async def actualizar_estado_dgii(factura_id: str, settings: FacturasApiSettings 
         await registrar_envio(
             _pool(),
             modulo=estado_dgii.MODULO_AUDITORIA,
-            ambiente=settings.app_env,
+            ambiente=ambiente.de_factura(factura, settings),
             rnc_emisor=factura["rnc_emisor"],
             encf=factura.get("encf"),
             track_id=factura["track_id"],

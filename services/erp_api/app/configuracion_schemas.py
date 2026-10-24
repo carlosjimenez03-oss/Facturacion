@@ -55,7 +55,8 @@ class Empresa(BaseModel):
     telefono: str | None = None
     correo: str | None = None
     logo: str | None = None
-    # Solo lectura (variables de entorno del despliegue).
+    # Solo lectura: el ambiente DGII activo (Configuración → Ambiente DGII
+    # o, si nunca se cambió ahí, APP_ENV).
     ambiente: str
     ambiente_dgii: str
     emisor_rnc_configurado: str | None = None
@@ -75,6 +76,9 @@ class SecuenciaPayload(_Entrada):
 
 class Secuencia(BaseModel):
     tipo_ecf: int
+    # Ambiente DGII de la secuencia (test | qa | production): cada ambiente
+    # tiene las suyas.
+    ambiente: str = "test"
     nombre: str
     prefijo: str
     configurada: bool

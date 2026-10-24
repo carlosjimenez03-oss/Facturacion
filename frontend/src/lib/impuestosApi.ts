@@ -140,7 +140,8 @@ export interface Casilla {
   etiqueta: string;
   /** Puede ser negativo (restas). */
   valor: string;
-  tipo: "normal" | "subtotal" | "total";
+  /** "detalle": "de ellos" de la línea anterior (ya incluido en ella; p. ej. facturas en papel, serie B). */
+  tipo: "normal" | "subtotal" | "total" | "detalle";
   ayuda: string | null;
 }
 

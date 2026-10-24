@@ -22,6 +22,19 @@ responde) -- solo esto último lleva la factura a contingencia.
 **Tras un envío exitoso** (`aplicar_flujo_tras_envio`), best-effort porque
 el e-CF ya llegó a la DGII: salida de inventario y registro en el 606 de
 los tipos 41/43/47.
+
+**Inventario y contingencia.** Un e-CF emitido en contingencia es una venta
+real (el comprador se lleva la mercancía con la representación impresa):
+su salida de inventario se registra al emitirlo (`registrar_salida_inventario`
+desde app.main), no al enviarlo en el lote, y el envío posterior no la
+repite (`inventario_sincronizado`; la salida además es idempotente por
+factura en inventario_api). Si la DGII rechaza el e-CF (estado definitivo
+'rechazado', ver app.estado_dgii), `revertir_inventario` devuelve esa
+mercancía -- igual para cualquier factura rechazada, emitida o no en
+contingencia: la venta se vuelve a facturar con otro e-NCF.
+
+**Ambiente.** Se envía al ambiente de la factura (el activo cuando se creó,
+ver app.ambiente), que `recepcion` recibe en el campo `ambiente`.
 """
 from __future__ import annotations
 
@@ -37,7 +50,7 @@ from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.compras606 import fecha_dgii_a_aaaammdd, registrar_compra_606
 from libs.ecf_common.xml_tools import nombre_archivo_ecf
 
-from . import inventario_client, repository
+from . import ambiente, inventario_client, repository
 from .config import FacturasApiSettings
 from .inventario_client import InventarioApiError
 
@@ -105,6 +118,7 @@ async def enviar_a_recepcion(
     nombre_archivo = nombre_archivo_ecf(factura["rnc_emisor"], encf)
     contenido = (factura["xml_firmado"] if firmado else factura["xml_generado"]).encode("utf-8")
     datos = {"encf": encf, "firmado": "true"} if firmado else {"encf": encf}
+    datos["ambiente"] = ambiente.de_factura(factura, settings)
     try:
         async with httpx.AsyncClient(timeout=timeout or settings.timeout_envio_segundos) as client:
             respuesta = await client.post(
@@ -222,22 +236,57 @@ async def registrar_compra_606_autoemitida(pool, factura: dict, encf: str, setti
         logger.exception("No se pudo registrar la factura %s en compras606", factura.get("id"))
 
 
-async def aplicar_flujo_tras_envio(pool, factura: dict[str, Any], settings: FacturasApiSettings) -> None:
-    """Salida de inventario y 606 de una factura que la DGII ya recibió
-    (trackId en mano). Nunca lanza: el e-CF ya se envió (documento fiscal
-    irreversible), un fallo solo se deja registrado para resolverlo (la
-    salida de inventario la reintenta la tarea de fondo)."""
-    fid = uuid.UUID(str(factura["id"]))
-    encf = factura.get("encf")
+async def registrar_salida_inventario(pool, factura: dict[str, Any], settings: FacturasApiSettings) -> None:
+    """Salida de mercancía de una factura ya emitida: enviada a la DGII o
+    emitida en contingencia. Nunca lanza: un fallo queda en
+    `inventario_sincronizado = false` / `inventario_error` y lo reintenta la
+    tarea de fondo (app.estado_dgii.sincronizar_inventario_pendiente). Si ya
+    se registró (p. ej. al emitirla en contingencia), no hace nada."""
     items_inventario = factura.get("items_inventario") or []
-    if items_inventario:
-        try:
-            await inventario_client.registrar_salida_por_factura(
-                settings.inventario_api_url, str(fid), items_inventario, documento=encf
-            )
-            await repository.registrar_sincronizacion_inventario(pool, fid, sincronizado=True, error=None)
-        except InventarioApiError as exc:
-            logger.error("No se pudo registrar la salida de inventario de la factura %s: %s", fid, exc)
-            await repository.registrar_sincronizacion_inventario(pool, fid, sincronizado=False, error=str(exc))
+    if not items_inventario or factura.get("inventario_sincronizado"):
+        return
+    fid = uuid.UUID(str(factura["id"]))
+    try:
+        await inventario_client.registrar_salida_por_factura(
+            settings.inventario_api_url, str(fid), items_inventario, documento=factura.get("encf")
+        )
+        await repository.registrar_sincronizacion_inventario(pool, fid, sincronizado=True, error=None)
+    except InventarioApiError as exc:
+        logger.error("No se pudo registrar la salida de inventario de la factura %s: %s", fid, exc)
+        await repository.registrar_sincronizacion_inventario(pool, fid, sincronizado=False, error=str(exc))
+
+
+async def revertir_inventario(pool, factura: dict[str, Any], settings: FacturasApiSettings) -> bool:
+    """La DGII rechazó la factura: devuelve al inventario su mercancía
+    (`POST /movimientos/reverso-por-factura`, idempotente; si la salida
+    nunca se registró no mueve nada). Primero deja el reverso pendiente
+    (`inventario_reverso_pendiente`) para que, si inventario_api no responde,
+    lo reintente la tarea de fondo. Nunca lanza; devuelve si quedó hecho."""
+    if not (factura.get("items_inventario") or []):
+        return False
+    fid = uuid.UUID(str(factura["id"]))
+    try:
+        await repository.marcar_reverso_inventario(pool, fid, pendiente=True, error=None)
+        await inventario_client.registrar_reverso_por_factura(
+            settings.inventario_api_url, str(fid), documento=factura.get("encf")
+        )
+        await repository.marcar_reverso_inventario(pool, fid, pendiente=False, error=None)
+    except InventarioApiError as exc:
+        logger.error("No se pudo revertir la salida de inventario de la factura rechazada %s: %s", fid, exc)
+        await repository.marcar_reverso_inventario(pool, fid, pendiente=True, error=str(exc))
+        return False
+    except Exception:
+        logger.exception("No se pudo revertir la salida de inventario de la factura rechazada %s", fid)
+        return False
+    return True
+
+
+async def aplicar_flujo_tras_envio(pool, factura: dict[str, Any], settings: FacturasApiSettings) -> None:
+    """Salida de inventario (si no se registró ya al emitirla en
+    contingencia) y 606 de una factura que la DGII ya recibió (trackId en
+    mano). Nunca lanza: el e-CF ya se envió (documento fiscal irreversible),
+    un fallo solo se deja registrado para resolverlo (la salida de
+    inventario la reintenta la tarea de fondo)."""
+    await registrar_salida_inventario(pool, factura, settings)
     if factura["tipo_ecf"] in TIPOS_COMPRAS_606:
-        await registrar_compra_606_autoemitida(pool, factura, encf, settings)
+        await registrar_compra_606_autoemitida(pool, factura, factura.get("encf"), settings)

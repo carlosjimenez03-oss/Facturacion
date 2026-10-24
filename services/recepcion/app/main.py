@@ -12,6 +12,10 @@ Modo contingencia (ver docs/dgii/CONTINGENCIA.md): `facturas_api` firma el
 e-CF él mismo -- el XML firmado es el que se entrega al comprador y el que
 lleva el código de seguridad de la representación impresa -- y lo manda con
 `firmado=true`: aquí se envía tal cual, byte a byte, sin volver a firmarlo.
+
+Ambiente DGII (ver libs/ecf_common/ambiente.py): el de la factura si
+facturas_api lo manda (`ambiente`) o, si no, el activo de Configuración →
+Ambiente DGII (con caché corta), y sin fila guardada, APP_ENV.
 Si la DGII no responde (error de conexión, timeout o HTTP 5xx) se responde
 503, para que quien llama lo distinga de un rechazo (502) y lo deje en
 contingencia. `GET /disponibilidad` es la sonda corta de conectividad.
@@ -28,10 +32,10 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from lxml import etree
 
+from libs.ecf_common.ambiente import AmbienteDGII, AmbienteInvalidoError, TokenProviderPorAmbiente
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
-from libs.ecf_common.auth.token_provider import TokenProvider
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
-from libs.ecf_common.environments import DGIIService, dgii_service_base_url
+from libs.ecf_common.environments import DGIIService, dgii_environment_for, dgii_service_base_url
 from libs.ecf_common.http_client import DGIIAsyncClient, DGIIServiceError
 from libs.ecf_common.xml_tools import nombre_archivo_ecf
 
@@ -61,19 +65,27 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_token_provider = TokenProvider(
-    ambiente=settings.dgii_environment,
+_token_provider = TokenProviderPorAmbiente(
     certificado_path=settings.certificado_path,
     certificado_password=settings.certificado_password,
 )
+_ambiente = AmbienteDGII(settings.app_env)
+
+
+async def _ambiente_de(pedido: str | None) -> str:
+    try:
+        return await _ambiente.resolver(app.state.db_pool, pedido)
+    except AmbienteInvalidoError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/health")
-def health(settings: RecepcionSettings = Depends(get_settings)) -> dict:
+async def health() -> dict:
+    ambiente = await _ambiente_de(None)
     return {
         "status": "ok",
-        "app_env": settings.app_env,
-        "dgii_environment": settings.dgii_environment.value,
+        "app_env": ambiente,
+        "dgii_environment": dgii_environment_for(ambiente).value,
     }
 
 
@@ -91,11 +103,12 @@ def _tiene_firma(xml_bytes: bytes) -> bool:
 
 
 @app.get("/disponibilidad")
-async def disponibilidad(settings: RecepcionSettings = Depends(get_settings)) -> dict:
+async def disponibilidad(ambiente: str | None = None) -> dict:
     """Sonda corta: ¿responde el servicio de Recepción de la DGII? Cualquier
     respuesta HTTP por debajo de 500 (incluido un 404/405 al GET) cuenta como
     disponible; un error de conexión, un timeout o un 5xx, como no."""
-    url = f"{dgii_service_base_url(DGIIService.RECEPCION_ECF, settings.dgii_environment)}/api/facturaselectronicas"
+    dgii = dgii_environment_for(await _ambiente_de(ambiente))
+    url = f"{dgii_service_base_url(DGIIService.RECEPCION_ECF, dgii)}/api/facturaselectronicas"
     try:
         async with DGIIAsyncClient(timeout=_TIMEOUT_SONDA_SEGUNDOS) as client:
             respuesta = await client.get(url)
@@ -111,10 +124,13 @@ async def enviar_ecf(
     encf: str = Form(..., description="e-NCF del comprobante, p. ej. E310000000001"),
     xml: UploadFile = File(..., description="XML del e-CF tentativo, sin firmar (o ya firmado, con firmado=true)"),
     firmado: bool = Form(False, description="El XML ya viene firmado por el emisor: se envía tal cual"),
+    ambiente: str | None = Form(None, description="Ambiente de la factura (test|qa|production); por defecto el activo"),
     settings: RecepcionSettings = Depends(get_settings),
 ) -> RecepcionResponse:
     """Firma el e-CF recibido (salvo `firmado=true`) y lo envía a la DGII;
     retorna el trackId."""
+    ambiente = await _ambiente_de(ambiente)
+    dgii = dgii_environment_for(ambiente)
     try:
         xml_bytes = await xml.read()
         if firmado:
@@ -125,16 +141,16 @@ async def enviar_ecf(
             credencial = cargar_certificado_p12(settings.certificado_path, settings.certificado_password)
             xml_firmado = firmar_xml(xml_bytes, credencial)
 
-        token = await _token_provider.obtener_token()
+        token = await _token_provider.obtener_token(ambiente=dgii)
         nombre_archivo = nombre_archivo_ecf(settings.emisor_rnc, encf)
 
-        cliente = RecepcionDGIIClient(settings.dgii_environment)
+        cliente = RecepcionDGIIClient(dgii)
         respuesta = await cliente.enviar_ecf(xml_firmado, nombre_archivo, token.token)
 
         await registrar_envio(
             app.state.db_pool,
             modulo="recepcion",
-            ambiente=settings.app_env,
+            ambiente=ambiente,
             rnc_emisor=settings.emisor_rnc,
             encf=encf,
             track_id=respuesta.trackId,
@@ -152,7 +168,7 @@ async def enviar_ecf(
         await registrar_envio(
             app.state.db_pool,
             modulo="recepcion",
-            ambiente=settings.app_env,
+            ambiente=ambiente,
             rnc_emisor=settings.emisor_rnc,
             encf=encf,
             error=str(exc),
@@ -166,7 +182,7 @@ async def enviar_ecf(
         await registrar_envio(
             app.state.db_pool,
             modulo="recepcion",
-            ambiente=settings.app_env,
+            ambiente=ambiente,
             rnc_emisor=settings.emisor_rnc,
             encf=encf,
             error=detalle,

@@ -348,3 +348,19 @@ def test_alertas_lotes_usa_los_dias_configurados(client, monkeypatch):
     client.get("/lotes/alertas?dias=90")
 
     assert recibidos == [main.settings.dias_alerta_vencimiento, 90]
+
+
+def test_reverso_por_factura(client, monkeypatch):
+    recibidos = []
+
+    async def fake_reverso(pool, factura_id, *, documento=None):
+        recibidos.append((factura_id, documento))
+        return []
+
+    monkeypatch.setattr(repository, "registrar_reverso_por_factura", fake_reverso)
+    response = client.post(
+        "/movimientos/reverso-por-factura", json={"factura_id": "factura-1", "documento": "E310000000001"}
+    )
+    assert response.status_code == 200 and response.json() == {"ok": True, "movimientos": []}
+    assert recibidos == [("factura-1", "E310000000001")]
+    assert client.post("/movimientos/reverso-por-factura", json={}).status_code == 422

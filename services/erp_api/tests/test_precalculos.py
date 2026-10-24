@@ -240,3 +240,42 @@ def test_ir2_tasa_transitoria_ley_30_26_y_saldo_a_favor():
     # Sin gastos: 7 = total gastos, 8-10 renta, 11 = impuesto.
     assert _casillas(grande)["11"]["etiqueta"] == "Impuesto liquidado (30%)"
     assert pequena["resultado"] == {"etiqueta": "Saldo a favor estimado", "valor": Decimal("500.00")}
+
+
+def test_it1_facturas_en_papel_en_lineas_de_detalle():
+    """Las facturas en papel (serie B) ya vienen sumadas en las ventas; salen
+    además como "de ellos" (5.1 y 8.1, tipo detalle) sin cambiar los totales."""
+    papel = precalculos.PapelIt1(
+        ventas=VentasItbis(g18=Decimal("23500"), exentas=Decimal("500"), i18=Decimal("4230")),
+        cantidad=2,
+        regularizadas=[("B0100000009", "E310000000777")],
+    )
+    sin_papel, saldo_sin = _it1()
+    con_papel, saldo_con = precalculos.calcular_it1(
+        periodo="202610",
+        ventas=VentasItbis(g18=Decimal("100000"), exentas=Decimal("25000"), i18=Decimal("18000")),
+        compras=Compras606(itbis_facturado=Decimal("11000"), itbis_costo=Decimal("1000")),
+        itbis_retenido_proveedores=Decimal("1200"),
+        ajustes={"itbis_retenido_terceros": Decimal("500")},
+        saldo_favor_sugerido=Decimal("200"),
+        hoy=HOY,
+        papel=papel,
+    )
+    c = _casillas(con_papel)
+    assert c["5.1"]["valor"] == Decimal("24000.00") and c["5.1"]["tipo"] == "detalle"
+    assert "2 comprobante(s)" in c["5.1"]["etiqueta"]
+    assert c["8.1"]["valor"] == Decimal("4230.00") and c["8.1"]["tipo"] == "detalle"
+    # Las líneas de detalle no cambian nada del cálculo.
+    assert con_papel["resultado"] == sin_papel["resultado"] and saldo_con == saldo_sin
+    assert [k for k in c if k in ("5", "5.1", "6")] == ["5", "5.1", "6"]  # 5.1 va justo después del total
+    assert any("B0100000009 → E310000000777" in a for a in con_papel["advertencias"])
+    assert "facturas en papel" in con_papel["nota"]
+    # Sin facturas en papel (o todas regularizadas) no hay líneas de detalle.
+    assert "5.1" not in _casillas(sin_papel) and "facturas en papel" not in sin_papel["nota"]
+    solo_regularizadas, _ = precalculos.calcular_it1(
+        periodo="202610", ventas=VentasItbis(), compras=Compras606(), itbis_retenido_proveedores=Decimal("0"),
+        ajustes={}, saldo_favor_sugerido=Decimal("0"), hoy=HOY,
+        papel=precalculos.PapelIt1(ventas=VentasItbis(), cantidad=0, regularizadas=[("B0100000001", "E310000000001")]),
+    )
+    assert "8.1" not in _casillas(solo_regularizadas)
+    assert any("ya tienen su e-CF de reemplazo" in a for a in solo_regularizadas["advertencias"])

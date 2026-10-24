@@ -965,7 +965,8 @@ async def cerrar_sesion(
 async def factura_para_timbre(pool: asyncpg.Pool, factura_id: uuid.UUID) -> dict[str, Any]:
     async with pool.acquire() as conn:
         fila = await conn.fetchrow(
-            "SELECT id, rnc_emisor, encf, tipo_ecf, xml_firmado, datos::jsonb AS d FROM facturacion.facturas WHERE id = $1",
+            "SELECT id, rnc_emisor, encf, tipo_ecf, ambiente, xml_firmado, datos::jsonb AS d "
+            "FROM facturacion.facturas WHERE id = $1",
             factura_id,
         )
     if fila is None:
@@ -975,6 +976,7 @@ async def factura_para_timbre(pool: asyncpg.Pool, factura_id: uuid.UUID) -> dict
     return {
         "rnc_emisor": fila["rnc_emisor"],
         "encf": fila["encf"],
+        "ambiente": fila["ambiente"],
         "xml_firmado": fila["xml_firmado"],
         "datos": datos,
     }

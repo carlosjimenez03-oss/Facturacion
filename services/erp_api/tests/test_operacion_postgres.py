@@ -380,10 +380,11 @@ async def test_ventas_por_mes_cliente_producto_y_tipo(pool):
         D("1170"), D("1600"), D("18500"), D("2770"), D("21270"))
     assert "1 e-CF de venta del período siguen 'enviado'" in mes["advertencias"][0]
 
-    # Mismo desglose por tasa que el pre-cálculo del IT-1.
+    # Mismo desglose por tasa que el pre-cálculo del IT-1, que además suma la
+    # factura en papel de la semilla (4,230 de ITBIS al 18 %, línea 8.1).
     it1 = await impuestos_repository.precalculo(pool, "it1", "202610")
-    casillas = {c["etiqueta"]: c["valor"] for seccion in it1["secciones"] for c in seccion["casillas"]}
-    assert any(v == D("1170.00") for v in casillas.values()) and any(v == D("1600.00") for v in casillas.values())
+    casillas = {c["codigo"]: c["valor"] for seccion in it1["secciones"] for c in seccion["casillas"]}
+    assert (casillas["6"], casillas["7"], casillas["8.1"]) == (D("1170") + D("4230"), D("1600"), D("4230"))
 
     clientes = {f["etiqueta"]: f["total"] for f in (await rr.reporte_ventas(pool, agrupar="cliente", **OCTUBRE))["filas"]}
     assert clientes == {"Hotel Brisas de Bávaro, SA": D("11600"), "Supermercado La Cosecha, SRL": D("7310"),
@@ -526,6 +527,48 @@ async def test_facturas_papel_en_el_607_solo_si_emite_serie_b(pool):
     assert any("factura(s) en papel" in a for a in datos["advertencias"])
 
 
+async def test_facturas_papel_en_el_it1_hasta_su_reemplazo(pool):
+    """Fase 7: el IT-1 declara todas las ventas, así que la factura en papel
+    (B0100004521: 23,500 + 4,230 de ITBIS) entra aunque la empresa sea 100 %
+    electrónica, en una línea aparte; cuando su e-CF de reemplazo (código
+    de modificación 4) es aceptado deja de contarse (lo declara el e-CF)."""
+    antes = await impuestos_repository.precalculo(pool, "it1", "202610")
+    lineas = {c["codigo"]: c for seccion in antes["secciones"] for c in seccion["casillas"]}
+    assert lineas["5.1"]["valor"] == D("23500.00") and lineas["5.1"]["tipo"] == "detalle"
+    assert "1 comprobante" in lineas["5.1"]["etiqueta"]
+    assert lineas["8.1"]["valor"] == D("4230.00")
+    assert "facturas en papel" in antes["nota"]
+    ingresos, itbis = lineas["5"]["valor"], lineas["8"]["valor"]
+
+    # El e-CF de reemplazo enviado pero aún sin aceptar no la excluye.
+    datos_reemplazo = (
+        '{"Encabezado": {"IdDoc": {"TipoeCF": "31"}, "Emisor": {"FechaEmision": "%s"}, '
+        '"Totales": {"MontoGravadoI1": "23500.00", "TotalITBIS1": "4230.00", "MontoTotal": "27730.00"}}, '
+        '"InformacionReferencia": {"NCFModificado": "b0100004521", "CodigoModificacion": "4"}}'
+    )
+    fid = await pool.fetchval(
+        """
+        INSERT INTO facturacion.facturas (tipo_ecf, ambiente, rnc_emisor, encf, estado, datos)
+        VALUES (31, 'test', '131897542', 'E310000000888', 'enviado', $1::jsonb) RETURNING id
+        """,
+        datos_reemplazo % "05-11-2026",
+    )
+    sigue = await impuestos_repository.precalculo(pool, "it1", "202610")
+    assert {c["codigo"] for s in sigue["secciones"] for c in s["casillas"]} >= {"5.1", "8.1"}
+
+    # Aceptado (en noviembre): octubre ya no la cuenta y noviembre la declara
+    # una sola vez, como e-CF.
+    await pool.execute("UPDATE facturacion.facturas SET estado = 'aceptado' WHERE id = $1", fid)
+    despues = await impuestos_repository.precalculo(pool, "it1", "202610")
+    lineas = {c["codigo"]: c for seccion in despues["secciones"] for c in seccion["casillas"]}
+    assert "5.1" not in lineas and "8.1" not in lineas
+    assert lineas["5"]["valor"] == ingresos - D("23500") and lineas["8"]["valor"] == itbis - D("4230")
+    assert any("B0100004521 → E310000000888" in a for a in despues["advertencias"])
+    noviembre = await impuestos_repository.precalculo(pool, "it1", "202611")
+    lineas = {c["codigo"]: c for seccion in noviembre["secciones"] for c in seccion["casillas"]}
+    assert lineas["6"]["valor"] == D("4230.00") and "8.1" not in lineas
+
+
 async def test_facturas_papel_generan_su_asiento_idempotente(pool):
     from services.erp_api.app import contabilidad_repository as cr
 
@@ -565,3 +608,21 @@ async def test_facturas_papel_generan_su_asiento_idempotente(pool):
         d["origen"] == "factura_papel" and "E310000000777" in d["motivo"] for d in resultado["no_contabilizados"]
     )
     assert await pool.fetchval("SELECT estado FROM contabilidad.asientos WHERE id = $1", asiento["id"]) == "anulado"
+
+
+async def test_it1_y_607_solo_del_ambiente_activo(pool):
+    """Fase 7: un e-CF aceptado de otro ambiente DGII (aquí producción, con
+    el activo en pruebas) no entra al IT-1 ni al 607 del activo."""
+    antes = await impuestos_repository.precalculo(pool, "it1", "202610")
+    filas_607 = len((await impuestos_repository.formato_607(pool, "202610", "131897542"))["filas"])
+    await pool.execute(
+        """
+        INSERT INTO facturacion.facturas (tipo_ecf, ambiente, rnc_emisor, encf, estado, datos)
+        VALUES (31, 'production', '131897542', 'E310000000001', 'aceptado',
+                '{"Encabezado": {"IdDoc": {"TipoeCF": "31"}, "Emisor": {"FechaEmision": "15-10-2026"},
+                  "Totales": {"MontoGravadoI1": "50000.00", "TotalITBIS1": "9000.00", "MontoTotal": "59000.00"}}}')
+        """
+    )
+    despues = await impuestos_repository.precalculo(pool, "it1", "202610")
+    assert despues["secciones"] == antes["secciones"]
+    assert len((await impuestos_repository.formato_607(pool, "202610", "131897542"))["filas"]) == filas_607

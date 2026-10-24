@@ -104,7 +104,7 @@ def test_dgii_5xx_es_503_y_4xx_es_502(client, monkeypatch, credencial_prueba):
 
 def test_token_sin_conexion_es_503(client, monkeypatch, credencial_prueba):
     class TokenCaido:
-        async def obtener_token(self, forzar_renovacion=False):
+        async def obtener_token(self, forzar_renovacion=False, **_):
             raise httpx.ConnectTimeout("timeout")
 
     monkeypatch.setattr(main, "cargar_certificado_p12", lambda path, password: credencial_prueba)

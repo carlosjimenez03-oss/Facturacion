@@ -178,3 +178,30 @@ def test_las_columnas_nuevas_de_tablas_con_escrituras_solo_se_agregan_si_faltan(
                 assert linea.startswith("        "), linea
     assert "column_name = 'cuenta_bancaria_id'" in migraciones.DDL_BANCOS
     assert "to_regclass('ventas.cobros_cuenta_bancaria_idx') IS NULL" in migraciones.DDL_BANCOS
+
+
+def test_018_ambiente_tiene_el_mismo_ddl_que_migraciones():
+    from services.erp_api.app.migraciones_configuracion import DDL_AMBIENTE
+
+    archivo = (REPO_ROOT / "db" / "init" / "018_fase7_fiscal.sql").read_text(encoding="utf-8")
+    assert DDL_AMBIENTE.strip() in archivo
+    for linea in DDL_AMBIENTE.splitlines():
+        if linea.startswith("CREATE "):
+            assert "IF NOT EXISTS" in linea, linea
+    # Las secuencias que ya existían quedan en el ambiente de la instalación.
+    assert "current_setting('kontara.ambiente_defecto', true)" in DDL_AMBIENTE
+
+
+async def test_aplicar_migraciones_pone_el_ambiente_de_las_secuencias_antes_del_ddl():
+    from services.erp_api.app.migraciones_configuracion import DDL_AMBIENTE
+
+    conn = _FakeConnection()
+    await migraciones.aplicar_migraciones(_FakePool(conn), ambiente_defecto="production")
+    consultas = [q for q, _ in conn.execute_calls]
+    i = consultas.index(DDL_AMBIENTE)
+    assert "set_config('kontara.ambiente_defecto'" in consultas[i - 1]
+    assert conn.execute_calls[i - 1][1] == ("production",)
+    # Un APP_ENV desconocido no rompe el CHECK: queda en 'test'.
+    conn = _FakeConnection()
+    await migraciones.aplicar_migraciones(_FakePool(conn), ambiente_defecto="staging")
+    assert ("test",) in [a for _, a in conn.execute_calls]

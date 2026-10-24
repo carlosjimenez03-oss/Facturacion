@@ -3,6 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { configuracionApi, publicarEmpresa, type Empresa, type EmpresaPayload } from "../../lib/configuracionApi";
 import { useAviso } from "../ingresos/useAviso";
 import {
+  AMBIENTES,
   SeccionAmbiente,
   SeccionCertificado,
   SeccionEmpresa,
@@ -112,6 +113,18 @@ export function ConfiguracionPage() {
     }
   }
 
+  /** Tras cambiar el ambiente DGII: la empresa (barra superior) y las secuencias pasan a las del nuevo. */
+  function recargarAmbiente() {
+    configuracionApi
+      .empresa()
+      .then((e) => {
+        setEmpresa(e);
+        publicarEmpresa(e);
+      })
+      .catch(() => undefined);
+  }
+  const ambienteActivo = AMBIENTES.find((a) => a.app === empresa?.ambiente)?.app;
+
   const ref = (id: string) => (el: HTMLElement | null) => {
     refs.current[id] = el;
   };
@@ -145,8 +158,8 @@ export function ConfiguracionPage() {
         <div className="cfg-body">
           <SeccionEmpresa refSeccion={ref("empresa")} form={form} setForm={setForm} empresa={empresa} cargada={cargada} />
           <SeccionCertificado refSeccion={ref("certificado")} avisar={mostrarAviso} />
-          <SeccionAmbiente refSeccion={ref("ambiente")} empresa={empresa} />
-          <SeccionSecuencias refSeccion={ref("secuencias")} avisar={mostrarAviso} />
+          <SeccionAmbiente refSeccion={ref("ambiente")} avisar={mostrarAviso} alCambiar={recargarAmbiente} />
+          <SeccionSecuencias refSeccion={ref("secuencias")} avisar={mostrarAviso} ambienteActivo={ambienteActivo} />
           <SeccionInventario refSeccion={ref("inventario")} metodo={metodo} setMetodo={setMetodo} />
           <SeccionEnvio refSeccion={ref("envio")} avisar={mostrarAviso} empresa={empresa} />
           <SeccionVendedores refSeccion={ref("vendedores")} avisar={mostrarAviso} />

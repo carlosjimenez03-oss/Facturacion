@@ -6,11 +6,14 @@ docs/AUTH.md (usuarios) y docs/ERP_API.md.
 import asyncio
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
+from libs.ecf_common.ambiente import AmbienteInvalidoError, validar_ambiente
 from libs.ecf_common.auth import certificado_activo
 from libs.ecf_common.auth.sesion_supabase import SesionInvalidaError, usuario_de_request
+from libs.ecf_common.environments import dgii_environment_for
 
+from . import ambiente_dgii
 from . import configuracion_envio as envio
 from . import configuracion_repository as repo
 from . import gotrue_admin
@@ -72,11 +75,13 @@ async def _llamar(funcion, *args, **kwargs):
 
 # --- Empresa ---------------------------------------------------------
 
-def _empresa(fila: dict | None, settings: ErpApiSettings) -> dict:
-    """Sin fila guardada: lo que ya se sabe por las variables de entorno."""
+async def _empresa(pool, fila: dict | None, settings: ErpApiSettings) -> dict:
+    """Sin fila guardada: lo que ya se sabe por las variables de entorno.
+    El ambiente es el activo (Configuración → Ambiente DGII o APP_ENV)."""
+    ambiente = await ambiente_dgii.ambiente_activo(pool)
     base = {
-        "ambiente": settings.app_env,
-        "ambiente_dgii": settings.dgii_environment.value,
+        "ambiente": ambiente,
+        "ambiente_dgii": dgii_environment_for(ambiente).value,
         "emisor_rnc_configurado": "".join(c for c in settings.emisor_rnc if c.isdigit()) or None,
     }
     if fila is None:
@@ -91,7 +96,7 @@ def _empresa(fila: dict | None, settings: ErpApiSettings) -> dict:
 
 @router.get("/empresa", response_model=Empresa)
 async def obtener_empresa(request: Request, settings: ErpApiSettings = Depends(get_settings)):
-    return _empresa(await repo.obtener_empresa(_pool(request)), settings)
+    return await _empresa(_pool(request), await repo.obtener_empresa(_pool(request)), settings)
 
 
 @router.put("/empresa", response_model=Empresa)
@@ -104,29 +109,53 @@ async def guardar_empresa(
     if emisor_rnc:
         campos["rnc"] = emisor_rnc
     fila = await _llamar(repo.guardar_empresa, _pool(request), **campos)
-    return _empresa(fila, settings)
+    return await _empresa(_pool(request), fila, settings)
 
 
 # --- Secuencias e-NCF ---------------------------------------------------------
 
+# Las secuencias son por ambiente DGII (la DGII autoriza rangos distintos en
+# TesteCF, CerteCF y eCF). `?ambiente=` permite registrar las de otro
+# ambiente (p. ej. las de producción antes de cambiar a eCF); sin él, las del
+# activo.
+_AMBIENTE_SECUENCIA = Query(None, description="test | qa | production; por defecto el ambiente activo")
+
+
+async def _ambiente_secuencias(request: Request, ambiente: str | None) -> str:
+    if not ambiente:
+        return await ambiente_dgii.ambiente_activo(_pool(request))
+    try:
+        return validar_ambiente(ambiente)
+    except AmbienteInvalidoError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get("/secuencias", response_model=list[Secuencia])
-async def listar_secuencias(request: Request):
-    return await repo.listar_secuencias(_pool(request), hoy())
+async def listar_secuencias(request: Request, ambiente: str | None = _AMBIENTE_SECUENCIA):
+    amb = await _ambiente_secuencias(request, ambiente)
+    return [{**s, "ambiente": amb} for s in await repo.listar_secuencias(_pool(request), hoy(), amb)]
 
 
 @router.get("/secuencias/{tipo_ecf}", response_model=Secuencia)
-async def obtener_secuencia(request: Request, tipo_ecf: int):
-    return await _llamar(repo.obtener_secuencia, _pool(request), tipo_ecf, hoy())
+async def obtener_secuencia(request: Request, tipo_ecf: int, ambiente: str | None = _AMBIENTE_SECUENCIA):
+    amb = await _ambiente_secuencias(request, ambiente)
+    return {**await _llamar(repo.obtener_secuencia, _pool(request), tipo_ecf, hoy(), amb), "ambiente": amb}
 
 
 @router.put("/secuencias/{tipo_ecf}", response_model=Secuencia)
-async def guardar_secuencia(request: Request, tipo_ecf: int, payload: SecuenciaPayload):
-    return await _llamar(repo.guardar_secuencia, _pool(request), tipo_ecf, **payload.model_dump(), hoy=hoy())
+async def guardar_secuencia(
+    request: Request, tipo_ecf: int, payload: SecuenciaPayload, ambiente: str | None = _AMBIENTE_SECUENCIA
+):
+    amb = await _ambiente_secuencias(request, ambiente)
+    guardada = await _llamar(
+        repo.guardar_secuencia, _pool(request), tipo_ecf, **payload.model_dump(), hoy=hoy(), ambiente=amb
+    )
+    return {**guardada, "ambiente": amb}
 
 
 @router.delete("/secuencias/{tipo_ecf}", status_code=204)
-async def eliminar_secuencia(request: Request, tipo_ecf: int):
-    await _llamar(repo.eliminar_secuencia, _pool(request), tipo_ecf)
+async def eliminar_secuencia(request: Request, tipo_ecf: int, ambiente: str | None = _AMBIENTE_SECUENCIA):
+    await _llamar(repo.eliminar_secuencia, _pool(request), tipo_ecf, await _ambiente_secuencias(request, ambiente))
 
 
 # --- Vendedores ---------------------------------------------------------

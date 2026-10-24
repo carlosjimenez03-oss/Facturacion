@@ -31,7 +31,9 @@ from collections.abc import Awaitable, Callable
 import asyncpg
 
 from .contabilidad_calculos import ddl_semilla_catalogo
-from .migraciones_configuracion import DDL_CONFIGURACION
+from libs.ecf_common.ambiente import AMBIENTES
+
+from .migraciones_configuracion import DDL_AMBIENTE, DDL_CONFIGURACION
 
 logger = logging.getLogger(__name__)
 
@@ -1075,7 +1077,7 @@ $$;
 """
 
 
-async def _migrar(conn: asyncpg.Connection) -> None:
+async def _migrar(conn: asyncpg.Connection, ambiente_defecto: str = "test") -> None:
     async with conn.transaction():
         await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
         await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
@@ -1090,6 +1092,9 @@ async def _migrar(conn: asyncpg.Connection) -> None:
         await conn.execute(DDL_NOMINA)
         await conn.execute(DDL_SOLUCIONES)
         await conn.execute(DDL_CONTINGENCIA)
+        # Ambiente de las secuencias que ya existían (ver DDL_AMBIENTE).
+        await conn.execute("SELECT set_config('kontara.ambiente_defecto', $1, true)", ambiente_defecto)
+        await conn.execute(DDL_AMBIENTE)
 
 
 async def aplicar_migraciones(
@@ -1097,6 +1102,7 @@ async def aplicar_migraciones(
     *,
     reintentos: int = _REINTENTOS,
     dormir: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ambiente_defecto: str | None = None,
 ) -> None:
     """Crea (si no existen) los esquemas `ventas`, `impuestos`, `compras`,
     `recepcion`, `contabilidad`, `bancos`, `configuracion`, `operacion`,
@@ -1104,11 +1110,15 @@ async def aplicar_migraciones(
     funciones auxiliares de las consultas, y siembra el catálogo de cuentas
     sugerido si está vacío. Con `lock_timeout`: si una tabla está ocupada
     (o hay un deadlock) suelta todo y reintenta con espera creciente."""
+    if ambiente_defecto is None:
+        from .config import get_settings
+
+        ambiente_defecto = get_settings().app_env
     espera = _ESPERA_INICIAL_SEGUNDOS
     for intento in range(1, reintentos + 1):
         try:
             async with pool.acquire() as conn:
-                await _migrar(conn)
+                await _migrar(conn, ambiente_defecto if ambiente_defecto in AMBIENTES else "test")
             break
         except (asyncpg.LockNotAvailableError, asyncpg.DeadlockDetectedError) as exc:
             if intento == reintentos:

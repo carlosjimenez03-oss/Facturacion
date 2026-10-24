@@ -156,7 +156,10 @@ def test_guardar_empresa_invalida_422(client, monkeypatch):
 
 
 def test_listar_y_guardar_secuencias(client, monkeypatch):
-    async def fake_listar(pool, hoy):
+    pedidos = []
+
+    async def fake_listar(pool, hoy, ambiente):
+        pedidos.append(ambiente)
         return [repo.calcular_secuencia(t, None, None, hoy) for t in repo.NOMBRES_TIPO]
 
     recibido = {}
@@ -169,9 +172,18 @@ def test_listar_y_guardar_secuencias(client, monkeypatch):
     monkeypatch.setattr(repo, "guardar_secuencia", fake_guardar)
     lista = client.get("/configuracion/secuencias").json()
     assert [s["tipo_ecf"] for s in lista] == [31, 32, 33, 34, 41, 43, 44, 45, 46, 47]
+    # Sin `ambiente`: las del activo (sin fila en Configuración, APP_ENV=test).
+    assert pedidos == ["test"] and {s["ambiente"] for s in lista} == {"test"}
+    assert client.get("/configuracion/secuencias", params={"ambiente": "ecf"}).json()[0]["ambiente"] == "production"
+    assert pedidos[-1] == "production"
+    assert client.get("/configuracion/secuencias", params={"ambiente": "x"}).status_code == 422
     r = client.put("/configuracion/secuencias/31", json={"desde": 1, "hasta": 5000, "fecha_vencimiento": "2027-12-31"})
     assert r.status_code == 200
-    assert recibido["tipo"] == 31 and recibido["proximo"] is None
+    assert recibido["tipo"] == 31 and recibido["proximo"] is None and recibido["ambiente"] == "test"
+    r = client.put(
+        "/configuracion/secuencias/31", params={"ambiente": "production"}, json={"desde": 1, "hasta": 5000}
+    )
+    assert recibido["ambiente"] == "production" and r.json()["ambiente"] == "production"
     assert r.json()["siguiente_encf"] == "E310000000001"
     assert client.put("/configuracion/secuencias/31", json={"desde": 0, "hasta": 5}).status_code == 422
 
@@ -182,7 +194,7 @@ def test_secuencia_tipo_invalido(client):
 
 
 def test_eliminar_secuencia_inexistente(client, monkeypatch):
-    async def fake(pool, tipo):
+    async def fake(pool, tipo, ambiente):
         raise repo.SecuenciaNoEncontradaError(str(tipo))
 
     monkeypatch.setattr(repo, "eliminar_secuencia", fake)
@@ -272,8 +284,8 @@ async def test_guardar_empresa_normaliza_y_valida():
 
 async def test_guardar_secuencia_valida_rango():
     with pytest.raises(DatosInvalidosError, match="hasta"):
-        await repo.guardar_secuencia(object(), 31, desde=10, hasta=5, proximo=None, fecha_vencimiento=None, activa=True, hoy=HOY)
+        await repo.guardar_secuencia(object(), 31, desde=10, hasta=5, proximo=None, fecha_vencimiento=None, activa=True, hoy=HOY, ambiente="test")
     with pytest.raises(DatosInvalidosError, match="próximo"):
-        await repo.guardar_secuencia(object(), 31, desde=10, hasta=50, proximo=60, fecha_vencimiento=None, activa=True, hoy=HOY)
+        await repo.guardar_secuencia(object(), 31, desde=10, hasta=50, proximo=60, fecha_vencimiento=None, activa=True, hoy=HOY, ambiente="test")
     with pytest.raises(DatosInvalidosError, match="tipo_ecf"):
-        await repo.guardar_secuencia(object(), 30, desde=1, hasta=5, proximo=None, fecha_vencimiento=None, activa=True, hoy=HOY)
+        await repo.guardar_secuencia(object(), 30, desde=1, hasta=5, proximo=None, fecha_vencimiento=None, activa=True, hoy=HOY, ambiente="test")

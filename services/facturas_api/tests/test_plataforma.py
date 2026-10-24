@@ -52,7 +52,7 @@ def test_crear_y_actualizar_con_vendedor(client, monkeypatch):
         recibido["actualizar"] = kw["vendedor_id"]
         return _factura(id=str(fid), vendedor_id=kw["vendedor_id"])
 
-    async def fake_validar(pool, fid, rnc, encf):
+    async def fake_validar(pool, fid, rnc, encf, ambiente):
         recibido["validar"] = encf
 
     monkeypatch.setattr(secuencias_encf, "crear_factura", fake_crear)
@@ -77,7 +77,7 @@ def test_actualizar_con_e_ncf_de_otra_factura_409(client, monkeypatch):
     async def fake_obtener(pool, fid):
         return _factura(id=str(fid))
 
-    async def fake_validar(pool, fid, rnc, encf):
+    async def fake_validar(pool, fid, rnc, encf, ambiente):
         raise secuencias_encf.EncfNoDisponibleError(f"El e-NCF {encf} ya está usado en otra factura")
 
     async def no_debe(pool, fid, **kw):

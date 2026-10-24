@@ -8,7 +8,9 @@ La salida de mercancía por venta NO se registra aquí por iniciativa propia
 -- `facturas_api` la dispara vía `POST /movimientos/validar-disponibilidad`
 (antes de enviar el e-CF a la DGII, para bloquear la operación si no hay
 stock) y `POST /movimientos/salida-por-factura` (después de un envío
-exitoso, para descontar el stock realmente). Ver
+exitoso o de su emisión en contingencia, para descontar el stock
+realmente) y, si la DGII la rechaza, `POST /movimientos/reverso-por-factura`
+(devuelve esa mercancía). Ver
 `services/facturas_api/app/inventario_client.py`.
 
 Al arrancar aplica sus propias migraciones (`migraciones.py`): en Supabase
@@ -69,6 +71,7 @@ from .schemas import (
     Proveedor,
     ProveedorActualizar,
     ProveedorCrear,
+    ReversoPorFacturaRequest,
     SalidaPorFacturaRequest,
     SalidaPorFacturaResponse,
     SugerenciaFefo,
@@ -732,5 +735,15 @@ async def validar_disponibilidad(payload: ValidarDisponibilidadRequest):
 async def salida_por_factura(payload: SalidaPorFacturaRequest):
     movimientos = await repository.registrar_salida_por_factura(
         _pool(), payload.factura_id, _items_venta(payload.items), documento=payload.documento
+    )
+    return SalidaPorFacturaResponse(ok=True, movimientos=movimientos)
+
+
+@app.post("/movimientos/reverso-por-factura", response_model=SalidaPorFacturaResponse)
+async def reverso_por_factura(payload: ReversoPorFacturaRequest):
+    """La DGII rechazó la factura: su mercancía vuelve al inventario
+    (idempotente; sin salidas registradas no hace nada)."""
+    movimientos = await repository.registrar_reverso_por_factura(
+        _pool(), payload.factura_id, documento=payload.documento
     )
     return SalidaPorFacturaResponse(ok=True, movimientos=movimientos)

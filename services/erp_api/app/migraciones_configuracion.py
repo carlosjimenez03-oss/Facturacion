@@ -106,3 +106,55 @@ BEGIN
     END IF;
 END $$;
 """
+
+
+# Fase 7: ambiente DGII elegido en Configuración (ver app/ambiente_dgii.py y
+# libs/ecf_common/ambiente.py) y secuencias e-NCF por ambiente. Mismo DDL en
+# db/init/018_fase7_fiscal.sql. Las secuencias que ya existían quedan en el
+# ambiente con que corría la instalación: `aplicar_migraciones` pone su
+# APP_ENV en `kontara.ambiente_defecto` (set_config local a la transacción);
+# en el Postgres local, sin esa variable, quedan en 'test'.
+DDL_AMBIENTE = """
+-- Ambiente DGII activo (una sola fila: 'test' = TesteCF, 'qa' = CerteCF,
+-- 'production' = eCF). Sin fila, cada servicio usa su APP_ENV. Lo cambia
+-- un administrador en Configuración → Ambiente DGII.
+CREATE TABLE IF NOT EXISTS configuracion.ambiente_dgii (
+    id               smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    ambiente         text NOT NULL CHECK (ambiente IN ('test', 'qa', 'production')),
+    cambiado_por_id  text,           -- usuario de Supabase Auth (NULL: sin inicio de sesión configurado)
+    cambiado_por     text,           -- su correo
+    cambiado_en      timestamptz NOT NULL DEFAULT now()
+);
+
+-- Auditoría: cada cambio de ambiente, quién y cuándo (nunca se borra).
+CREATE TABLE IF NOT EXISTS configuracion.ambiente_dgii_cambios (
+    id               bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    anterior         text NOT NULL,
+    nuevo            text NOT NULL,
+    usuario_id       text,
+    usuario_correo   text,
+    creado_en        timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS ambiente_dgii_cambios_creado_idx ON configuracion.ambiente_dgii_cambios (creado_en DESC);
+
+-- Secuencias e-NCF por ambiente: la DGII autoriza rangos distintos en
+-- TesteCF, CerteCF y eCF. La clave pasa de (tipo_ecf) a (ambiente, tipo_ecf).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'configuracion' AND table_name = 'secuencias' AND column_name = 'ambiente'
+    ) THEN
+        ALTER TABLE configuracion.secuencias ADD COLUMN IF NOT EXISTS ambiente text;
+        UPDATE configuracion.secuencias
+            SET ambiente = COALESCE(NULLIF(current_setting('kontara.ambiente_defecto', true), ''), 'test');
+        ALTER TABLE configuracion.secuencias ALTER COLUMN ambiente SET NOT NULL;
+        ALTER TABLE configuracion.secuencias ADD CONSTRAINT secuencias_ambiente_check
+            CHECK (ambiente IN ('test', 'qa', 'production'));
+        ALTER TABLE configuracion.secuencias DROP CONSTRAINT IF EXISTS secuencias_pkey;
+        ALTER TABLE configuracion.secuencias ADD CONSTRAINT secuencias_pkey PRIMARY KEY (ambiente, tipo_ecf);
+    END IF;
+END;
+$$;
+"""
