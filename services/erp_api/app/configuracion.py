@@ -14,7 +14,7 @@ from libs.ecf_common.auth.sesion_supabase import SesionInvalidaError, usuario_de
 from libs.ecf_common.empresa import EMPRESA_PREDETERMINADA, empresa_actual
 from libs.ecf_common.environments import dgii_environment_for
 
-from . import ambiente_dgii
+from . import ambiente_dgii, membresia
 from . import configuracion_envio as envio
 from . import configuracion_repository as repo
 from . import gotrue_admin
@@ -28,6 +28,7 @@ from .configuracion_schemas import (
     PreferenciaInventario,
     PruebaPayload,
     PruebaResultado,
+    RolEmpresaPayload,
     Secuencia,
     SecuenciaPayload,
     Usuario,
@@ -205,27 +206,61 @@ async def _gotrue(funcion, *args):
 
 
 @router.get("/usuarios", response_model=Usuarios)
-async def listar_usuarios(settings: ErpApiSettings = Depends(get_settings)):
-    """Usuarios de Kontara (`app_metadata.kontara`) y, aparte, los demás del
-    mismo Supabase Auth, que no pueden entrar hasta que se les dé acceso."""
+async def listar_usuarios(request: Request, settings: ErpApiSettings = Depends(get_settings)):
+    """Usuarios de Kontara MIEMBROS DE ESTA EMPRESA (multiempresa: cada
+    empresa ve solo los suyos) y, solo en la empresa 1, los demás del mismo
+    Supabase Auth, que no pueden entrar hasta que se les dé acceso."""
     if not gotrue_admin.configurado(settings):
         return {"configurado": False, "usuarios": [], "mensaje": _USUARIOS_NO_CONFIGURADO}
     todos = await _gotrue(gotrue_admin.listar_usuarios, settings)
+    roles = await membresia.roles_de_la_empresa(_pool(request), [u["id"] for u in todos if u["acceso"]])
     return {
         "configurado": True,
-        "usuarios": [u for u in todos if u["acceso"]],
-        "sin_acceso": [u for u in todos if not u["acceso"]],
+        "usuarios": [
+            {**u, "rol_empresa": roles[u["id"]] if roles[u["id"]] != "implicito" else ("admin" if u["admin"] else "usuario")}
+            for u in todos
+            if u["acceso"] and roles.get(u["id"])
+        ],
+        "sin_acceso": [u for u in todos if not u["acceso"]] if empresa_actual() == EMPRESA_PREDETERMINADA else [],
     }
 
 
+def _exigir_admin(request: Request) -> None:
+    usuario = getattr(request.state, "usuario", None)
+    if usuario is not None and not usuario.admin:
+        raise HTTPException(status_code=403, detail="Solo un administrador de la empresa puede administrar sus usuarios")
+
+
 @router.post("/usuarios", response_model=Usuario, status_code=201)
-async def crear_usuario(payload: UsuarioPayload, settings: ErpApiSettings = Depends(get_settings)):
+async def crear_usuario(request: Request, payload: UsuarioPayload, settings: ErpApiSettings = Depends(get_settings)):
+    """Crea o invita un usuario EN ESTA EMPRESA. Si el correo ya es de un
+    usuario (de otra empresa de la instalación, o del mismo Supabase Auth),
+    se le da acceso y se agrega como miembro en vez de crearlo de nuevo."""
+    _exigir_admin(request)
     correo = payload.correo.lower()
     if "@" not in correo:
         raise HTTPException(status_code=422, detail="El correo no tiene un formato válido")
-    if payload.contrasena:
-        return await _gotrue(gotrue_admin.crear_usuario, settings, correo, payload.contrasena)
-    return await _gotrue(gotrue_admin.invitar_usuario, settings, correo)
+    existente = next(
+        (u for u in await _gotrue(gotrue_admin.listar_usuarios, settings) if (u["correo"] or "").lower() == correo),
+        None,
+    )
+    if existente is not None:
+        usuario = existente if existente["acceso"] else await _gotrue(gotrue_admin.dar_acceso, settings, existente["id"])
+        nuevo = False
+    else:
+        if payload.contrasena:
+            usuario = await _gotrue(gotrue_admin.crear_usuario, settings, correo, payload.contrasena)
+        else:
+            usuario = await _gotrue(gotrue_admin.invitar_usuario, settings, correo)
+        nuevo = True
+    await membresia.agregar(
+        _pool(request),
+        usuario,
+        payload.rol,
+        agregado_por=getattr(getattr(request.state, "usuario", None), "correo", None),
+        nuevo=nuevo,
+    )
+    return {**usuario, "rol_empresa": payload.rol}
 
 
 def _usuario_actual(request: Request, settings: ErpApiSettings):
@@ -240,39 +275,75 @@ def _usuario_actual(request: Request, settings: ErpApiSettings):
         return None
 
 
-def _no_es_uno_mismo(request: Request, settings: ErpApiSettings, usuario_id: str) -> None:
+def _no_es_uno_mismo(request: Request, settings: ErpApiSettings, usuario_id: str, accion: str = "desactivar") -> None:
     actual = _usuario_actual(request, settings)
     if actual is not None and actual.id == usuario_id:
-        raise HTTPException(status_code=409, detail="No puede desactivar su propio usuario")
+        raise HTTPException(status_code=409, detail=f"No puede {accion} su propio usuario")
 
 
-async def _de_kontara(settings: ErpApiSettings, usuario_id: str) -> None:
-    """Activar/desactivar solo aplica a usuarios con acceso a Kontara."""
+async def _de_kontara(request: Request, settings: ErpApiSettings, usuario_id: str) -> dict:
+    """Activar/desactivar solo aplica a usuarios con acceso a Kontara y
+    miembros de esta empresa (un administrador no toca los de otras)."""
     usuario = await _gotrue(gotrue_admin.obtener_usuario, settings, usuario_id)
     if not usuario["acceso"]:
         raise HTTPException(status_code=404, detail="Ese usuario no tiene acceso a Kontara: use «Dar acceso»")
+    roles = await membresia.roles_de_la_empresa(_pool(request), [usuario_id])
+    if not roles.get(usuario_id):
+        raise HTTPException(status_code=404, detail="Ese usuario no es miembro de esta empresa")
+    return usuario
 
 
 @router.post("/usuarios/{usuario_id}/desactivar", response_model=Usuario)
 async def desactivar_usuario(request: Request, usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
+    _exigir_admin(request)
     usuario_id = str(_uuid(usuario_id))
     _no_es_uno_mismo(request, settings, usuario_id)
-    await _de_kontara(settings, usuario_id)
+    await _de_kontara(request, settings, usuario_id)
     return await _gotrue(gotrue_admin.cambiar_activo, settings, usuario_id, False)
 
 
 @router.post("/usuarios/{usuario_id}/activar", response_model=Usuario)
-async def activar_usuario(usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
+async def activar_usuario(request: Request, usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
+    _exigir_admin(request)
     usuario_id = str(_uuid(usuario_id))
-    await _de_kontara(settings, usuario_id)
+    await _de_kontara(request, settings, usuario_id)
     return await _gotrue(gotrue_admin.cambiar_activo, settings, usuario_id, True)
 
 
 @router.post("/usuarios/{usuario_id}/acceso", response_model=Usuario)
-async def dar_acceso_usuario(usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
+async def dar_acceso_usuario(request: Request, usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
     """Da acceso a Kontara a un usuario que ya existía en Supabase Auth
-    (`app_metadata.kontara = true`). Entra desde su próximo inicio de sesión."""
-    return await _gotrue(gotrue_admin.dar_acceso, settings, str(_uuid(usuario_id)))
+    (`app_metadata.kontara = true`) y lo agrega a esta empresa. Entra desde
+    su próximo inicio de sesión."""
+    _exigir_admin(request)
+    usuario = await _gotrue(gotrue_admin.dar_acceso, settings, str(_uuid(usuario_id)))
+    await membresia.agregar(
+        _pool(request), usuario, "usuario", agregado_por=getattr(getattr(request.state, "usuario", None), "correo", None)
+    )
+    return {**usuario, "rol_empresa": "usuario"}
+
+
+@router.put("/usuarios/{usuario_id}/rol", response_model=Usuario)
+async def cambiar_rol_usuario(
+    request: Request, usuario_id: str, payload: RolEmpresaPayload, settings: ErpApiSettings = Depends(get_settings)
+):
+    """Administrador o usuario de ESTA empresa."""
+    _exigir_admin(request)
+    usuario_id = str(_uuid(usuario_id))
+    _no_es_uno_mismo(request, settings, usuario_id, "cambiar el rol de")
+    usuario = await _de_kontara(request, settings, usuario_id)
+    await membresia.agregar(_pool(request), usuario, payload.rol, agregado_por=None)
+    return {**usuario, "rol_empresa": payload.rol}
+
+
+@router.delete("/usuarios/{usuario_id}/empresa", status_code=204)
+async def quitar_de_la_empresa(request: Request, usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
+    """Quita al usuario de ESTA empresa (sigue en las demás)."""
+    _exigir_admin(request)
+    usuario_id = str(_uuid(usuario_id))
+    _no_es_uno_mismo(request, settings, usuario_id, "quitar de la empresa a")
+    usuario = await _de_kontara(request, settings, usuario_id)
+    await membresia.quitar(_pool(request), usuario)
 
 
 # --- Certificado digital ---------------------------------------------------------

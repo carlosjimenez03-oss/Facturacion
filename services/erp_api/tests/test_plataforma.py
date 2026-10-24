@@ -51,12 +51,31 @@ def client(monkeypatch):
         yield c
 
 
+class _Tx:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+
 class _Conn:
+    """Sin membresías escritas (multiempresa): todos son miembros
+    implícitos de la empresa 1, como antes."""
+
     async def fetchval(self, query, *args, timeout=None):
-        # Sin el registro de empresas (multiempresa): todos en la empresa 1.
         if "empresa_usuarios" in query:
             return None
         return 1
+
+    async def fetch(self, query, *args):
+        return []
+
+    async def execute(self, query, *args):
+        return "INSERT 0 1"
+
+    def transaction(self):
+        return _Tx()
 
 
 class _Acquire:
@@ -232,6 +251,7 @@ def test_usuarios_sin_service_role_key(client, monkeypatch):
 
 @respx.mock
 def test_crear_usuario_con_contrasena(client):
+    respx.get(f"{GW}/auth/v1/admin/users").mock(return_value=httpx.Response(200, json={"users": []}))
     ruta = respx.post(f"{GW}/auth/v1/admin/users").mock(return_value=httpx.Response(200, json=_gotrue_user()))
     r = client.post("/configuracion/usuarios", json={"correo": "Ana@Empresa.do", "contrasena": "clave-segura-1"})
     assert r.status_code == 201
@@ -244,6 +264,7 @@ def test_crear_usuario_con_contrasena(client):
 
 @respx.mock
 def test_invitar_usuario_sin_contrasena(client):
+    respx.get(f"{GW}/auth/v1/admin/users").mock(return_value=httpx.Response(200, json={"users": []}))
     invitado = _gotrue_user(invited_at="2026-10-24T00:00:00Z", email_confirmed_at=None, app_metadata={"provider": "email"})
     ruta = respx.post(f"{GW}/auth/v1/invite").mock(return_value=httpx.Response(200, json=invitado))
     # /invite no recibe app_metadata: la marca se pone justo después.
@@ -278,6 +299,7 @@ def test_no_se_activa_ni_desactiva_a_quien_no_es_de_kontara(client):
 
 @respx.mock
 def test_error_de_gotrue_se_traduce(client):
+    respx.get(f"{GW}/auth/v1/admin/users").mock(return_value=httpx.Response(200, json={"users": []}))
     respx.post(f"{GW}/auth/v1/admin/users").mock(
         return_value=httpx.Response(422, json={"code": 422, "msg": "A user with this email address has already been registered"})
     )

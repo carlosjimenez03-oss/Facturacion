@@ -124,6 +124,12 @@ class UsuarioPayload(_Entrada):
     correo: str = Field(..., min_length=3, max_length=250)
     # Sin contraseña = invitación por correo (requiere SMTP en Supabase).
     contrasena: str | None = Field(None, min_length=8, max_length=72)
+    # Rol en la empresa a la que se invita (multiempresa).
+    rol: Literal["admin", "usuario"] = "usuario"
+
+
+class RolEmpresaPayload(_Entrada):
+    rol: Literal["admin", "usuario"]
 
 
 class Usuario(BaseModel):
@@ -138,6 +144,8 @@ class Usuario(BaseModel):
     # mismo GoTrue se listan aparte, "sin acceso").
     acceso: bool = False
     admin: bool = False
+    # Rol en la empresa en curso (multiempresa); None = no es miembro.
+    rol_empresa: Literal["admin", "usuario"] | None = None
 
 
 class Usuarios(BaseModel):
