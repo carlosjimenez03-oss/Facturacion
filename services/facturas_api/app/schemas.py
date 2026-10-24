@@ -41,12 +41,16 @@ class FacturaCrear(BaseModel):
     items_inventario: list[ItemInventario] | None = Field(
         None, description="Vínculo de cada línea con un producto del catálogo (ver ItemInventario)"
     )
+    # Vendedor (configuracion.vendedores de erp_api). Igual que
+    # items_inventario: metadata de la aplicación, fuera de `datos`.
+    vendedor_id: UUID | None = None
 
 
 class FacturaActualizar(BaseModel):
     encf: str | None = None
     datos: dict[str, Any]
     items_inventario: list[ItemInventario] | None = None
+    vendedor_id: UUID | None = None
 
 
 class FacturaResumen(BaseModel):
@@ -69,6 +73,7 @@ class FacturaResumen(BaseModel):
 class FacturaDetalle(FacturaResumen):
     datos: dict[str, Any]
     items_inventario: list[ItemInventario] | None = None
+    vendedor_id: UUID | None = None
     xml_generado: str | None = None
     xml_firmado: str | None = None
     dgii_respuesta: dict[str, Any] | None = None
@@ -85,4 +90,29 @@ class EnviarResponse(BaseModel):
     id: UUID
     estado: str
     track_id: str | None = None
+    error: str | None = None
+
+
+class CertificadoEstado(BaseModel):
+    """Datos públicos del certificado .p12 con que se firma (nunca la llave
+    ni la contraseña). `estado`: vigente | por_vencer (<= 60 días) | vencido
+    | no_configurado | error. `origen`: cargado (desde Configuración) |
+    variables (CERTIFICADO_PATH)."""
+
+    estado: str
+    origen: str | None = None
+    archivo: str | None = None
+    titular: str | None = None
+    firmante: str | None = None
+    documento_firmante: str | None = None
+    sujeto: str | None = None
+    emisor: str | None = None
+    rnc: str | None = None
+    numero_serie: str | None = None
+    valido_desde: datetime | None = None
+    vence: datetime | None = None
+    dias_restantes: int | None = None
+    dias_para_vencer: int | None = None
+    vigencia_consumida_pct: int | None = None
+    coincide_rnc_emisor: bool | None = None
     error: str | None = None

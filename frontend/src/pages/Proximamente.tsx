@@ -1,9 +1,11 @@
-import { Link, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 import { MODULOS_PENDIENTES } from "../layout/menu";
 
 /** Página para los módulos del diseño que todavía no tienen servicio en el backend. */
 export function Proximamente() {
-  const { slug = "" } = useParams();
+  const { pathname } = useLocation();
+  // /modulo/<slug> o una ruta propia aún sin pantalla (/planes, /nomina, /pos…).
+  const slug = useParams().slug ?? pathname.split("/").filter(Boolean)[0] ?? "";
   const modulo = MODULOS_PENDIENTES[slug] ?? { titulo: "Módulo", descripcion: "Esta sección está en desarrollo." };
   return (
     <div className="content">

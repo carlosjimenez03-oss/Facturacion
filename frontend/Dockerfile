@@ -40,11 +40,28 @@ ARG VITE_EMPRESA_NOMBRE=
 ENV VITE_EMPRESA_NOMBRE=${VITE_EMPRESA_NOMBRE}
 ARG VITE_EMPRESA_RNC=
 ENV VITE_EMPRESA_RNC=${VITE_EMPRESA_RNC}
+
+# Inicio de sesión con Supabase Auth (ver docs/AUTH.md). VITE_SUPABASE_URL
+# es la base de GoTrue para el navegador: "/" = el mismo dominio del
+# frontend (nginx reenvía /auth/v1/ al gateway de Supabase), o la URL
+# pública del gateway. VITE_SUPABASE_ANON_KEY es la ANON_KEY del recurso de
+# Supabase (pública por diseño). Vacías = sin inicio de sesión (la
+# aplicación muestra el aviso "Inicio de sesión no configurado").
+ARG VITE_SUPABASE_URL=
+ENV VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
+ARG VITE_SUPABASE_ANON_KEY=
+ENV VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
 RUN npm run build
 
 FROM nginx:1.27-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
+# Genera al arrancar /etc/nginx/kontara/{sesion,supabase}.conf a partir de
+# KONTARA_AUTH y SUPABASE_GATEWAY_URL (ver docs/AUTH.md).
+COPY docker/40-kontara-sesion.sh /docker-entrypoint.d/40-kontara-sesion.sh
+RUN chmod +x /docker-entrypoint.d/40-kontara-sesion.sh
+ENV KONTARA_AUTH="" \
+    SUPABASE_GATEWAY_URL=http://api-gw:8000
 
 EXPOSE 80
 

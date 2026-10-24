@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { IconAlerta, IconMas, IconRechazo } from "../layout/icons";
 import { proximosVencimientos } from "../lib/calendarioFiscal";
 import { ESTADO_BADGE, ESTADO_LABEL, ESTADOS_PENDIENTES, TIPO_ECF_LABEL } from "../lib/estados";
+import { nombreEmpresa, useEmpresa } from "../lib/configuracionApi";
 import { EMPRESA_NOMBRE } from "../lib/marca";
 import { motivoRechazo, useFacturas } from "../lib/useFacturas";
 import { FuncionesSugeridas } from "./FuncionesSugeridas";
@@ -11,6 +12,7 @@ const MESES = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "O
 
 export function Inicio() {
   const { facturas, cargando, error } = useFacturas();
+  const empresa = nombreEmpresa(useEmpresa(), EMPRESA_NOMBRE);
   const hoy = useMemo(() => new Date(), []);
 
   const resumen = useMemo(() => {
@@ -39,7 +41,7 @@ export function Inicio() {
       <div className="ph">
         <div>
           <h1>{saludo}</h1>
-          <p>Resumen de {EMPRESA_NOMBRE} · {hoy.toLocaleDateString("es-DO", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
+          <p>Resumen de {empresa} · {hoy.toLocaleDateString("es-DO", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
         </div>
         <div className="row">
           <Link to="/inventario/compras/nueva" className="btn btn-o">

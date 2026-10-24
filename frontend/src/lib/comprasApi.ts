@@ -14,6 +14,7 @@
 // (`registrarPago`) actualiza el 606 — fecha de pago, ITBIS retenido, tipo y
 // monto de retención ISR, forma de pago — y con eso el IT-1 y el IR-17 del
 // mes del pago. Anular el pago lo revierte.
+import { fetchConSesion } from "./sesion";
 import { ERP_API_URL, ErpApiError } from "./erpApi";
 
 /**
@@ -36,7 +37,7 @@ export function textoDetalle(detail: unknown): string {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${ERP_API_URL}${path}`, {
+  const response = await fetchConSesion(`${ERP_API_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });

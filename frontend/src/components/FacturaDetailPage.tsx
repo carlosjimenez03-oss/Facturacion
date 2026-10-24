@@ -7,6 +7,7 @@ import { CODIGOS_MODIFICACION, FORMAS_PAGO, TIPOS_INGRESOS } from "../lib/catalo
 import { erpApi } from "../lib/erpApi";
 import type { Cliente } from "../lib/erpApi";
 import { ESTADO_BADGE, ESTADO_LABEL, TIPO_ECF_LABEL } from "../lib/estados";
+import { configuracionApi } from "../lib/configuracionApi";
 import { calcularMontoItem } from "../lib/format";
 import { formatoMonto, formatoRnc, nombreAmbiente } from "../lib/marca";
 import type { FacturaDetalle, FormaPago, ItemFactura } from "../lib/types";
@@ -87,6 +88,17 @@ export function FacturaDetailPage() {
     const recibido = (location.state as { aviso?: Aviso } | null)?.aviso;
     if (recibido) setAviso(recibido);
   }, [location.state]);
+
+  // Nombre del vendedor (Configuración → Vendedores); sin erp-api solo se omite.
+  const [vendedor, setVendedor] = useState<string | null>(null);
+  const vendedorId = factura?.vendedor_id ?? null;
+  useEffect(() => {
+    if (!vendedorId) return setVendedor(null);
+    configuracionApi
+      .vendedores()
+      .then((l) => setVendedor(l.find((v) => v.id === vendedorId)?.nombre ?? "Vendedor eliminado"))
+      .catch(() => setVendedor(null));
+  }, [vendedorId]);
 
   const comprador = (factura?.datos.Encabezado.Comprador ?? {}) as Record<string, unknown>;
   const rncComprador = texto(comprador.RNCComprador).replace(/\D/g, "");
@@ -555,6 +567,12 @@ export function FacturaDetailPage() {
                     {f.dgii_codigo && `Código ${f.dgii_codigo} · `}
                     {f.dgii_estado}
                   </dd>
+                </>
+              )}
+              {vendedor && (
+                <>
+                  <dt>Vendedor</dt>
+                  <dd>{vendedor}</dd>
                 </>
               )}
               <dt>Ambiente</dt>

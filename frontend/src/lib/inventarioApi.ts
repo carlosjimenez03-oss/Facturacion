@@ -11,6 +11,7 @@
 // InventarioApiError). (La ruta interna de facturas-api
 // POST /movimientos/validar-disponibilidad responde 422 en vez de 404 por un
 // almacén/lote inexistente; no se usa desde el frontend.)
+import { fetchConSesion } from "./sesion";
 import type {
   Ajuste,
   AjusteItemPayload,
@@ -61,7 +62,7 @@ class InventarioApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${INVENTARIO_API_URL}${path}`, {
+  const response = await fetchConSesion(`${INVENTARIO_API_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
@@ -318,7 +319,7 @@ export const inventarioApi = {
 
   /** El CSV del Kardex como texto (para guardarlo con un Blob). */
   descargarKardexCsv: async (params: KardexParams): Promise<string> => {
-    const response = await fetch(inventarioApi.kardexCsvUrl(params));
+    const response = await fetchConSesion(inventarioApi.kardexCsvUrl(params));
     if (!response.ok) throw new InventarioApiError(response.status, response.statusText);
     return response.text();
   },

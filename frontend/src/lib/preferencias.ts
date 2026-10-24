@@ -1,6 +1,8 @@
 // Datos que el formulario de factura recuerda entre usos, en el navegador:
-// el emisor (para no escribirlo en cada factura) y la fecha de vencimiento de
-// cada secuencia autorizada, hasta que exista el servicio de configuración.
+// el emisor y la fecha de vencimiento de cada secuencia autorizada. Desde la
+// fase 6 la fuente es Configuración (erp-api: /configuracion/empresa y
+// /configuracion/secuencias, ver configuracionApi.ts); esto queda SOLO como
+// respaldo cuando erp-api no responde (la empresa leída se copia aquí).
 // Los clientes viven en Contactos (erp-api); la copia local de los clientes
 // ya facturados es solo el respaldo de "Verificar" el RNC cuando erp-api no
 // responde. Si el navegador no deja guardar, todo sigue funcionando con los

@@ -58,12 +58,14 @@ async def crear_factura(
     encf: str | None,
     datos: dict[str, Any],
     items_inventario: list[dict[str, Any]] | None = None,
+    vendedor_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     async with pool.acquire() as conn:
         fila = await conn.fetchrow(
             """
-            INSERT INTO facturacion.facturas (tipo_ecf, ambiente, rnc_emisor, encf, datos, items_inventario)
-            VALUES ($1, $2, $3, $4, $5, $6)
+            INSERT INTO facturacion.facturas
+                (tipo_ecf, ambiente, rnc_emisor, encf, datos, items_inventario, vendedor_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
             RETURNING *
             """,
             tipo_ecf,
@@ -72,6 +74,7 @@ async def crear_factura(
             encf,
             json.dumps(datos),
             _items_inventario_json(items_inventario),
+            vendedor_id,
         )
     return _fila_a_dict(fila)
 
@@ -124,13 +127,14 @@ async def actualizar_datos(
     encf: str | None,
     datos: dict[str, Any],
     items_inventario: list[dict[str, Any]] | None = None,
+    vendedor_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Actualiza los datos editables de una factura en estado 'borrador'."""
     async with pool.acquire() as conn:
         fila = await conn.fetchrow(
             """
             UPDATE facturacion.facturas
-            SET encf = $2, datos = $3, items_inventario = $4, actualizado_en = now()
+            SET encf = $2, datos = $3, items_inventario = $4, vendedor_id = $5, actualizado_en = now()
             WHERE id = $1 AND estado = 'borrador'
             RETURNING *
             """,
@@ -138,6 +142,7 @@ async def actualizar_datos(
             encf,
             json.dumps(datos),
             _items_inventario_json(items_inventario),
+            vendedor_id,
         )
     if fila is None:
         raise FacturaNoEncontradaError(str(factura_id))

@@ -27,6 +27,7 @@ from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
+from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
 from libs.ecf_common.db import cerrar_pool, crear_pool
 
 from . import ajustes_repository, almacenes_repository, kardex, lotes_repository, repository
@@ -117,6 +118,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.state.db_pool = None
+
+# REQUIRE_AUTH=true: exige la sesión de Supabase Auth (ver docs/AUTH.md).
+instalar_verificacion_sesion(app, settings)
 
 app.add_middleware(
     CORSMiddleware,

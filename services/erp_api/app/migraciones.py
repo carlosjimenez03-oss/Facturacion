@@ -28,6 +28,7 @@ from collections.abc import Awaitable, Callable
 import asyncpg
 
 from .contabilidad_calculos import ddl_semilla_catalogo
+from .migraciones_configuracion import DDL_CONFIGURACION
 
 logger = logging.getLogger(__name__)
 
@@ -703,7 +704,6 @@ CREATE INDEX IF NOT EXISTS facturas_papel_fecha_idx ON operacion.facturas_papel 
 """
 
 
-
 async def _migrar(conn: asyncpg.Connection) -> None:
     async with conn.transaction():
         await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
@@ -714,6 +714,7 @@ async def _migrar(conn: asyncpg.Connection) -> None:
         await conn.execute(DDL_COMPRAS)
         await conn.execute(DDL_CONTABILIDAD)
         await conn.execute(DDL_BANCOS)
+        await conn.execute(DDL_CONFIGURACION)
         await conn.execute(DDL_OPERACION)
 
 
@@ -724,7 +725,7 @@ async def aplicar_migraciones(
     dormir: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
     """Crea (si no existen) los esquemas `ventas`, `impuestos`, `compras`,
-    `recepcion`, `contabilidad`, `bancos` y `operacion`, sus tablas/índices y las
+    `recepcion`, `contabilidad`, `bancos`, `configuracion` y `operacion`, sus tablas/índices y las
     funciones auxiliares de las consultas, y siembra el catálogo de cuentas
     sugerido si está vacío. Con `lock_timeout`: si una tabla está ocupada
     (o hay un deadlock) suelta todo y reintenta con espera creciente."""
@@ -747,5 +748,5 @@ async def aplicar_migraciones(
             await dormir(espera)
             espera = min(espera * 2, _ESPERA_MAXIMA_SEGUNDOS)
     logger.info(
-        "Esquemas 'ventas', 'impuestos', 'compras', 'recepcion', 'contabilidad', 'bancos' y 'operacion' verificados/creados"
+        "Esquemas 'ventas', 'impuestos', 'compras', 'recepcion', 'contabilidad', 'bancos', 'configuracion' y 'operacion' verificados/creados"
     )

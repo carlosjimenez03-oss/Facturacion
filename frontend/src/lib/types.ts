@@ -79,6 +79,8 @@ export interface FacturaDetalle extends FacturaResumen {
   xml_generado: string | null;
   xml_firmado: string | null;
   dgii_respuesta: Record<string, unknown> | null;
+  /** Vendedor (Configuración → Vendedores); fuera de `datos`. */
+  vendedor_id?: string | null;
 }
 
 export interface GenerarXmlResponse {

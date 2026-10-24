@@ -1,4 +1,4 @@
-import { Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { CompraForm } from "./components/CompraForm";
 import { CompraList } from "./components/CompraList";
 import { FacturaDetailPage } from "./components/FacturaDetailPage";
@@ -41,6 +41,12 @@ import { Proximamente } from "./pages/Proximamente";
 import { ReportesPage } from "./pages/reportes/Reportes";
 import { SincronizacionPage } from "./pages/sincronizacion/Sincronizacion";
 import { TareasPage } from "./pages/tareas/Tareas";
+import { ConfiguracionPage } from "./pages/plataforma/Configuracion";
+import { CuentaPage } from "./pages/plataforma/Cuenta";
+import { EstadoSolucionesPage } from "./pages/plataforma/EstadoSoluciones";
+import { Login } from "./pages/plataforma/Login";
+import { useSesion } from "./pages/plataforma/useSesion";
+import { AUTH_CONFIGURADA } from "./lib/sesion";
 
 /** /facturas/nueva?cotizacion=…, ?copiar=…, ?tipo=… comparten ruta: la clave
  * reinicia el formulario cuando solo cambia la consulta (p. ej. del menú "+"). */
@@ -50,6 +56,13 @@ function FacturaNueva() {
 }
 
 export default function App() {
+  const { pathname, search } = useLocation();
+  const sesion = useSesion();
+  // Todo, salvo /login, requiere sesión cuando el inicio de sesión está configurado.
+  if (pathname === "/login") return <Login />;
+  if (AUTH_CONFIGURADA && (!sesion || sesion.recuperacion)) {
+    return <Navigate to="/login" replace state={{ desde: pathname + search }} />;
+  }
   return (
     <AppShell>
       <Routes>
@@ -120,6 +133,10 @@ export default function App() {
         <Route path="/sincronizacion" element={<SincronizacionPage />} />
         <Route path="/reportes" element={<ReportesPage />} />
         <Route path="/reportes/:reporte" element={<ReportesPage />} />
+        <Route path="/configuracion" element={<ConfiguracionPage />} />
+        <Route path="/configuracion/:seccion" element={<ConfiguracionPage />} />
+        <Route path="/estado-soluciones" element={<EstadoSolucionesPage />} />
+        <Route path="/cuenta/:seccion" element={<CuentaPage />} />
 
         <Route path="/modulo/:slug" element={<Proximamente />} />
         <Route path="*" element={<Proximamente />} />
