@@ -1,6 +1,7 @@
 """El DDL que erp_api aplica al arrancar (Supabase) y db/init/007_ventas.sql,
-008_impuestos.sql, 009_fecha_dgii_segura.sql, 010_compras.sql y
-012_bancos_contabilidad.sql (Postgres local) deben ser el mismo."""
+008_impuestos.sql, 009_fecha_dgii_segura.sql, 010_compras.sql,
+012_bancos_contabilidad.sql, 013_configuracion.sql, 014_operacion.sql y
+015_nomina.sql (Postgres local) deben ser el mismo."""
 from pathlib import Path
 
 import asyncpg
@@ -53,11 +54,16 @@ def test_013_configuracion_tiene_el_mismo_ddl_que_migraciones():
     assert migraciones.DDL_CONFIGURACION.strip() in archivo
 
 
+def test_015_nomina_tiene_el_mismo_ddl_que_migraciones():
+    archivo = (REPO_ROOT / "db" / "init" / "015_nomina.sql").read_text(encoding="utf-8")
+    assert migraciones.DDL_NOMINA.strip() in archivo
+
+
 def test_ddl_es_idempotente():
     for ddl in (
         migraciones.DDL_VENTAS, migraciones.DDL_IMPUESTOS, migraciones.DDL_FUNCIONES, migraciones.DDL_COMPRAS,
         migraciones.DDL_CONTABILIDAD, migraciones.DDL_BANCOS, migraciones.DDL_CONFIGURACION,
-        migraciones.DDL_OPERACION,
+        migraciones.DDL_OPERACION, migraciones.DDL_NOMINA,
     ):
         for linea in ddl.splitlines():
             if linea.startswith("CREATE "):
@@ -119,6 +125,7 @@ async def test_aplicar_migraciones_toma_el_lock_antes_del_ddl():
     assert conn.execute_calls[7][0] == migraciones.DDL_BANCOS
     assert conn.execute_calls[8][0] == migraciones.DDL_CONFIGURACION
     assert conn.execute_calls[9][0] == migraciones.DDL_OPERACION
+    assert conn.execute_calls[10][0] == migraciones.DDL_NOMINA
 
 
 class _ConexionOcupada(_FakeConnection):

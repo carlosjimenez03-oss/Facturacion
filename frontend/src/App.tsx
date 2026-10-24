@@ -36,6 +36,16 @@ import { LotesPage } from "./pages/inventario/Lotes";
 import { BancosPage } from "./pages/bancos/Bancos";
 import { AsientoForm } from "./pages/contabilidad/AsientoForm";
 import { ContabilidadPage } from "./pages/contabilidad/Contabilidad";
+import { BandejaNominaPage } from "./pages/nomina/Bandeja";
+import { ConfiguracionNominaPage } from "./pages/nomina/Configuracion";
+import { EmpleadosPage } from "./pages/nomina/Empleados";
+import { NominaInicio } from "./pages/nomina/Inicio";
+import { PagosNominaPage } from "./pages/nomina/Pagos";
+import { PeriodoDetalle } from "./pages/nomina/PeriodoDetalle";
+import { PeriodosPage } from "./pages/nomina/Periodos";
+import { RecibosPage } from "./pages/nomina/Recibos";
+import { ReportesNominaPage } from "./pages/nomina/Reportes";
+import { SuscripcionesNominaPage } from "./pages/nomina/Suscripciones";
 import { Inicio } from "./pages/Inicio";
 import { Proximamente } from "./pages/Proximamente";
 import { ReportesPage } from "./pages/reportes/Reportes";
@@ -137,6 +147,16 @@ export default function App() {
         <Route path="/configuracion/:seccion" element={<ConfiguracionPage />} />
         <Route path="/estado-soluciones" element={<EstadoSolucionesPage />} />
         <Route path="/cuenta/:seccion" element={<CuentaPage />} />
+        <Route path="/nomina" element={<NominaInicio />} />
+        <Route path="/nomina/bandeja" element={<BandejaNominaPage />} />
+        <Route path="/nomina/empleados" element={<EmpleadosPage />} />
+        <Route path="/nomina/periodos" element={<PeriodosPage />} />
+        <Route path="/nomina/periodos/:id" element={<PeriodoDetalle />} />
+        <Route path="/nomina/periodos/:id/recibos" element={<RecibosPage />} />
+        <Route path="/nomina/reportes" element={<ReportesNominaPage />} />
+        <Route path="/nomina/pagos" element={<PagosNominaPage />} />
+        <Route path="/nomina/suscripciones" element={<SuscripcionesNominaPage />} />
+        <Route path="/nomina/configuracion" element={<ConfiguracionNominaPage />} />
 
         <Route path="/modulo/:slug" element={<Proximamente />} />
         <Route path="*" element={<Proximamente />} />

@@ -4,8 +4,9 @@ módulo de impuestos (formatos 607/608, pre-cálculos IT-1/IR-17/IR-2 y
 declaraciones), con sus rutas en `impuestos.py`; y Compras (bandeja de
 entrada de e-CF recibidos, cuentas por pagar, pagos a proveedores y
 retenciones), con sus rutas en `compras.py`; Bancos (cuentas, movimientos,
-transferencias y conciliación) en `bancos.py` y Contabilidad (catálogo,
-asientos, reportes y activos fijos) en `contabilidad.py`.
+transferencias y conciliación) en `bancos.py`; Contabilidad (catálogo,
+asientos, reportes y activos fijos) en `contabilidad.py`; y Kontara Nómina
+(empleados, períodos de nómina, TSS e ISR de asalariados) en `nomina.py`.
 
 Vive en sus propios esquemas `ventas`, `impuestos`, `compras`, `bancos` y
 `contabilidad` (más `recepcion.ecf_recibidos`), que este servicio crea
@@ -30,7 +31,19 @@ from fastapi.middleware.cors import CORSMiddleware
 from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
 from libs.ecf_common.db import cerrar_pool, crear_pool
 
-from . import bancos, compras, configuracion, contabilidad, impuestos, plataforma, reportes, repository, sincronizacion, tareas
+from . import (
+    bancos,
+    compras,
+    configuracion,
+    contabilidad,
+    impuestos,
+    nomina,
+    plataforma,
+    reportes,
+    repository,
+    sincronizacion,
+    tareas,
+)
 from .config import ErpApiSettings, get_settings
 from .migraciones import aplicar_migraciones
 from .repository import (
@@ -133,6 +146,7 @@ app.include_router(sincronizacion.router)
 app.include_router(reportes.router)
 app.include_router(configuracion.router)
 app.include_router(plataforma.router)
+app.include_router(nomina.router)
 
 
 def _pool():
