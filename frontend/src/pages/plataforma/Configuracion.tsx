@@ -41,7 +41,8 @@ const VACIA: EmpresaPayload = {
 
 /** /configuracion[/:seccion]: secciones del prototipo Configuracion.dc.html. */
 export function ConfiguracionPage() {
-  const { seccion = "empresa" } = useParams();
+  const { seccion: elegida } = useParams();
+  const seccion = elegida ?? "empresa";
   const navigate = useNavigate();
   const [aviso, mostrarAviso] = useAviso();
   const [empresa, setEmpresa] = useState<Empresa | null>(null);
@@ -83,9 +84,10 @@ export function ConfiguracionPage() {
       .catch(() => undefined);
   }, []);
 
+  // Sin sección en la ruta (/configuracion) la página abre arriba, con su título.
   useEffect(() => {
-    refs.current[seccion]?.scrollIntoView?.({ behavior: "smooth", block: "start" });
-  }, [seccion]);
+    if (elegida) refs.current[elegida]?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  }, [elegida]);
 
   async function guardar() {
     setError(null);
