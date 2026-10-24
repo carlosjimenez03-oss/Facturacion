@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { cargarEmpresa, nombreEmpresa, useEmpresa } from "../lib/configuracionApi";
 import { empresaEnUso } from "../lib/empresaActual";
-import { cambiarEmpresa, cargarMisEmpresas, useMisEmpresas } from "../lib/empresasApi";
+import { cambiarEmpresa, cargarMisEmpresas, empresasApi, useMisEmpresas } from "../lib/empresasApi";
 import { ERP_API_URL } from "../lib/erpApi";
 import type { ResumenSincronizacion, ResumenTareas } from "../lib/operacionApi";
 import { EMPRESA_NOMBRE, EMPRESA_RNC, formatoRnc, MARCA, nombreAmbiente } from "../lib/marca";
@@ -91,6 +91,7 @@ export function Topbar() {
   const sesion = useSesion();
   const empresa = useEmpresa();
   const misEmpresas = useMisEmpresas();
+  const invitaciones = misEmpresas?.invitaciones ?? [];
   const empresaId = misEmpresas?.actual ?? empresaEnUso();
   const [cambiando, setCambiando] = useState(false);
   const { facturas, enLinea, error } = useFacturas();
@@ -165,6 +166,18 @@ export function Topbar() {
       return;
     setCambiando(true);
     await cambiarEmpresa(id);
+  }
+
+  /** Acepta (la empresa aparece en la lista) o rechaza una invitación. */
+  async function responder(id: number, aceptar: boolean) {
+    setCambiando(true);
+    try {
+      await empresasApi.responderInvitacion(id, aceptar);
+    } catch {
+      // la lista se vuelve a pedir igual (p. ej. ya la habían retirado)
+    }
+    await cargarMisEmpresas(true);
+    setCambiando(false);
   }
 
   async function salir() {
@@ -443,7 +456,29 @@ export function Topbar() {
                   );
                 })}
               </div>
-              {(misEmpresas?.empresas.length ?? 0) <= 1 && (
+              {invitaciones.length > 0 && (
+                <div className="pop-sec co-invitaciones" aria-label="Invitaciones pendientes">
+                  {invitaciones.map((inv) => (
+                    <div key={inv.id} className="co-inv">
+                      <span className="pop-txt">
+                        <b>{inv.nombre_comercial || inv.razon_social}</b>
+                        <span className="hint">
+                          Invitación{inv.agregado_por ? ` de ${inv.agregado_por}` : ""} · {inv.rol === "admin" ? "Administrador" : "Usuario"}
+                        </span>
+                      </span>
+                      <span style={{ display: "inline-flex", gap: 4 }}>
+                        <button type="button" className="btn btn-p btn-sm" disabled={cambiando} onClick={() => void responder(inv.id, true)}>
+                          Aceptar
+                        </button>
+                        <button type="button" className="btn btn-g btn-sm" disabled={cambiando} onClick={() => void responder(inv.id, false)}>
+                          Rechazar
+                        </button>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {(misEmpresas?.empresas.length ?? 0) <= 1 && invitaciones.length === 0 && (
                 <div className="co-empty">
                   <span className="co-empty-ic">
                     <IconEmpresa />
@@ -459,7 +494,7 @@ export function Topbar() {
                 <div className="co-motivo">
                   {!SELECCION_DISPONIBLE
                     ? "Para trabajar con varias empresas active el inicio de sesión (ver docs/AUTH.md): sin él, todas las pantallas usan la empresa predeterminada."
-                    : (misEmpresas.motivo ?? "Solo un administrador de la empresa puede agregar otras.")}
+                    : (misEmpresas.motivo ?? "Solo un administrador de la instalación puede agregar empresas.")}
                 </div>
               )}
               <div style={{ padding: "12px 16px 16px" }}>

@@ -40,10 +40,24 @@ lo pone Postgres.
   anterior) o con `EMISOR_RNC` / `EMISOR_RAZON_SOCIAL`; las nuevas empiezan
   en 2.
 - `configuracion.empresa_usuarios`: (empresa, usuario de Supabase Auth,
-  correo, rol `admin` | `usuario`). Un usuario **sin ninguna fila** (todos
-  los de antes) es miembro implícito de la empresa 1 con el rol de su marca
-  global (`kontara_admin` / `KONTARA_ADMIN_EMAILS`); al darle su primera
-  membresía en otra empresa se escribe la implícita, para que no pierda la 1.
+  correo, rol `admin` | `usuario`, `estado` `activo` | `inactivo` |
+  `invitado` | `retirado`). Las filas no se borran (quitar a alguien lo deja
+  `retirado`). Solo entra quien tiene una fila `activo` en una empresa
+  `activa`.
+- **Usuarios de antes de la multiempresa** (`configuracion.multiempresa_legado`,
+  una fila): al migrar, si la base ve `auth.users` (Supabase), cada usuario
+  con acceso a Kontara (`app_metadata.kontara` o en `KONTARA_ADMIN_EMAILS`)
+  recibe su fila en la empresa 1, admin si tiene `kontara_admin` o está en
+  `KONTARA_ADMIN_EMAILS`; si así no queda **ningún** admin, todos quedan
+  admin (como antes: sin administradores configurados, todos lo eran). Si la
+  base no ve `auth.users`, la fila se escribe en el **primer inicio de
+  sesión** de cada uno (`/auth/verificar`) y `previos_admin` recuerda si la
+  instalación no tenía administradores configurados (entonces quedan
+  admin). Hasta entonces, un usuario **sin ninguna fila** es miembro de la
+  empresa 1 con ese mismo rol. Esa regla nunca alcanza a un usuario nuevo:
+  todo usuario que crea o agrega un administrador recibe su fila **antes**
+  de la marca de acceso, y la acción de otra empresa nunca escribe filas en
+  la 1.
 - `configuracion.usuario_empresa_actual`: la última empresa que eligió cada
   usuario (la que se abre si el navegador no tiene otra guardada).
 - Todas las demás tablas de negocio (61) reciben `empresa_id integer NOT NULL`:
@@ -51,7 +65,11 @@ lo pone Postgres.
   reescribir la tabla) y luego `DEFAULT configuracion.empresa_actual()`.
   Política `empresa_aislada` con `FORCE ROW LEVEL SECURITY` (vale también
   para el dueño de las tablas):
-  `USING / WITH CHECK (empresa_id = configuracion.empresa_actual() OR configuracion.todas_las_empresas())`.
+  `USING / WITH CHECK (empresa_id = configuracion.empresa_actual())` — sin
+  `OR`: Postgres la usa como condición de los índices `(empresa_id, ...)`.
+  Las lecturas de todas las empresas (Planes, tareas de fondo, búsquedas
+  sin empresa) van con otro rol, `kontara_todas`, y su propia política
+  `empresa_todas FOR SELECT TO kontara_todas USING (true)`: solo lee.
 - Siguen globales (sin `empresa_id`): `nomina.parametros` (tasas de ley del
   país), `soluciones.suscripcion` y `soluciones.solicitudes_plan` (el plan es
   de la instalación: Planes cuenta los e-CF de todas las empresas y los
@@ -81,14 +99,18 @@ Postgres compartidas: en cada empresa son únicos pero no consecutivos.
 Automática, al arrancar la versión nueva (no hay pasos manuales):
 
 1. Cada servicio con migraciones (facturas-api, inventario-api, erp-api)
-   corre al final de las suyas el DDL común
-   (`libs/ecf_common/multiempresa_ddl.py`) con el advisory lock compartido
-   7 000 021: crea el registro, la empresa 1 con sus datos de siempre, las
-   funciones `configuracion.empresa_actual()` / `todas_las_empresas()`, el
-   rol `kontara_app` y las ayudas `kontara_aislar` / `kontara_conceder`.
+   toma **primero** el advisory lock compartido 7 000 021 (antes del suyo y
+   de cualquier lock de tabla: todos en el mismo orden, sin deadlocks), con
+   `lock_timeout` de 5 s y reintentos con espera creciente si una tabla está
+   ocupada. Al final de sus migraciones corre el DDL común
+   (`libs/ecf_common/multiempresa_ddl.py`): crea el registro, la empresa 1
+   con sus datos de siempre, los usuarios de antes, la función
+   `configuracion.empresa_actual()`, los roles `kontara_app` y
+   `kontara_todas` y las ayudas `kontara_aislar` / `kontara_conceder`.
 2. Luego aísla sus tablas (`SELECT configuracion.kontara_aislar(...)`):
    columna, índices únicos, RLS y política. Cada paso consulta el catálogo
-   antes del `ALTER`: en una base ya migrada no toma locks de tabla.
+   antes del `ALTER`: en una base ya migrada no toma locks de tabla (el DDL
+   de facturas-api también: lo comprueba una prueba con una venta en curso).
    inventario-api lo anota como versión 21 de `inventario.schema_version`.
 3. `db/init/021_multiempresa.sql` repite exactamente el mismo DDL para el
    Postgres local (lo verifican las pruebas de migraciones).
@@ -116,16 +138,40 @@ volver, restáurelo.
   `todas_las_empresas()` para búsquedas sin empresa, `modo_sistema()` para
   migraciones). Las tareas de `asyncio` copian el contexto.
 - El pool de asyncpg (`libs/ecf_common/db.crear_pool`) tiene un `setup` que,
-  en cada `acquire`, fija `kontara.empresa_id` y — si el usuario de la base
-  es superusuario o tiene `BYPASSRLS`, que saltan RLS — hace
-  `SET ROLE kontara_app` (rol `NOLOGIN NOBYPASSRLS` con permisos sobre las
-  tablas, que la migración crea y da al usuario de la base). Si la conexión
-  no puede quedar aislada (sin el rol, sin permiso para crearlo, o el pooler
-  de Supabase en **modo transacción, puerto 6543**, que no conserva
-  variables de sesión) **solo se entregan conexiones para la empresa 1**:
-  una instalación de una empresa sigue funcionando y una segunda falla
-  cerrada (`AislamientoNoDisponibleError`, y "Agregar empresa" lo explica).
-  Use el pooler en modo sesión (5432) o la conexión directa.
+  en cada `acquire` y en una sola consulta, fija `kontara.empresa_id` y el
+  rol: si el usuario de la base es superusuario o tiene `BYPASSRLS` (que
+  saltan RLS), `SET ROLE kontara_app` (rol `NOLOGIN NOBYPASSRLS` con
+  permisos sobre las tablas); para las lecturas de todas,
+  `SET ROLE kontara_todas` (solo `SELECT`). La migración crea los dos roles
+  y se los da al usuario de la base.
+- **Postgres 16** separa ser miembro de un rol de poder hacer `SET ROLE`: a
+  quien crea un rol con `CREATEROLE` (el usuario de Supabase) solo le queda
+  `ADMIN`. La migración comprueba el privilegio **SET** (`pg_has_role(...,
+  'SET')`; en Postgres 15, la membresía) y, si falta, lo pide con
+  `GRANT kontara_app TO CURRENT_USER WITH INHERIT FALSE, SET TRUE` (en 15,
+  un `GRANT` simple). El `setup` también comprueba SET, no la membresía.
+- **Modo "solo la empresa 1"**: si la conexión no puede quedar aislada (sin
+  los roles, sin el privilegio SET, un `SET ROLE` que igual falla — se
+  registra una vez en el log y el pool sigue sin cambiar de rol —, o el
+  pooler de Supabase en **modo transacción, puerto 6543**) solo se entregan
+  conexiones para la empresa 1 y para las lecturas de todas: una instalación
+  de una empresa sigue funcionando completa (arranques, Planes, inventario)
+  y otra empresa falla cerrada con un **503** `sin_aislamiento`
+  (`AislamientoNoDisponibleError`; "Agregar empresa" lo explica). Use el
+  pooler en modo sesión (5432) o la conexión directa.
+- **Puerto 6543**: el pooler reparte las conexiones del servidor entre
+  clientes por transacción, así que una variable de sesión o un `SET ROLE`
+  quedaría puesto para el próximo cliente. Ahí el `setup` **no ejecuta
+  nada** (ni `set_config` ni `SET ROLE`): las políticas ven la empresa 1 y
+  cualquier otra se niega.
+- **El dueño de las tablas sin `BYPASSRLS`** (ni superusuario) queda sujeto a
+  las políticas (`FORCE ROW LEVEL SECURITY`): sus conexiones de empresa
+  quedan aisladas sin cambiar de rol, pero las de sistema (migraciones)
+  solo ven la empresa 1 — suficiente para las migraciones de hoy, que no
+  leen datos de otras empresas.
+- Al arrancar, erp-api, facturas-api e inventario-api escriben en el log en
+  qué modo quedó (`diagnosticar`): aislado, sin aislamiento (ERROR si la base
+  ya tiene más de una empresa), modo transacción, o dueño sujeto a RLS.
 - Tareas de fondo (sincronización de estados DGII, contingencia, reverso de
   inventario, envío automático por correo, Kontara Ventas) dan una vuelta
   por empresa activa.
@@ -147,7 +193,10 @@ volver, restáurelo.
    internas con `X-Kontara-Interno` pasan la empresa explícita
    (`cabeceras_internas` la agrega sola); sin sesión verificada en el
    servicio usa la que puso nginx. Sin cabecera: la última elegida del
-   usuario o la 1.
+   usuario (si sigue siendo miembro activo de una empresa activa), otra de
+   sus empresas activas o la 1. La cookie `kontara_empresa` solo se mira con
+   un usuario verificado en el servicio (que se valida como miembro): sin
+   inicio de sesión se ignora.
    Las membresías y el registro se cachean 30 s en cada servicio: quitar a
    un usuario de una empresa corta su acceso a ella en ese plazo (como el
    cierre de sesión, ver AUTH.md).
@@ -179,12 +228,25 @@ volver, restáurelo.
 
 ## Usuarios
 
-- Configuración → Usuarios muestra los miembros **de la empresa en uso**,
-  invita o crea usuarios en ella (si el correo ya es de un usuario, lo
-  agrega como miembro), cambia su rol y los quita de la empresa. Activar /
-  desactivar (Supabase Auth) solo a miembros.
-- "Agregar empresa" (Mis empresas, barra superior): un administrador de la
-  empresa en uso verifica el RNC (registro local y directorio de emisores
+- Configuración → Usuarios muestra los miembros **de la empresa en uso**
+  (los "sin acceso" de Supabase Auth, solo en la empresa 1), crea o invita
+  usuarios en ella, cambia su rol y los quita de la empresa.
+- **Un correo que ya es de Kontara** (de otra empresa) no se agrega en
+  silencio: queda **invitado** y entra cuando acepta en Mis empresas
+  (Aceptar / Rechazar). Hasta entonces la empresa que invita no lo puede
+  activar ni desactivar, solo retirar la invitación.
+- **Desactivar es por empresa** (`estado = 'inactivo'`): el usuario sigue en
+  sus otras empresas. Solo si no es de ninguna otra se desactiva también en
+  Supabase Auth (cierra todas sus sesiones); activar levanta ese bloqueo en
+  el mismo caso. Un administrador de una empresa nunca bloquea ni
+  desbloquea a alguien que también es de otra.
+- **Administrador de la instalación** (no de una empresa): `kontara_admin` /
+  `KONTARA_ADMIN_EMAILS` o, si la instalación no tenía administradores
+  configurados (`previos_admin`), un administrador de la empresa 1. Solo él
+  agrega empresas y cambia los parámetros de nómina (tasas de la TSS y
+  escala del ISR, de todas las empresas: `PUT/DELETE /nomina/parametros`).
+- "Agregar empresa" (Mis empresas, barra superior): el administrador de la
+  instalación verifica el RNC (registro local y directorio de emisores
   electrónicos de la DGII por `consulta_directorio`, best-effort), completa
   los datos fiscales y queda como administrador de la nueva.
 
@@ -220,8 +282,17 @@ Ninguna nueva obligatoria. Opcionales:
   GET de erp-api, facturas-api, inventario-api y formato-606 pedidos como la
   empresa 2 no devuelven nada de la 1; claves naturales por empresa; WITH
   CHECK; portal público; membresías (403) en `/auth/verificar` y con
-  `REQUIRE_AUTH`; sin aislamiento la empresa 2 falla cerrada; tareas de
-  fondo por empresa.
+  `REQUIRE_AUTH`; sin aislamiento la empresa 2 falla cerrada y la 1 sigue
+  (arranques, Planes); rol sin SET (Postgres 16); índices `(empresa_id, ...)`
+  con `EXPLAIN`; cada GET de la empresa 2 devuelve exactamente lo mismo
+  antes y después de cargar los datos de la 1 (y de que la 1 llene sus
+  cachés); membresías por empresa, invitaciones, desactivar por empresa,
+  administrador de la instalación, usuarios de antes (`auth.users`);
+  migraciones de un arranque sin esperar por tablas en uso; tareas de fondo
+  por empresa. Corre también con un usuario como el de Supabase
+  (`CREATEROLE BYPASSRLS`, no superusuario) en Postgres 16.
 - `libs/ecf_common/tests/test_empresa.py`: contexto, cabeceras internas,
-  certificado y caché de ambiente / token por empresa.
+  certificado y caché de ambiente / token por empresa; `SET ROLE` negado
+  (modo empresa 1), puerto 6543 sin nada en la conexión, cookie ignorada sin
+  sesión.
 - `frontend/pruebas/posOffline.test.ts`: la cola del POS no cruza empresas.

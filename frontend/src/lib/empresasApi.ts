@@ -17,10 +17,22 @@ export interface EmpresaResumen {
   predeterminada: boolean;
 }
 
+/** Invitación pendiente a otra empresa (la acepta o rechaza el usuario). */
+export interface Invitacion {
+  id: number;
+  rnc: string | null;
+  razon_social: string;
+  nombre_comercial: string | null;
+  rol: RolEmpresa;
+  agregado_por: string | null;
+}
+
 export interface MisEmpresas {
   /** La que el servidor usó para este request (la de la pestaña o, sin elegir, la preferida). */
   actual: number;
   empresas: EmpresaResumen[];
+  invitaciones: Invitacion[];
+  /** Administrador de la instalación (no de una empresa) y la base aísla las empresas. */
   puede_agregar: boolean;
   /** La base puede aislar los datos de cada empresa (si no, solo hay una). */
   aislamiento: boolean;
@@ -68,6 +80,8 @@ export const empresasApi = {
   agregar: (datos: NuevaEmpresa) => request<EmpresaResumen>("/empresas", { method: "POST", body: JSON.stringify(datos) }),
   elegir: (empresaId: number) =>
     request<{ empresa_id: number }>("/empresas/actual", { method: "PUT", body: JSON.stringify({ empresa_id: empresaId }) }),
+  responderInvitacion: (empresaId: number, aceptar: boolean) =>
+    request<MisEmpresas>(`/empresas/${empresaId}/invitacion`, { method: "POST", body: JSON.stringify({ aceptar }) }),
   consultarRnc: (rnc: string) => request<ConsultaRnc>(`/empresas/consulta-rnc/${encodeURIComponent(rnc.replace(/\D/g, ""))}`),
 };
 

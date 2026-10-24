@@ -117,6 +117,8 @@ export interface Usuario {
   admin: boolean;
   /** Rol en la empresa en uso (multiempresa). */
   rol_empresa: "admin" | "usuario" | null;
+  /** Estado EN ESTA EMPRESA: desactivar es por empresa; "invitado" = todavía no aceptó. */
+  estado_empresa?: "activo" | "inactivo" | "invitado" | "retirado" | null;
 }
 
 export interface Usuarios {

@@ -386,12 +386,19 @@ Kontara** (`app_metadata.kontara`); los demás del mismo Supabase Auth aparecen
 aparte como *Sin acceso a Kontara*, con **Dar acceso**. Los que se crean o
 invitan desde aquí salen con la marca. Nadie puede desactivarse a sí mismo.
 Con varias empresas la lista es la de los **miembros de la empresa en uso**,
-cada uno con su rol (administrador o usuario) en ella; crear o invitar lo
-agrega a esa empresa (si el correo ya existe, solo lo agrega) y **Quitar** lo
-saca de ella. Administrar usuarios, agregar empresas y cambiar el ambiente
-DGII es de los administradores de la empresa (los usuarios de antes, sin
-membresías, conservan su rol global en la empresa 1). Desactivar corta el acceso en ~1 minuto (ver `auth.sessions`
-arriba). Sin la llave, la pantalla explica cómo hacerlo en Studio.
+cada uno con su rol (administrador o usuario) y su estado en ella; crear o
+invitar lo agrega a esa empresa (un correo que ya es de Kontara, de otra
+empresa, queda **invitado** hasta que acepta en Mis empresas) y **Quitar** lo
+saca de ella. **Desactivar es por empresa**: solo si el usuario no es de
+ninguna otra se desactiva también en Supabase Auth. Administrar usuarios y
+cambiar el ambiente DGII es de los administradores de la empresa; agregar
+empresas y cambiar los parámetros de nómina, del administrador de la
+instalación (`kontara_admin` / `KONTARA_ADMIN_EMAILS`). Los usuarios de antes
+reciben su membresía en la empresa 1 al migrar o en su primer inicio de
+sesión; si la instalación no tenía administradores configurados, quedan
+todos administradores de la empresa 1, como antes (ver
+[`MULTIEMPRESA.md`](MULTIEMPRESA.md#tablas)). Desactivar corta el acceso en
+~1 minuto (ver `auth.sessions` arriba). Sin la llave, la pantalla explica cómo hacerlo en Studio.
 
 ## Revertir (rollback)
 
