@@ -929,6 +929,8 @@ class ResumenConciliacion(BaseModel):
     origen_saldo_banco: Literal["extracto", "ultima_linea", "calculado"]
     diferencia: Monto
     puede_cerrar: bool
+    # P. ej. no se pudo saber el orden de las líneas del extracto para tomar su saldo.
+    advertencias: list[str] = []
 
 
 class Conciliacion(BaseModel):
@@ -987,7 +989,7 @@ Naturaleza = Literal["deudora", "acreedora"]
 EstadoAsiento = Literal["borrador", "contabilizado", "anulado"]
 OrigenAsiento = Literal[
     "manual", "venta", "nota_credito", "nota_debito", "cobro", "compra", "pago", "movimiento", "transferencia",
-    "depreciacion",
+    "proporcionalidad", "depreciacion",
 ]
 
 
@@ -1304,6 +1306,8 @@ class ActivoFijoActualizar(_Entrada):
 class BajaActivoPayload(BaseModel):
     # null = revertir la baja.
     fecha: date | None
+    # Lo cobrado si se vendió (rebaja la cuenta fiscal de su categoría en el IR-2).
+    valor_venta: Decimal | None = None
 
 
 class ActivoFijo(BaseModel):
@@ -1334,6 +1338,7 @@ class ActivoFijo(BaseModel):
     numero_serie: str | None = None
     ubicacion: str | None = None
     fecha_baja: date | None = None
+    valor_venta: Monto | None = None
     notas: str | None = None
     creado_en: datetime
     actualizado_en: datetime
@@ -1401,7 +1406,28 @@ class DepreciacionFiscalActivo(BaseModel):
     depreciacion: Monto
 
 
+class CuentaCategoriaFiscal(BaseModel):
+    """Cuenta de la categoría 2 o 3 en el año (Art. 287 lit. e)."""
+
+    categoria: int
+    nombre: str
+    tasa_dgii: Monto
+    # Valor fiscal al cierre del año anterior.
+    valor_inicio: Monto
+    adiciones: Monto
+    # Valor de venta de los activos dados de baja en el año.
+    retiros: Monto
+    base: Monto
+    depreciacion: Monto
+    valor_final: Monto
+    # Ventas que superan la cuenta: renta gravable del año.
+    ingreso_gravable: Monto
+
+
 class DepreciacionFiscal(BaseModel):
     anio: str
     total: Monto
+    # Por activo (en las categorías 2 y 3, su parte de la cuenta de la categoría).
     activos: list[DepreciacionFiscalActivo]
+    categorias: list[CuentaCategoriaFiscal] = []
+    ingreso_gravable: Monto = Decimal("0")

@@ -17,7 +17,7 @@ from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
-from .formatos import a_decimal, desglose_por_tasa
+from .formatos import _formas_pago, a_decimal, desglose_por_tasa
 
 _CERO = Decimal("0")
 _CENTAVO = Decimal("0.01")
@@ -147,6 +147,9 @@ CONCEPTOS: dict[str, tuple[str, str, str]] = {
     # Compras y pagos
     "cxp_proveedores": ("compras", "Cuentas por pagar proveedores", "2.1.01.01"),
     "itbis_adelantado": ("compras", "ITBIS adelantado (pagado por compensar)", "1.1.04.01"),
+    "itbis_no_admitido": (
+        "compras", "ITBIS adelantado no admitido por proporcionalidad (gasto; sin cuenta = no se asienta)", "6.1.06",
+    ),
     "itbis_retenido_por_pagar": ("compras", "ITBIS retenido a proveedores por pagar", "2.1.03.01"),
     "isr_retenido_por_pagar": ("compras", "ISR retenido a proveedores por pagar", "2.1.03.02"),
     "gasto_606_01": ("compras", "606 · 01 Gastos de personal", "6.1.01"),
@@ -172,6 +175,7 @@ CONCEPTOS: dict[str, tuple[str, str, str]] = {
 
 ORIGENES_AUTOMATICOS = (
     "venta", "nota_credito", "nota_debito", "cobro", "compra", "pago", "movimiento", "transferencia",
+    "proporcionalidad",
 )
 ORIGENES = ("manual", *ORIGENES_AUTOMATICOS, "depreciacion")
 
@@ -314,6 +318,11 @@ def asiento_venta(
         Crédito ITBIS por pagar ............................... ITBIS 18 % + 16 %
         Crédito Otros impuestos / Redondeo .................... la diferencia con MontoTotal
 
+    Al contado, el débito se reparte según la TablaFormasPago del e-CF:
+    cheque/transferencia/depósito (2) y tarjeta (3) a Bancos (cuenta por
+    defecto `banco`: el dinero entra al banco, no a la caja), el resto
+    (efectivo y las demás formas, o sin tabla) a Caja.
+
     El desglose por tasa es el mismo del IT-1 y del 607
     (`formatos.desglose_por_tasa`), así que el ITBIS por pagar de los
     asientos coincide con el ITBIS facturado del IT-1. Nota de crédito (E34):
@@ -347,8 +356,15 @@ def asiento_venta(
         referencia=encf,
     )
     signo = Decimal(-1) if es_nota_credito else Decimal(1)
-    contrapartida = "cxc_clientes" if a_credito else "caja"
-    asiento.debe(contrapartida, signo * total)
+    if a_credito:
+        asiento.debe("cxc_clientes", signo * total)
+    elif es_nota_credito:
+        asiento.debe("caja", signo * total)
+    else:
+        formas = _formas_pago(datos, total)
+        banco = min(redondear(formas["cheque_transferencia"] + formas["tarjeta"]), total)
+        asiento.debe("banco", banco, "Cobrado por cheque, transferencia o tarjeta" if banco else None)
+        asiento.debe("caja", total - banco)
     if es_nota_credito:
         asiento.debe("devoluciones_ventas", gravadas + exentas + exportaciones)
     else:
@@ -396,6 +412,8 @@ def asiento_compra(
     itbis_costo: Decimal,
     es_nota_credito: bool,
     pagada_al_contado: bool = False,
+    itbis_retenido_606: Decimal = _CERO,
+    isr_retenido_606: Decimal = _CERO,
 ) -> AsientoPropuesto:
     """Factura de compra (renglón del 606):
 
@@ -406,6 +424,12 @@ def asiento_compra(
     El ITBIS llevado al costo (campo 15 del 606), el selectivo, otros
     impuestos y la propina son parte del gasto. Una nota de crédito del
     proveedor (B04/E34) va al revés.
+
+    `itbis_retenido_606` / `isr_retenido_606`: retenciones que ya están en
+    el renglón del 606 (clasificadas antes de pagar, p. ej. un E41) de una
+    factura que todavía no tiene pagos: Débito CxP · Crédito ITBIS / ISR
+    retenido por pagar (la CxP queda como la de Compras, que las descuenta).
+    Con pagos, las lleva el último pago (`asiento_pago`).
     """
     asiento = AsientoPropuesto(
         origen="compra", origen_id=registro_id, fecha=fecha,
@@ -420,7 +444,18 @@ def asiento_compra(
     asiento.debe(gasto, signo * (total - adelantado))
     asiento.debe("itbis_adelantado", signo * adelantado)
     asiento.haber("caja_chica" if pagada_al_contado else "cxp_proveedores", signo * total)
+    if not es_nota_credito and not pagada_al_contado:
+        _retenciones_606(asiento, itbis_retenido_606, isr_retenido_606)
     return asiento
+
+
+def _retenciones_606(asiento: AsientoPropuesto, itbis: Decimal, isr: Decimal) -> None:
+    """Débito CxP · Crédito retenciones por pagar, por las retenciones del
+    renglón del 606 que no lleva ningún pago."""
+    descripcion = "Retención registrada en el 606"
+    asiento.debe("cxp_proveedores", itbis + isr, descripcion if itbis + isr else None)
+    asiento.haber("itbis_retenido_por_pagar", itbis, descripcion)
+    asiento.haber("isr_retenido_por_pagar", isr, descripcion)
 
 
 def asiento_pago(
@@ -433,9 +468,16 @@ def asiento_pago(
     retencion_isr: Decimal,
     retencion_itbis: Decimal,
     cuenta_banco: str | uuid.UUID,
+    itbis_retenido_606: Decimal = _CERO,
+    isr_retenido_606: Decimal = _CERO,
 ) -> AsientoPropuesto:
     """Débito CxP (lo pagado + las retenciones) · Crédito Banco/Caja (lo
-    pagado) · Crédito ITBIS / ISR retenido por pagar."""
+    pagado) · Crédito ITBIS / ISR retenido por pagar.
+
+    `itbis_retenido_606` / `isr_retenido_606`: si ningún pago de la factura
+    lleva retenciones pero el renglón del 606 sí las tiene (clasificadas
+    antes de pagar, p. ej. un E41), las lleva el último pago: su fecha es la
+    fecha de pago del 606, la que decide el mes del IT-1 / IR-17."""
     asiento = AsientoPropuesto(
         origen="pago", origen_id=pago_id, fecha=fecha,
         concepto=f"Pago a proveedor {ncf or ''} · {proveedor}".replace("  ", " "), referencia=ncf,
@@ -444,6 +486,23 @@ def asiento_pago(
     asiento.haber(cuenta_banco, monto)
     asiento.haber("itbis_retenido_por_pagar", retencion_itbis)
     asiento.haber("isr_retenido_por_pagar", retencion_isr)
+    _retenciones_606(asiento, itbis_retenido_606, isr_retenido_606)
+    return asiento
+
+
+def asiento_proporcionalidad(periodo: str, no_admitido: Decimal, porcentaje: Decimal, nombre_mes: str) -> AsientoPropuesto:
+    """Ajuste mensual por proporcionalidad del ITBIS adelantado (IT-1,
+    casilla 54 del Anexo A): el ITBIS no admitido deja de ser un crédito
+    fiscal y pasa a gasto. Débito `itbis_no_admitido` · Crédito
+    `itbis_adelantado`; así el saldo de ITBIS adelantado del mes = el
+    "adelantado admitido" del IT-1."""
+    asiento = AsientoPropuesto(
+        origen="proporcionalidad", origen_id=periodo, fecha=ultimo_dia(periodo),
+        concepto=f"ITBIS adelantado no admitido por proporcionalidad ({porcentaje}% admitido) · {nombre_mes}",
+        referencia=f"PROP-{periodo}",
+    )
+    asiento.debe("itbis_no_admitido", no_admitido)
+    asiento.haber("itbis_adelantado", no_admitido)
     return asiento
 
 
@@ -549,6 +608,10 @@ class Activo:
     depreciar_desde: str               # AAAAMM: primer mes que se deprecia
     depreciacion_acumulada_inicial: Decimal = _CERO
     baja_periodo: str | None = None    # AAAAMM de la baja: ese mes ya no se deprecia
+    # Para la depreciación fiscal por cuenta de categoría (`depreciacion_fiscal_del_anio`).
+    fecha_adquisicion: date | None = None
+    fecha_baja: date | None = None
+    valor_venta: Decimal | None = None  # lo que se cobró al venderlo (None/0 = retiro sin venta)
 
 
 def _cuotas_linea_recta(activo: Activo, hasta: str) -> dict[str, Decimal]:
@@ -576,7 +639,9 @@ def _cuotas_dgii(activo: Activo, hasta: str) -> dict[str, Decimal]:
     (5 % anual, en línea recta); categorías 2 y 3 por saldo decreciente: la
     tasa se aplica al valor fiscal pendiente al inicio de cada año (o al
     empezar a depreciarse). Por mes = cuota anual / 12; el primer año solo
-    cuentan los meses en uso."""
+    cuentan los meses en uso. Es el método 'dgii' de los asientos (libros),
+    activo por activo; la depreciación fiscal del IR-2 de las categorías 2
+    y 3 va por cuenta de categoría (`depreciacion_fiscal_del_anio`)."""
     tasa = TASAS_CATEGORIA[activo.categoria]
     pendiente = redondear(activo.costo - activo.depreciacion_acumulada_inicial)
     cuotas: dict[str, Decimal] = {}
@@ -611,6 +676,120 @@ def cuotas_depreciacion(activo: Activo, hasta: str, *, metodo: str | None = None
 def depreciacion_del_anio(activo: Activo, anio: int, *, metodo: str | None = None) -> Decimal:
     cuotas = cuotas_depreciacion(activo, f"{anio:04d}12", metodo=metodo)
     return sum((monto for periodo, monto in cuotas.items() if periodo[:4] == f"{anio:04d}"), _CERO)
+
+
+def anio_de_entrada(activo: Activo) -> int:
+    """Año fiscal en que el activo entra a la cuenta de su categoría: el de
+    la adquisición (una compra de diciembre es adición de ese año aunque se
+    deprecie en libros desde enero) o, si su depreciación empieza después
+    del mes siguiente a la adquisición -- un activo de antes de usar el
+    sistema, con su depreciación acumulada inicial --, el de
+    `depreciar_desde`."""
+    if activo.fecha_adquisicion is None:
+        return int(activo.depreciar_desde[:4])
+    if activo.depreciar_desde <= siguiente_periodo(periodo_de(activo.fecha_adquisicion)):
+        return activo.fecha_adquisicion.year
+    return int(activo.depreciar_desde[:4])
+
+
+@dataclass
+class CuentaCategoria:
+    """Cuenta de una categoría (2 o 3) en un año fiscal (Art. 287 lit. e)."""
+
+    categoria: int
+    valor_inicio: Decimal = _CERO       # valor fiscal al cierre del año anterior
+    adiciones: Decimal = _CERO          # costo (− depreciación acumulada inicial) de los que entran
+    retiros: Decimal = _CERO            # valor de venta de los que salen
+    base: Decimal = _CERO               # inicio + adiciones − retiros (mínimo 0)
+    depreciacion: Decimal = _CERO
+    valor_final: Decimal = _CERO
+    ingreso_gravable: Decimal = _CERO   # retiros que superan la cuenta: renta gravable del año
+
+
+@dataclass
+class DepreciacionFiscalAnual:
+    anio: int
+    total: Decimal = _CERO
+    ingreso_gravable: Decimal = _CERO
+    categorias: list[CuentaCategoria] = field(default_factory=list)
+    por_activo: dict[int, Decimal] = field(default_factory=dict)  # índice en la lista -> parte del año
+
+
+def depreciacion_fiscal_del_anio(activos: list[Activo], anio: int) -> DepreciacionFiscalAnual:
+    """Depreciación fiscal del año (Art. 287 literal e del Código Tributario
+    y Reglamento 139-98), sin estado: se recalcula desde el primer año de
+    los activos.
+
+    - Categoría 1: por activo, en línea recta (5 % del costo al año, por los
+      meses en uso desde `depreciar_desde` hasta la baja).
+    - Categorías 2 y 3: UNA cuenta por categoría. Base del año = valor
+      fiscal al cierre del año anterior + adiciones del año (costo −
+      depreciación acumulada inicial de los que entran, ver
+      `anio_de_entrada`) − el valor de venta de los dados de baja en el año
+      (un retiro sin venta no rebaja la cuenta: su valor se sigue
+      depreciando). Depreciación = base × tasa (25 % / 15 %); el resto pasa
+      al año siguiente. Si las ventas superan la cuenta, la base queda en 0
+      y el exceso es `ingreso_gravable` del año.
+    - `por_activo`: la parte de cada activo (reparto de la cuenta de su
+      categoría en proporción a su valor fiscal; informativa, suma el total).
+
+    Año fiscal = año calendario (como el IR-2 de este sistema). No se aplica
+    ninguna regla de "medio año" para las adiciones (no verificada en el
+    texto oficial) ni la deducción del saldo de una categoría que se queda
+    sin activos."""
+    resultado = DepreciacionFiscalAnual(anio=anio)
+    for indice, activo in enumerate(activos):
+        if activo.categoria == 1:
+            monto = depreciacion_del_anio(activo, anio, metodo="dgii")
+            if monto:
+                resultado.por_activo[indice] = monto
+                resultado.total += monto
+    for categoria in (2, 3):
+        tasa = TASAS_CATEGORIA[categoria]
+        miembros = [(i, a) for i, a in enumerate(activos) if a.categoria == categoria]
+        if not miembros:
+            continue
+        primero = min(anio_de_entrada(a) for _, a in miembros)
+        valor_cuenta = _CERO
+        valores: dict[int, Decimal] = {}  # valor fiscal de cada activo dentro de la cuenta (para el reparto)
+        cuenta = CuentaCategoria(categoria=categoria)
+        for y in range(primero, anio + 1):
+            cuenta = CuentaCategoria(categoria=categoria, valor_inicio=valor_cuenta)
+            for i, a in miembros:
+                if anio_de_entrada(a) == y:
+                    valor = redondear(a.costo - a.depreciacion_acumulada_inicial)
+                    cuenta.adiciones += valor
+                    valores[i] = valor
+                if a.fecha_baja is not None and a.fecha_baja.year == y and i in valores:
+                    cuenta.retiros += redondear(a.valor_venta or _CERO)
+                    del valores[i]
+            base = cuenta.valor_inicio + cuenta.adiciones - cuenta.retiros
+            if base < 0:
+                cuenta.ingreso_gravable, base = -base, _CERO
+            cuenta.base = base
+            cuenta.depreciacion = redondear(base * tasa)
+            cuenta.valor_final = valor_cuenta = base - cuenta.depreciacion
+            reparto = _repartir(cuenta.depreciacion, valores)
+            for i, parte in reparto.items():
+                valores[i] -= parte
+            if y == anio:
+                resultado.por_activo.update({i: m for i, m in reparto.items() if m})
+        if cuenta.base or cuenta.adiciones or cuenta.retiros or cuenta.valor_inicio:
+            resultado.categorias.append(cuenta)
+            resultado.total += cuenta.depreciacion
+            resultado.ingreso_gravable += cuenta.ingreso_gravable
+    return resultado
+
+
+def _repartir(monto: Decimal, pesos: dict[int, Decimal]) -> dict[int, Decimal]:
+    """`monto` en proporción a `pesos`; el último ajusta los centavos."""
+    total = sum((p for p in pesos.values() if p > 0), _CERO)
+    if total <= 0 or monto <= 0:
+        return {}
+    claves = [k for k, p in pesos.items() if p > 0]
+    partes = {k: redondear(monto * pesos[k] / total) for k in claves[:-1]}
+    partes[claves[-1]] = monto - sum(partes.values(), _CERO)
+    return partes
 
 
 def asiento_depreciacion(periodo: str, por_categoria: dict[int, Decimal], nombre_mes: str) -> AsientoPropuesto:

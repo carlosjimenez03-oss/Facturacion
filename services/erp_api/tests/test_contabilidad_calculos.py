@@ -180,3 +180,90 @@ def test_asiento_de_depreciacion_por_categoria():
     debe, haber = _lados(asiento)
     assert sum(x.debito for x in asiento.lineas) == D("150")
     assert haber == {"depreciacion_acumulada_1": D("50.00"), "depreciacion_acumulada_2": D("100.00")}
+
+
+def _activo_fiscal(**cambios):
+    datos = dict(categoria=2, metodo="dgii", costo=D("1000000"), valor_residual=D("0"), vida_util_meses=None,
+                 depreciar_desde="202602", fecha_adquisicion=date(2026, 1, 15))
+    datos.update(cambios)
+    return cc.Activo(**datos)
+
+
+def test_fiscal_categorias_2_y_3_por_cuenta_de_categoria():
+    # Base = valor fiscal al cierre anterior + adiciones; año completo, sin prorrateo por meses.
+    activos = [_activo_fiscal(), _activo_fiscal(costo=D("400000"), fecha_adquisicion=date(2027, 12, 20),
+                                                depreciar_desde="202801")]
+    anio_2026 = cc.depreciacion_fiscal_del_anio(activos, 2026)
+    assert anio_2026.total == D("250000.00") and anio_2026.por_activo == {0: D("250000.00")}
+    # 2027: (1,000,000 − 250,000) × 25 %; la compra de diciembre de 2027 es adición de 2027.
+    anio_2027 = cc.depreciacion_fiscal_del_anio(activos, 2027)
+    cuenta = anio_2027.categorias[0]
+    assert (cuenta.valor_inicio, cuenta.adiciones, cuenta.base) == (D("750000.00"), D("400000.00"), D("1150000.00"))
+    assert anio_2027.total == D("287500.00") == sum(anio_2027.por_activo.values())
+    assert cuenta.valor_final == D("862500.00")
+
+
+def test_fiscal_la_venta_rebaja_la_cuenta_y_el_exceso_es_ingreso_gravable():
+    vendido = _activo_fiscal(fecha_baja=date(2027, 6, 30), valor_venta=D("300000"), baja_periodo="202707")
+    otro = _activo_fiscal(costo=D("200000"))
+    anio = cc.depreciacion_fiscal_del_anio([vendido, otro], 2027)
+    # (1,200,000 × 75 %) − 300,000 = 600,000 × 25 %.
+    assert anio.categorias[0].base == D("600000.00") and anio.total == D("150000.00")
+    assert anio.por_activo == {1: D("150000.00")}  # el vendido ya no está en la cuenta
+    # Retiro sin venta: el valor se sigue depreciando en la cuenta.
+    retirado = _activo_fiscal(fecha_baja=date(2027, 6, 30), baja_periodo="202707")
+    assert cc.depreciacion_fiscal_del_anio([retirado], 2027).total == D("187500.00")
+    # Venta por más que la cuenta: base 0 y el exceso es renta gravable.
+    caro = _activo_fiscal(fecha_baja=date(2027, 3, 1), valor_venta=D("900000"), baja_periodo="202704")
+    anio = cc.depreciacion_fiscal_del_anio([caro], 2027)
+    assert (anio.total, anio.ingreso_gravable) == (D("0"), D("150000.00"))
+
+
+def test_fiscal_categoria_1_por_activo_en_linea_recta_y_acumulada_inicial():
+    edificio = _activo_fiscal(categoria=1, costo=D("1200000"), depreciar_desde="202601",
+                              fecha_adquisicion=date(2025, 12, 10))
+    assert cc.depreciacion_fiscal_del_anio([edificio], 2026).total == D("60000.00")
+    # Activo de antes del sistema: entra a la cuenta el año de depreciar_desde por costo − acumulada inicial.
+    viejo = _activo_fiscal(fecha_adquisicion=date(2020, 5, 1), depreciar_desde="202601",
+                           depreciacion_acumulada_inicial=D("600000"))
+    assert cc.anio_de_entrada(viejo) == 2026
+    assert cc.depreciacion_fiscal_del_anio([viejo], 2025).total == 0
+    assert cc.depreciacion_fiscal_del_anio([viejo], 2026).total == D("100000.00")
+
+
+def test_venta_al_contado_por_forma_de_pago():
+    datos = _ecf([("1", "1000.00")], tipo_pago="1", totales={"MontoTotal": "1180.00"})
+    datos["Encabezado"]["IdDoc"]["TablaFormasPago"] = {"FormaDePago": [
+        {"FormaPago": "1", "MontoPago": "180.00"}, {"FormaPago": "3", "MontoPago": "1000.00"},
+    ]}
+    asiento = cc.asiento_venta(factura_id="f", tipo_ecf=32, encf="E32", fecha=date(2026, 10, 1), datos=datos,
+                               a_credito=False)
+    debe, _ = _lados(asiento)
+    assert debe == {"caja": D("180.00"), "banco": D("1000.00")} and _cuadra(asiento)
+    # Sin TablaFormasPago: todo a caja, como antes.
+    sin_tabla = _ecf([("1", "1000.00")], tipo_pago="1", totales={"MontoTotal": "1180.00"})
+    asiento = cc.asiento_venta(factura_id="f", tipo_ecf=32, encf="E32", fecha=date(2026, 10, 1), datos=sin_tabla,
+                               a_credito=False)
+    assert _lados(asiento)[0] == {"caja": D("1180.00")}
+
+
+def test_retenciones_del_606_sin_pago_que_las_lleve():
+    compra = cc.asiento_compra(registro_id="r", fecha=date(2026, 10, 5), ncf="E410000000001", proveedor="Informal",
+                               tipo_bienes_servicios=2, total=D("11800"), itbis_facturado=D("1800"),
+                               itbis_costo=D("0"), es_nota_credito=False, itbis_retenido_606=D("1800"),
+                               isr_retenido_606=D("1000"))
+    assert _cuadra(compra)
+    neto: dict = {}
+    for x in compra.lineas:
+        neto[x.clave] = neto.get(x.clave, D(0)) + x.credito - x.debito
+    assert neto["cxp_proveedores"] == D("9000") and neto["itbis_retenido_por_pagar"] == D("1800")
+    pago = cc.asiento_pago(pago_id="p", fecha=date(2026, 10, 20), ncf="E41", proveedor="Informal", monto=D("9000"),
+                           retencion_isr=D("0"), retencion_itbis=D("0"), cuenta_banco="banco",
+                           itbis_retenido_606=D("1800"), isr_retenido_606=D("1000"))
+    assert sum(x.debito for x in pago.lineas if x.clave == "cxp_proveedores") == D("11800") and _cuadra(pago)
+
+
+def test_asiento_de_proporcionalidad():
+    asiento = cc.asiento_proporcionalidad("202610", D("521.66"), D("96.82"), "octubre 2026")
+    assert asiento.fecha == date(2026, 10, 31) and asiento.origen == "proporcionalidad"
+    assert _lados(asiento) == ({"itbis_no_admitido": D("521.66")}, {"itbis_adelantado": D("521.66")})

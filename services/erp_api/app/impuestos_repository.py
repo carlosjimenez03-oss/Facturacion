@@ -508,6 +508,7 @@ async def _precalculo_ir2(conn: asyncpg.Connection, anio: str) -> dict[str, Any]
     # que importa este módulo.
     from .contabilidad_repository import depreciacion_fiscal
 
+    fiscal = await depreciacion_fiscal(conn, anio)
     resultado = precalculos.calcular_ir2(
         anio=anio,
         ingresos=ingresos,
@@ -515,8 +516,13 @@ async def _precalculo_ir2(conn: asyncpg.Connection, anio: str) -> dict[str, Any]
         valuacion_inventario=precalculos.redondear(Decimal(valuacion)),
         ajustes=await _leer_ajustes(conn, "ir2", anio),
         hoy=hoy(),
-        depreciacion_sugerida=(await depreciacion_fiscal(conn, anio))["total"],
+        depreciacion_sugerida=fiscal["total"],
     )
+    if fiscal["ingreso_gravable"] > 0:
+        resultado["advertencias"].append(
+            f"Las ventas de activos fijos superan la cuenta de su categoría (Art. 287): RD${fiscal['ingreso_gravable']:,.2f} "
+            "son renta gravable del año. Inclúyalos en los ajustes fiscales."
+        )
     resultado["advertencias"] = _advertencia_pendientes(
         await _cantidad_pendientes_dgii(conn, desde, hasta)
     ) + resultado["advertencias"]

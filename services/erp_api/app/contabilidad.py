@@ -278,7 +278,8 @@ async def eliminar_activo(request: Request, activo_id: str):
 @router.post("/activos-fijos/{activo_id}/baja", response_model=ActivoFijo)
 async def dar_baja_activo(request: Request, activo_id: str, payload: BajaActivoPayload):
     return await _llamar(
-        repo.dar_baja_activo, _pool(request), _uuid(activo_id), payload.fecha, no_encontrado=_ACTIVO_NO_ENCONTRADO
+        repo.dar_baja_activo, _pool(request), _uuid(activo_id), payload.fecha, payload.valor_venta,
+        no_encontrado=_ACTIVO_NO_ENCONTRADO,
     )
 
 

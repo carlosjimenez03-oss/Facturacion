@@ -138,3 +138,52 @@ def test_sugerencias_uno_a_uno_prefiere_la_referencia():
 def test_enmascarar_numero():
     assert bc.enmascarar_numero("001-234471-1") == "****4711"
     assert bc.enmascarar_numero(None) is None
+
+
+def test_utf16_con_bom_y_csv_invalido():
+    texto = "Fecha;Descripción;Débito;Crédito\n05/10/2026;Depósito;;1,000.00\n"
+    extracto = bc.leer_extracto(texto.encode("utf-16"))
+    assert extracto.lineas[0].monto == D("1000.00") and extracto.lineas[0].descripcion == "Depósito"
+    with pytest.raises(ExtractoInvalidoError, match="CSV"):
+        # Un campo más largo que csv.field_size_limit() (csv.Error): 422, no 500.
+        bc.leer_extracto(b"Fecha,Monto\n05/10/2026,\"" + b"1" * 200_000 + b"\"\n")
+
+
+def test_separador_decimal_por_columna():
+    # "1.250" es ambiguo: en una columna con "2.300,50" el punto es de miles.
+    coma = "Fecha;Descripcion;Monto\n01/10/2026;A;1.250\n02/10/2026;B;2.300,50\n"
+    assert [x.monto for x in bc.leer_extracto(coma.encode()).lineas] == [D("1250.00"), D("2300.50")]
+    # Con otros "12.50" en la columna, o solo, es decimal.
+    punto = "Fecha;Descripcion;Monto\n01/10/2026;A;1.250\n02/10/2026;B;12.50\n"
+    assert [x.monto for x in bc.leer_extracto(punto.encode()).lineas] == [D("1.25"), D("12.50")]
+    assert bc.separador_decimal_de(["1.250", "1,250"]) is None
+    assert bc.separador_decimal_de(["1.250.000", ""]) == ","
+
+
+def test_tipo_nd_nc():
+    texto = "Fecha,Descripcion,Monto,Tipo\n01/10/2026,Cargo,100.00,ND\n02/10/2026,Abono,50.00,NC\n"
+    assert [x.monto for x in bc.leer_extracto(texto.encode()).lineas] == [D("-100.00"), D("50.00")]
+
+
+def test_sugerencia_no_cruza_el_corte():
+    linea = {"id": uuid.uuid4(), "fecha": date(2026, 10, 31), "monto": D("100"), "referencia": None, "descripcion": "x"}
+    mov = {"origen": "manual", "id": uuid.uuid4(), "fecha": date(2026, 11, 2), "monto": D("100"), "referencia": None,
+           "descripcion": "x"}
+    assert len(bc.sugerir_conciliacion([linea], [mov], dias=3)) == 1
+    assert bc.sugerir_conciliacion([linea], [mov], dias=3, hasta=date(2026, 10, 31)) == []
+
+
+def test_saldo_al_corte_segun_el_orden_del_extracto():
+    def lineas(*datos):
+        return [{"fecha": date(2026, 10, d), "monto": D(m), "saldo": D(s)} for d, m, s in datos]
+
+    antiguas_primero = lineas((10, "100", "1100"), (10, "-50", "1050"), (12, "10", "1060"))
+    assert bc.saldo_al_corte(antiguas_primero, date(2026, 10, 10)) == (D("1050"), None)
+    # El mismo día, más recientes primero: el saldo del día es el de la PRIMERA fila.
+    recientes_primero = lineas((10, "-50", "1050"), (10, "100", "1100"))
+    assert bc.saldo_al_corte(recientes_primero, date(2026, 10, 31)) == (D("1050"), None)
+    recientes_varios = lineas((12, "10", "1060"), (10, "-50", "1050"), (10, "100", "1100"))
+    assert bc.saldo_al_corte(recientes_varios, date(2026, 10, 11)) == (D("1050"), None)
+    # Sin saldo corrido que cuadre y todo el mismo día: se avisa.
+    saldo, advertencia = bc.saldo_al_corte(lineas((10, "1", "500"), (10, "2", "900")), date(2026, 10, 10))
+    assert saldo == D("900") and "más recientes" in advertencia

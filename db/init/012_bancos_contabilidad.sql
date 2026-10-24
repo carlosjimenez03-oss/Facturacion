@@ -53,7 +53,8 @@ CREATE SEQUENCE IF NOT EXISTS contabilidad.asientos_numero_seq;
 -- Asientos (libro diario). `origen` = 'manual' o el documento que lo generó
 -- (`origen_id`: facturacion.facturas.id, ventas.cobros.id,
 -- compras606.registros.id, compras.pagos.id, bancos.movimientos.id,
--- bancos.transferencias.id o el período AAAAMM de la depreciación). Un
+-- bancos.transferencias.id o el período AAAAMM de la depreciación / del
+-- ajuste por proporcionalidad del ITBIS). Un
 -- documento tiene a lo sumo un asiento vigente (índice único parcial):
 -- generar es idempotente. `huella` = resumen de las líneas generadas (si el
 -- documento o las cuentas por defecto cambian, el asiento se anula y se
@@ -68,7 +69,7 @@ CREATE TABLE IF NOT EXISTS contabilidad.asientos (
                        CHECK (estado IN ('borrador', 'contabilizado', 'anulado')),
     origen             text NOT NULL DEFAULT 'manual'
                        CHECK (origen IN ('manual', 'venta', 'nota_credito', 'nota_debito', 'cobro', 'compra', 'pago',
-                                         'movimiento', 'transferencia', 'depreciacion')),
+                                         'movimiento', 'transferencia', 'proporcionalidad', 'depreciacion')),
     origen_id          text,
     huella             text,
     total              numeric(18, 2) NOT NULL DEFAULT 0,
@@ -105,7 +106,9 @@ CREATE INDEX IF NOT EXISTS asiento_lineas_cuenta_idx ON contabilidad.asiento_lin
 -- 'dgii' = el método fiscal); la depreciación fiscal del IR-2 siempre usa
 -- el método 'dgii'. `depreciar_desde` = primer mes (AAAAMM) que se
 -- deprecia; `depreciacion_acumulada_inicial` = la que ya tenía al
--- registrarlo (activos comprados antes de usar el sistema).
+-- registrarlo (activos comprados antes de usar el sistema). `valor_venta` =
+-- lo cobrado al venderlo (con `fecha_baja`): rebaja la cuenta fiscal de su
+-- categoría (IR-2).
 CREATE TABLE IF NOT EXISTS contabilidad.activos_fijos (
     id                              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     descripcion                     text NOT NULL,
@@ -122,6 +125,7 @@ CREATE TABLE IF NOT EXISTS contabilidad.activos_fijos (
     numero_serie                    text,
     ubicacion                       text,
     fecha_baja                      date,
+    valor_venta                     numeric(18, 2) CHECK (valor_venta >= 0),
     notas                           text,
     creado_en                       timestamptz NOT NULL DEFAULT now(),
     actualizado_en                  timestamptz NOT NULL DEFAULT now(),
@@ -138,6 +142,32 @@ CREATE TABLE IF NOT EXISTS contabilidad.depreciaciones (
 );
 
 CREATE INDEX IF NOT EXISTS depreciaciones_periodo_idx ON contabilidad.depreciaciones (periodo);
+
+-- Bases creadas con una versión anterior de este DDL: el origen
+-- 'proporcionalidad' y la columna `valor_venta`. Se consulta el catálogo
+-- antes de cada ALTER TABLE para no tomar su AccessExclusiveLock en cada
+-- arranque.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'contabilidad.asientos'::regclass AND conname = 'asientos_origen_check'
+          AND pg_get_constraintdef(oid) NOT LIKE '%proporcionalidad%'
+    ) THEN
+        ALTER TABLE contabilidad.asientos DROP CONSTRAINT asientos_origen_check;
+        ALTER TABLE contabilidad.asientos ADD CONSTRAINT asientos_origen_check
+            CHECK (origen IN ('manual', 'venta', 'nota_credito', 'nota_debito', 'cobro', 'compra', 'pago',
+                              'movimiento', 'transferencia', 'proporcionalidad', 'depreciacion'));
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'contabilidad' AND table_name = 'activos_fijos' AND column_name = 'valor_venta'
+    ) THEN
+        ALTER TABLE contabilidad.activos_fijos
+            ADD COLUMN IF NOT EXISTS valor_venta numeric(18, 2) CHECK (valor_venta >= 0);
+    END IF;
+END;
+$$;
 
 -- Catálogo sugerido y cuentas por defecto, solo si el catálogo está vacío.
 DO $$
@@ -249,6 +279,7 @@ BEGIN
             ('ingresos_financieros', '4.2.01'),
             ('cxp_proveedores', '2.1.01.01'),
             ('itbis_adelantado', '1.1.04.01'),
+            ('itbis_no_admitido', '6.1.06'),
             ('itbis_retenido_por_pagar', '2.1.03.01'),
             ('isr_retenido_por_pagar', '2.1.03.02'),
             ('gasto_606_01', '6.1.01'),
@@ -412,9 +443,33 @@ CREATE UNIQUE INDEX IF NOT EXISTS conciliaciones_cuenta_hasta_idx ON bancos.conc
 
 -- Cuenta bancaria de los cobros y pagos a proveedores (opcional; el texto
 -- libre `cuenta_destino` / `cuenta_origen` se conserva por compatibilidad).
-ALTER TABLE ventas.cobros
-    ADD COLUMN IF NOT EXISTS cuenta_bancaria_id uuid REFERENCES bancos.cuentas (id) ON DELETE RESTRICT;
-ALTER TABLE compras.pagos
-    ADD COLUMN IF NOT EXISTS cuenta_bancaria_id uuid REFERENCES bancos.cuentas (id) ON DELETE RESTRICT;
-CREATE INDEX IF NOT EXISTS cobros_cuenta_bancaria_idx ON ventas.cobros (cuenta_bancaria_id);
-CREATE INDEX IF NOT EXISTS pagos_cuenta_bancaria_idx ON compras.pagos (cuenta_bancaria_id);
+-- ventas.cobros y compras.pagos reciben escrituras todo el día: la columna
+-- (ALTER TABLE: AccessExclusiveLock, más la FK sobre bancos.cuentas) y su
+-- índice (CREATE INDEX: ShareLock) se crean solo si faltan, consultando el
+-- catálogo primero, así que los arranques siguientes no bloquean esas
+-- tablas. La primera vez, `lock_timeout` hace que la migración se rinda y
+-- reintente en lugar de dejar en cola a los cobros (ver aplicar_migraciones).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'ventas' AND table_name = 'cobros' AND column_name = 'cuenta_bancaria_id'
+    ) THEN
+        ALTER TABLE ventas.cobros
+            ADD COLUMN IF NOT EXISTS cuenta_bancaria_id uuid REFERENCES bancos.cuentas (id) ON DELETE RESTRICT;
+    END IF;
+    IF to_regclass('ventas.cobros_cuenta_bancaria_idx') IS NULL THEN
+        CREATE INDEX IF NOT EXISTS cobros_cuenta_bancaria_idx ON ventas.cobros (cuenta_bancaria_id);
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'compras' AND table_name = 'pagos' AND column_name = 'cuenta_bancaria_id'
+    ) THEN
+        ALTER TABLE compras.pagos
+            ADD COLUMN IF NOT EXISTS cuenta_bancaria_id uuid REFERENCES bancos.cuentas (id) ON DELETE RESTRICT;
+    END IF;
+    IF to_regclass('compras.pagos_cuenta_bancaria_idx') IS NULL THEN
+        CREATE INDEX IF NOT EXISTS pagos_cuenta_bancaria_idx ON compras.pagos (cuenta_bancaria_id);
+    END IF;
+END;
+$$;

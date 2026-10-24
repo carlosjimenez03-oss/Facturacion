@@ -57,7 +57,16 @@ from .compras_calculos import CamposPago606, Pago
 from . import impuestos_repository
 from .impuestos_repository import ConflictoImpuestosError, validar_periodo_mensual
 from .precalculos import nombre_periodo
-from .repository import _ZONA_RD, DatosInvalidosError, _monto_dgii, _redondear, hoy, validar_cuenta_bancaria
+from .repository import (
+    _ZONA_RD,
+    DatosInvalidosError,
+    _monto_dgii,
+    _redondear,
+    bloquear_cuenta_bancaria,
+    hoy,
+    liberar_conciliacion,
+    validar_cuenta_bancaria,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1261,14 +1270,20 @@ async def registrar_pago(
 async def anular_pago(pool: asyncpg.Pool, pago_id: uuid.UUID) -> dict[str, Any]:
     """Anula el pago y recalcula el 606 con los pagos que quedan (sin pagos:
     vuelve a los valores de antes del primer pago). 409 si ya estaba
-    anulado o si cambia un 606/IT-1/IR-17 ya marcado como presentado."""
+    anulado, si cambia un 606/IT-1/IR-17 ya marcado como presentado o si
+    está conciliado en una conciliación bancaria cerrada (con la línea del
+    extracto en el período abierto, se desconcilia: ver
+    `repository.liberar_conciliacion`)."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             actual = await conn.fetchrow(
-                "SELECT registro606_id, anulado FROM compras.pagos WHERE id = $1", pago_id
+                "SELECT registro606_id, anulado, cuenta_bancaria_id FROM compras.pagos WHERE id = $1", pago_id
             )
             if actual is None:
                 raise CompraNoEncontradaError(str(pago_id))
+            # Primero el candado de la cuenta bancaria (mismo orden que Bancos).
+            if actual["cuenta_bancaria_id"] is not None:
+                await bloquear_cuenta_bancaria(conn, actual["cuenta_bancaria_id"])
             # Mismo orden de bloqueo que registrar_pago: primero el renglón del 606.
             registro = await conn.fetchrow(
                 "SELECT * FROM compras606.registros WHERE id = $1 FOR UPDATE", actual["registro606_id"]
@@ -1276,6 +1291,9 @@ async def anular_pago(pool: asyncpg.Pool, pago_id: uuid.UUID) -> dict[str, Any]:
             anulado = await conn.fetchval("SELECT anulado FROM compras.pagos WHERE id = $1 FOR UPDATE", pago_id)
             if anulado:
                 raise ConflictoComprasError("El pago ya está anulado")
+            motivo = await liberar_conciliacion(conn, "pago", pago_id, actual["cuenta_bancaria_id"])
+            if motivo is not None:
+                raise ConflictoComprasError(motivo)
             await conn.execute(
                 "UPDATE compras.pagos SET anulado = true, anulado_en = now() WHERE id = $1", pago_id
             )

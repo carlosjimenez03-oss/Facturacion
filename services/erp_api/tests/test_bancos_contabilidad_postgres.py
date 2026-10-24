@@ -12,6 +12,7 @@ permiso para crear bases, p. ej. `postgresql://postgres@localhost:5590/postgres`
 cada prueba crea una base nueva, carga `db/init/*.sql` y aplica las
 migraciones de erp-api dos veces.
 """
+import asyncio
 import json
 import os
 import uuid
@@ -27,6 +28,7 @@ from services.erp_api.app import (
     compras_repository as cr,
     contabilidad_repository as ctr,
     impuestos_repository as ir,
+    precalculos,
     repository as vr,
 )
 from services.erp_api.app.bancos_repository import ConflictoBancosError
@@ -46,6 +48,7 @@ OCT = (date(2026, 10, 1), date(2026, 10, 31))
 
 @pytest.fixture
 async def pool(monkeypatch):
+    ctr._CONTEOS_PENDIENTES.clear()
     for modulo in (vr, cr, br, ctr, ir):
         monkeypatch.setattr(modulo, "hoy", lambda: HOY)
     nombre = f"contab_{uuid.uuid4().hex[:10]}"
@@ -230,7 +233,7 @@ async def test_migraciones_sobre_una_base_de_la_fase_3():
 
 async def test_catalogo_sembrado_una_sola_vez(pool):
     assert await pool.fetchval("SELECT count(*) FROM contabilidad.cuentas") == 79
-    assert await pool.fetchval("SELECT count(*) FROM contabilidad.cuentas_por_defecto") == 36
+    assert await pool.fetchval("SELECT count(*) FROM contabilidad.cuentas_por_defecto") == 37
     huerfanas = await pool.fetchval(
         "SELECT count(*) FROM contabilidad.cuentas WHERE codigo LIKE '%.%' AND padre_id IS NULL"
     )
@@ -241,8 +244,9 @@ async def test_asientos_balanza_y_coherencia_con_impuestos(pool):
     datos = await escenario(pool)
     previo = await ctr.pendientes_de_contabilizar(pool, *OCT)
     resultado = await ctr.generar_asientos(pool, *OCT)
-    # 5 e-CF aceptados + 2 cobros + 3 compras + 2 pagos + 1 comisión + 1 transferencia.
-    assert resultado["creados"] == 14 == previo["creados"]
+    # 5 e-CF aceptados + 2 cobros + 3 compras + 2 pagos + 1 comisión + 1 transferencia
+    # + el ajuste por proporcionalidad del ITBIS (la venta exenta del E32).
+    assert resultado["creados"] == 15 == previo["creados"]
     motivos = [n["motivo"] for n in resultado["no_contabilizados"]]
     assert len(motivos) == 1 and "clasifíquelo" in motivos[0]
 
@@ -256,14 +260,21 @@ async def test_asientos_balanza_y_coherencia_con_impuestos(pool):
     resultados = await ctr.estado_resultados(pool, *OCT)
     assert resultados["ingresos"]["total"] == ventas.g18 + ventas.g16 + ventas.exportaciones + ventas.exentas == D("157000")
     assert await saldo_cuenta(pool, "2.1.02.01") == ventas.i18 + ventas.i16 == D("27360")
-    # El renglón sin clasificar sí está en el IT-1 (180) pero no se contabilizó.
-    assert await saldo_cuenta(pool, "1.1.04.01") == compras606.itbis_facturado - compras606.itbis_costo - D("180")
+    # ITBIS adelantado = el admitido del IT-1 (mismo coeficiente de proporcionalidad); el renglón sin
+    # clasificar sí está en el IT-1 (180) pero no se contabilizó.
+    proporcionalidad = precalculos.itbis_adelantado_admitido(ventas, compras606)
+    no_admitido = proporcionalidad.no_admitido
+    assert no_admitido > 0 and proporcionalidad.proporcion < 1
+    assert await saldo_cuenta(pool, "1.1.04.01") == proporcionalidad.admitido - D("180")
+    it1 = await ir.precalculo(pool, "it1", "202610")
+    casillas = {c["codigo"]: c["valor"] for sec in it1["secciones"] for c in sec["casillas"]}
+    assert -casillas["11"] == proporcionalidad.admitido
     assert await saldo_cuenta(pool, "2.1.03.01") == retenido == D("6480")
     ir17 = await ir.precalculo(pool, "ir17", "202610")
     assert await saldo_cuenta(pool, "2.1.03.02") == ir17["resultado"]["valor"] == D("3000")
     assert resultados["costos"]["total"] == D("40000")
-    assert resultados["gastos"]["total"] == D("50000") + D("1250")
-    assert resultados["utilidad_neta"] == D("157000") - D("40000") - D("51250")
+    assert resultados["gastos"]["total"] == D("50000") + D("1250") + no_admitido
+    assert resultados["utilidad_neta"] == D("157000") - D("40000") - D("51250") - no_admitido
 
     # CxC y CxP del mayor = lo pendiente de Ventas y Compras.
     # (sin la factura solo enviada: la CxC la cuenta, pero sin aceptar no se contabiliza)
@@ -283,7 +294,7 @@ async def test_asientos_balanza_y_coherencia_con_impuestos(pool):
 
     # Idempotente.
     otra = await ctr.generar_asientos(pool, *OCT)
-    assert (otra["creados"], otra["actualizados"], otra["anulados"], otra["sin_cambios"]) == (0, 0, 0, 14)
+    assert (otra["creados"], otra["actualizados"], otra["anulados"], otra["sin_cambios"]) == (0, 0, 0, 15)
 
     # Cambiar una cuenta por defecto regenera los asientos que la usan.
     otras = await ctr.listar_cuentas(pool)
@@ -291,7 +302,7 @@ async def test_asientos_balanza_y_coherencia_con_impuestos(pool):
     await ctr.actualizar_cuentas_por_defecto(pool, {"gasto_606_02": deducciones["id"]})
     cambio = await ctr.generar_asientos(pool, *OCT)
     assert (cambio["creados"], cambio["actualizados"]) == (0, 1)
-    assert await saldo_cuenta(pool, "6.1.02") == 0 and await saldo_cuenta(pool, "6.1.06") == D("20000")
+    assert await saldo_cuenta(pool, "6.1.02") == 0 and await saldo_cuenta(pool, "6.1.06") == D("20000") + no_admitido
 
     # Anular un cobro anula su asiento.
     cobro = await cobrar(pool, datos["f1"], "1000", date(2026, 10, 22), metodo="efectivo")
@@ -405,7 +416,7 @@ async def test_extracto_conciliacion_automatica_y_cierre(pool):
 
     # El cargo bancario creado desde la línea también se contabiliza.
     generado = await ctr.generar_asientos(pool, *OCT)
-    assert generado["creados"] == 15 and (await ctr.balanza(pool, *OCT))["cuadrada"]
+    assert generado["creados"] == 16 and (await ctr.balanza(pool, *OCT))["cuadrada"]
 
 
 async def test_transferencia_atomica(pool, monkeypatch):
@@ -473,10 +484,13 @@ async def test_depreciacion_y_sugerencia_del_ir2(pool):
     with pytest.raises(ConflictoContabilidadError):
         await ctr.actualizar_activo(pool, camion["id"], {"costo": D("4000000")})
 
-    # Depreciación fiscal 2026 (método DGII para todos): sugerencia del IR-2.
+    # Depreciación fiscal 2026 (Art. 287 para todos): sugerencia del IR-2. Categoría 2 en una cuenta
+    # de categoría (25 % de la base del año, sin prorrateo); categoría 1 por activo, por los meses en uso.
     fiscal = await ctr.obtener_depreciacion_fiscal(pool, "2026")
-    esperado = D("80208.33") * 11 + D("4166.67") * 9 + D("13333.33") * 6
+    esperado = (D("3850000") + D("640000")) * D("0.25") + D("4166.67") * 9
     assert fiscal["total"] == esperado
+    assert [(c["categoria"], c["base"], c["valor_final"]) for c in fiscal["categorias"]] == [
+        (2, D("4490000"), D("3367500"))]
     ir2 = await ir.precalculo(pool, "ir2", "2026")
     ajuste = next(a for a in ir2["ajustes"] if a["clave"] == "depreciacion")
     assert (ajuste["sugerido"], ajuste["valor"], ajuste["manual"]) == (esperado, esperado, False)
@@ -491,3 +505,213 @@ async def test_depreciacion_y_sugerencia_del_ir2(pool):
     await ctr.anular_asiento(pool, resultado["asiento"]["id"])
     assert (await ctr.depreciacion_del_periodo(pool, "202610"))["registrada"] is False
     await ctr.registrar_depreciacion(pool, "202610")
+
+
+# --- Revisión de la fase 5 ---------------------------------------------------------
+
+SEP = (date(2026, 9, 1), date(2026, 9, 30))
+
+
+async def test_retenciones_del_606_clasificadas_antes_de_pagar(pool):
+    """Retenciones en el renglón del 606 (p. ej. un E41) sin pago que las lleve: sin pagos van en la
+    compra; pagada (aunque sea otro mes), las lleva el último pago. CxP y 2.1.03.x = Compras / IT-1 / IR-17."""
+    p = await cr.crear_factura_compra(pool, **FacturaCompraPayload(
+        proveedor_rnc="00112345678", proveedor_nombre="Informal", ncf="B0100000050", fecha_comprobante=date(2026, 9, 5),
+        tipo_bienes_servicios=2, monto_servicios=D("10000"), itbis_facturado=D("1800"),
+    ).model_dump())
+    rid = uuid.UUID(str(p["registro606_id"]))
+    await pool.execute(
+        "UPDATE compras606.registros SET itbis_retenido = 1800, tipo_retencion_isr = 2, monto_retencion_renta = 1000"
+        " WHERE id = $1", rid,
+    )
+    await ctr.generar_asientos(pool, *SEP)
+
+    async def cxp_compras():
+        return sum((c["pendiente"] for c in await cr.listar_cuentas_por_pagar(pool) if c["ncf"] == "B0100000050"), D(0))
+
+    assert await saldo_cuenta(pool, "2.1.01.01") == await cxp_compras() == D("9000")
+    assert (await saldo_cuenta(pool, "2.1.03.01"), await saldo_cuenta(pool, "2.1.03.02")) == (D("1800"), D("1000"))
+
+    # Pagado en octubre: generar octubre regenera la compra de septiembre y el pago lleva las retenciones.
+    pago = await pagar(pool, rid, "9000")
+    cambio = await ctr.generar_asientos(pool, *OCT)
+    assert (cambio["creados"], cambio["actualizados"]) == (1, 1)
+    assert await saldo_cuenta(pool, "2.1.01.01") == await cxp_compras() == 0
+    assert await saldo_cuenta(pool, "2.1.03.01", hasta=SEP[1]) == 0
+    async with pool.acquire() as conn:
+        _, _, retenido = await ir._datos_it1(conn, "202610")
+    assert await saldo_cuenta(pool, "2.1.03.01") == retenido == D("1800")
+    ir17 = await ir.precalculo(pool, "ir17", "202610")
+    assert await saldo_cuenta(pool, "2.1.03.02") == ir17["resultado"]["valor"] == D("1000")
+    assert (await ctr.generar_asientos(pool, *OCT))["sin_cambios"] == 2  # idempotente
+
+    # Anulado el pago, las vuelve a llevar la compra.
+    await cr.anular_pago(pool, uuid.UUID(str(pago["id"])))
+    anulacion = await ctr.generar_asientos(pool, *OCT)
+    assert (anulacion["anulados"], anulacion["actualizados"]) == (1, 1)
+    assert await saldo_cuenta(pool, "2.1.01.01") == await cxp_compras() == D("9000")
+    assert await saldo_cuenta(pool, "2.1.03.01") == D("1800")
+    assert (await ctr.balanza(pool, SEP[0], OCT[1]))["cuadrada"]
+
+
+async def test_anular_cobro_o_pago_conciliado(pool):
+    popular = await cuenta_bancaria(pool, "Banco Popular Dominicano", nombre="Banco Popular", saldo="0")
+    factura = await insertar_factura(pool, 31, "E310000000201", "05-10-2026", items=[("1", "100000.00")])
+    cobro = await cobrar(pool, factura, "50000", date(2026, 10, 10), cuenta=popular["id"], referencia="TRF-1001")
+    p = await compra(pool, "B0100000060", 2, servicios="1000", itbis="180")
+    pago = await pagar(pool, p["registro606_id"], "1180", cuenta=popular["id"], referencia="CHK-1")
+    csv = (
+        "Fecha;Descripcion;Referencia;Debito;Credito;Balance\n"
+        "10/10/2026;TRANSF;TRF-1001;;50,000.00;50,000.00\n"
+        "20/10/2026;CHEQUE;CHK-1;1,180.00;;48,820.00\n"
+    ).encode()
+    await br.importar_extracto(pool, popular["id"], csv, nombre_archivo="a.csv", mapeo=None, saldo_final=None)
+    assert (await br.conciliar_automatico(pool, popular["id"]))["conciliadas"] == 2
+    cerrada = await br.cerrar_conciliacion(pool, popular["id"], hasta=date(2026, 10, 15), saldo_banco=None, notas=None)
+
+    # Conciliado en la conciliación cerrada: 409 (no se descuadra el período cerrado).
+    with pytest.raises(vr.CobroEstadoInvalidoError, match="conciliación cerrada al 15/10/2026"):
+        await vr.anular_cobro(pool, uuid.UUID(str(cobro["id"])))
+    # Conciliado en el período abierto: se anula y su línea queda sin conciliar.
+    await cr.anular_pago(pool, uuid.UUID(str(pago["id"])))
+    assert (await br.obtener_cuenta(pool, popular["id"]))["lineas_sin_conciliar"] == 1
+    assert await pool.fetchval("SELECT count(*) FROM bancos.extracto_lineas WHERE mov_id IS NOT NULL") == 1
+    # Reabierta, el cobro se anula igual.
+    await br.reabrir_conciliacion(pool, cerrada["id"])
+    await vr.anular_cobro(pool, uuid.UUID(str(cobro["id"])))
+    assert (await br.obtener_cuenta(pool, popular["id"]))["lineas_sin_conciliar"] == 2
+    assert await pool.fetchval("SELECT count(*) FROM bancos.extracto_lineas WHERE mov_id IS NOT NULL") == 0
+
+
+async def test_estado_de_resultados_con_dos_cuentas_raiz_del_mismo_tipo(pool):
+    await ctr.crear_cuenta(pool, codigo="7", nombre="Otros gastos no deducibles", tipo="gasto")
+    multas = await ctr.crear_cuenta(pool, codigo="7.1", nombre="Multas")
+    cuentas = {c["codigo"]: c["id"] for c in await ctr.listar_cuentas(pool)}
+    await ctr.crear_asiento(pool, fecha=date(2026, 10, 5), concepto="Gastos", referencia=None, contabilizar=True, lineas=[
+        {"cuenta_id": cuentas["6.1.02"], "debito": D("100")}, {"cuenta_id": multas["id"], "debito": D("50")},
+        {"cuenta_id": cuentas["1.1.01.01"], "credito": D("150")}])
+    resultados = await ctr.estado_resultados(pool, *OCT)
+    assert resultados["gastos"]["total"] == D("150") and resultados["utilidad_neta"] == D("-150")
+    balance = await ctr.balance_general(pool, OCT[1])
+    assert balance["cuadrado"] and balance["activos"]["total"] == D("-150")
+
+
+async def test_migraciones_no_bloquean_cobros_y_pagos_en_cada_arranque(pool):
+    """Con una lectura en curso sobre ventas.cobros y compras.pagos (AccessShareLock), las migraciones
+    terminan: no hay ALTER TABLE (AccessExclusiveLock) cuando la columna ya existe."""
+    otra = await pool.acquire()
+    try:
+        transaccion = otra.transaction()
+        await transaccion.start()
+        await otra.fetch("SELECT 1 FROM ventas.cobros LIMIT 1")
+        await otra.fetch("SELECT 1 FROM compras.pagos LIMIT 1")
+        await asyncio.wait_for(aplicar_migraciones(pool, reintentos=1), timeout=20)
+        await transaccion.rollback()
+    finally:
+        await pool.release(otra)
+    # Una base con el DDL anterior de la fase 5 (sin valor_venta ni el origen 'proporcionalidad').
+    await pool.execute("ALTER TABLE contabilidad.activos_fijos DROP COLUMN valor_venta")
+    await pool.execute("ALTER TABLE contabilidad.asientos DROP CONSTRAINT asientos_origen_check")
+    await pool.execute("ALTER TABLE contabilidad.asientos ADD CONSTRAINT asientos_origen_check CHECK (origen <> 'x')")
+    await aplicar_migraciones(pool)
+    definicion = await pool.fetchval(
+        "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'asientos_origen_check'"
+    )
+    assert "proporcionalidad" in definicion
+    assert await pool.fetchval(
+        "SELECT count(*) FROM information_schema.columns WHERE table_name = 'activos_fijos' AND column_name = 'valor_venta'"
+    ) == 1
+
+
+async def test_cobro_de_factura_sin_aceptar_no_se_contabiliza(pool):
+    factura = await insertar_factura(pool, 31, "E310000000301", "05-10-2026", estado="enviado", items=[("1", "1000.00")])
+    await cobrar(pool, factura, "500", date(2026, 10, 10), metodo="efectivo")
+    resultado = await ctr.generar_asientos(pool, *OCT)
+    assert resultado["creados"] == 0
+    assert [n["origen"] for n in resultado["no_contabilizados"]] == ["cobro"]
+    assert "no está aceptada" in resultado["no_contabilizados"][0]["motivo"]
+    await pool.execute("UPDATE facturacion.facturas SET estado = 'aceptado' WHERE id = $1", factura)
+    assert (await ctr.generar_asientos(pool, *OCT))["creados"] == 2  # la venta y el cobro
+    assert await saldo_cuenta(pool, "1.1.02.01") == D("680")
+    # Si la factura deja de estar aceptada, el asiento del cobro se anula junto con el de la venta.
+    await pool.execute("UPDATE facturacion.facturas SET estado = 'rechazado' WHERE id = $1", factura)
+    assert (await ctr.generar_asientos(pool, *OCT))["anulados"] == 2
+    assert await saldo_cuenta(pool, "1.1.02.01") == 0 and await saldo_cuenta(pool, "1.1.01.01") == 0
+
+
+async def test_saldo_del_extracto_con_las_lineas_mas_recientes_primero(pool):
+    popular = await cuenta_bancaria(pool, "Banco Popular Dominicano", nombre="Banco Popular", saldo="500000")
+    await br.registrar_movimiento(pool, cuenta_id=popular["id"], fecha=date(2026, 10, 10), tipo="deposito",
+                                  monto=D("1000"), referencia="D-1")
+    await br.registrar_movimiento(pool, cuenta_id=popular["id"], fecha=date(2026, 10, 10), tipo="retiro",
+                                  monto=D("300"), referencia="R-1")
+    # El banco lista primero lo último: el saldo del día es el de la PRIMERA fila del archivo.
+    csv = (
+        "Fecha;Descripcion;Referencia;Debito;Credito;Balance\n"
+        "10/10/2026;RETIRO;R-1;300.00;;500,700.00\n"
+        "10/10/2026;DEPOSITO;D-1;;1,000.00;501,000.00\n"
+    ).encode()
+    await br.importar_extracto(pool, popular["id"], csv, nombre_archivo="b.csv", mapeo=None, saldo_final=None)
+    await br.conciliar_automatico(pool, popular["id"])
+    resumen = (await br.conciliacion(pool, popular["id"], hasta=date(2026, 10, 10)))["resumen"]
+    assert (resumen["saldo_banco"], resumen["origen_saldo_banco"]) == (D("500700"), "ultima_linea")
+    assert resumen["diferencia"] == 0 and resumen["puede_cerrar"] and resumen["advertencias"] == []
+
+
+async def test_activos_no_cambian_un_ir2_presentado(pool):
+    camion = await ctr.crear_activo(pool, descripcion="Camión", categoria=2, fecha_adquisicion=date(2026, 1, 15),
+                                    costo=D("1000000"))
+    await ir.marcar_presentada(pool, "ir2", "2026", monto=None, referencia=None, presentada_en=None)
+    with pytest.raises(ConflictoContabilidadError, match="IR-2"):
+        await ctr.crear_activo(pool, descripcion="Laptop", categoria=2, fecha_adquisicion=date(2026, 3, 1),
+                               costo=D("80000"))
+    with pytest.raises(ConflictoContabilidadError, match="IR-2"):
+        await ctr.dar_baja_activo(pool, camion["id"], date(2026, 9, 30), D("700000"))
+    with pytest.raises(ConflictoContabilidadError, match="IR-2"):
+        await ctr.actualizar_activo(pool, camion["id"], {"costo": D("1100000")})
+    with pytest.raises(ConflictoContabilidadError, match="IR-2"):
+        await ctr.eliminar_activo(pool, camion["id"])
+    # Lo que no es fiscal sí se cambia.
+    assert (await ctr.actualizar_activo(pool, camion["id"], {"ubicacion": "Almacén"}))["ubicacion"] == "Almacén"
+    await ir.desmarcar_presentada(pool, "ir2", "2026")
+    vendido = await ctr.dar_baja_activo(pool, camion["id"], date(2026, 9, 30), D("700000"))
+    assert vendido["valor_venta"] == D("700000")
+    # Vendido por menos que la cuenta: base 300,000 × 25 %.
+    fiscal = await ctr.obtener_depreciacion_fiscal(pool, "2026")
+    assert fiscal["total"] == D("75000") and fiscal["ingreso_gravable"] == 0
+    await ctr.dar_baja_activo(pool, camion["id"], date(2026, 9, 30), D("1200000"))
+    ir2 = await ir.precalculo(pool, "ir2", "2026")
+    assert any("renta gravable" in a for a in ir2["advertencias"])
+
+
+async def test_ajuste_por_proporcionalidad_mensual(pool):
+    await insertar_factura(pool, 31, "E310000000401", "05-10-2026", items=[("1", "60000.00"), ("4", "40000.00")])
+    await compra(pool, "B0100000070", 2, servicios="10000", itbis="1800")
+    resultado = await ctr.generar_asientos(pool, *OCT)
+    ajuste = (await ctr.listar_asientos(pool, origen="proporcionalidad"))
+    assert resultado["creados"] == 3 and len(ajuste) == 1 and ajuste[0]["fecha"] == date(2026, 10, 31)
+    # 60 % admitido: 1,800 × 40 % = 720 no admitido.
+    assert await saldo_cuenta(pool, "1.1.04.01") == D("1080") and await saldo_cuenta(pool, "6.1.06") == D("720")
+    assert (await ctr.generar_asientos(pool, *OCT))["sin_cambios"] == 3
+    # Opcional: sin cuenta por defecto `itbis_no_admitido`, no se genera (y se anula el que había).
+    await ctr.actualizar_cuentas_por_defecto(pool, {"itbis_no_admitido": None})
+    assert (await ctr.generar_asientos(pool, *OCT))["anulados"] == 1
+    assert await saldo_cuenta(pool, "1.1.04.01") == D("1800")
+
+
+async def test_resumen_reutiliza_el_conteo_de_pendientes(pool, monkeypatch):
+    await insertar_factura(pool, 31, "E310000000501", "05-10-2026", items=[("1", "1000.00")])
+    llamadas = {"n": 0}
+    original = ctr.pendientes_de_contabilizar
+
+    async def contar(*args, **kwargs):
+        llamadas["n"] += 1
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(ctr, "pendientes_de_contabilizar", contar)
+    assert (await ctr.resumen(pool, *OCT))["documentos_por_contabilizar"] == 1
+    assert (await ctr.resumen(pool, *OCT))["documentos_por_contabilizar"] == 1
+    assert llamadas["n"] == 1
+    await ctr.generar_asientos(pool, *OCT)  # vacía el conteo guardado
+    assert (await ctr.resumen(pool, *OCT))["documentos_por_contabilizar"] == 0
+    assert llamadas["n"] == 2

@@ -332,7 +332,8 @@ async def test_registrar_cobro_por_lo_pendiente_exacto(monkeypatch):
 
 
 async def test_anular_cobro_ya_anulado_lanza_error():
-    conn = FakeConnection(fetchval_results=[True])
+    # cuenta_bancaria_id (ninguna) y anulado.
+    conn = FakeConnection(fetchval_results=[None, True])
 
     with pytest.raises(repository.CobroEstadoInvalidoError):
         await repository.anular_cobro(FakePool(conn), uuid.uuid4())

@@ -358,6 +358,9 @@ export interface ResumenConciliacion {
   diferencia: string;
   /** Sin líneas pendientes, diferencia 0 y corte posterior a la última conciliación. */
   puede_cerrar: boolean;
+  /** P. ej. no se pudo saber si el extracto lista primero las líneas más antiguas o las más recientes
+   * (saldo_banco sale de la última fila): mostrarlas antes de cerrar. */
+  advertencias: string[];
 }
 
 export interface Conciliacion {

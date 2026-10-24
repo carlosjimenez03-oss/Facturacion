@@ -18,8 +18,11 @@ Modelo (ver docs/ERP_API.md, "Bancos"):
   saldo según el banco cuadre con libros menos las partidas en tránsito.
   Cerrada, lo que Bancos registra con fecha <= `hasta` (movimientos,
   transferencias, conciliar/desconciliar) queda bloqueado (409) hasta
-  reabrirla. Los cobros y pagos no se bloquean: si se registra uno con fecha
-  ya conciliada, aparece como partida en tránsito de la siguiente.
+  reabrirla. Registrar cobros y pagos no se bloquea: si se registra uno con
+  fecha ya conciliada, aparece como partida en tránsito de la siguiente.
+  Anular uno conciliado con una línea de la conciliación cerrada sí da 409
+  (`repository.liberar_conciliacion`); en el período abierto, su línea se
+  desconcilia.
 
 Todas las operaciones que cambian una cuenta toman su candado
 (`_bloquear_cuenta`), igual que el cierre de su conciliación.
@@ -37,7 +40,7 @@ import asyncpg
 from . import bancos_calculos
 from .bancos_calculos import ExtractoInvalidoError
 from .contabilidad_calculos import NOMBRE_MOVIMIENTO, TIPOS_MOVIMIENTO, TIPOS_MOVIMIENTO_ENTRADA
-from .repository import DatosInvalidosError, _redondear, hoy
+from .repository import DatosInvalidosError, _redondear, bloquear_cuenta_bancaria, hoy
 
 _CERO = Decimal("0")
 
@@ -56,10 +59,24 @@ _DESCRIPCION_TIPO = "CASE m.tipo " + " ".join(
     f"WHEN '{tipo}' THEN '{nombre}'" for tipo, nombre in NOMBRE_MOVIMIENTO.items()
 ) + " ELSE m.tipo END"
 
-# Movimientos de todas las cuentas (ver docstring del módulo). `documento_id`
-# = factura (cobro) o renglón del 606 (pago); `conciliado_con` = línea del
-# extracto con que está conciliado.
-_CTE_MOVIMIENTOS = f"""
+def _filtro_movs(columna_cuenta: str, columna_id: str, cuenta: str | None, movimiento: str | None) -> str:
+    condiciones = [f"{columna_cuenta} = {cuenta}"] if cuenta else []
+    if movimiento:
+        condiciones.append(f"{columna_id} = {movimiento}")
+    return "".join(f" AND {c}" for c in condiciones)
+
+
+def _cte_movimientos(cuenta: str | None = None, *, movimiento: str | None = None) -> str:
+    """CTE `movs` / `movs_c`: movimientos de las cuentas (ver docstring del
+    módulo). `documento_id` = factura (cobro) o renglón del 606 (pago);
+    `conciliado_con` = línea del extracto con que está conciliado.
+    `cuenta` / `movimiento`: expresión SQL (p. ej. "$1") para leer solo los
+    de esa cuenta / ese id desde las tablas (con sus índices, en lugar de
+    recorrer los movimientos de todas las cuentas en cada consulta)."""
+    filtro_m = _filtro_movs("m.cuenta_id", "m.id", cuenta, movimiento)
+    filtro_co = _filtro_movs("co.cuenta_bancaria_id", "co.id", cuenta, movimiento)
+    filtro_pg = _filtro_movs("pg.cuenta_bancaria_id", "pg.id", cuenta, movimiento)
+    return f"""
     movs AS (
         SELECT 'manual'::text AS origen, m.id, m.cuenta_id, m.fecha, m.tipo,
                (CASE WHEN m.tipo IN ('deposito', 'interes', 'transferencia_entrada') THEN m.monto
@@ -67,7 +84,7 @@ _CTE_MOVIMIENTOS = f"""
                COALESCE(NULLIF(m.descripcion, ''), {_DESCRIPCION_TIPO}) AS descripcion,
                m.referencia, m.transferencia_id, NULL::uuid AS documento_id, m.creado_en
         FROM bancos.movimientos m
-        WHERE NOT m.anulado
+        WHERE NOT m.anulado{filtro_m}
         UNION ALL
         SELECT 'cobro', co.id, co.cuenta_bancaria_id, co.fecha, 'cobro', co.monto::numeric(18, 2),
                'Cobro ' || COALESCE(f.encf, '')
@@ -75,7 +92,7 @@ _CTE_MOVIMIENTOS = f"""
                co.referencia, NULL::uuid, co.factura_id, co.creado_en
         FROM ventas.cobros co
         LEFT JOIN facturacion.facturas f ON f.id = co.factura_id
-        WHERE co.cuenta_bancaria_id IS NOT NULL AND NOT co.anulado
+        WHERE co.cuenta_bancaria_id IS NOT NULL AND NOT co.anulado{filtro_co}
         UNION ALL
         SELECT 'pago', pg.id, pg.cuenta_bancaria_id, pg.fecha, 'pago', (-pg.monto)::numeric(18, 2),
                'Pago ' || COALESCE(r.ncf, '')
@@ -85,7 +102,7 @@ _CTE_MOVIMIENTOS = f"""
         LEFT JOIN compras606.registros r ON r.id = pg.registro606_id
         LEFT JOIN compras.facturas cf ON cf.registro606_id = pg.registro606_id
         LEFT JOIN recepcion.ecf_recibidos er ON er.compra606_id = pg.registro606_id
-        WHERE pg.cuenta_bancaria_id IS NOT NULL AND NOT pg.anulado AND pg.monto > 0
+        WHERE pg.cuenta_bancaria_id IS NOT NULL AND NOT pg.anulado AND pg.monto > 0{filtro_pg}
     ),
     movs_c AS (
         SELECT movs.*, el.id AS conciliado_con, el.fecha AS fecha_linea
@@ -94,20 +111,34 @@ _CTE_MOVIMIENTOS = f"""
     )
 """
 
-# Líneas de extracto con su movimiento (NULL si no está conciliada o si el
-# movimiento se anuló).
-_CTE_LINEAS = """
+
+def _cte_lineas(cuenta: str | None = None) -> str:
+    """CTE `lineas`: líneas de extracto con su movimiento (NULL si no está
+    conciliada o si el movimiento se anuló). Va después de
+    `_cte_movimientos` con la misma `cuenta`."""
+    return f"""
     lineas AS (
         SELECT el.*, mv.origen AS m_origen, mv.id AS m_id, mv.fecha AS m_fecha, mv.tipo AS m_tipo,
                mv.monto AS m_monto, mv.descripcion AS m_descripcion, mv.referencia AS m_referencia
         FROM bancos.extracto_lineas el
         LEFT JOIN movs mv ON mv.origen = el.mov_origen AND mv.id = el.mov_id
+        {f"WHERE el.cuenta_id = {cuenta}" if cuenta else ""}
     )
 """
 
-_SELECT_CUENTAS = f"""
-    WITH {_CTE_MOVIMIENTOS},
-    {_CTE_LINEAS},
+
+def _cte_cuenta(cuenta: str) -> str:
+    """Movimientos y líneas de una sola cuenta (`cuenta`: expresión SQL)."""
+    return f"{_cte_movimientos(cuenta)}, {_cte_lineas(cuenta)}"
+
+
+def _select_cuentas(cuenta: str | None = None) -> str:
+    """Cuentas con su saldo actual y lo pendiente de conciliar. Con `cuenta`
+    (expresión SQL) solo lee los movimientos de esa cuenta: agregar
+    `WHERE c.id = <cuenta>`."""
+    return f"""
+    WITH {_cte_movimientos(cuenta)},
+    {_cte_lineas(cuenta)},
     resumen_movs AS (
         SELECT m.cuenta_id,
                COALESCE(sum(m.monto) FILTER (WHERE m.fecha >= c.fecha_saldo_inicial), 0) AS neto,
@@ -121,7 +152,9 @@ _SELECT_CUENTAS = f"""
         FROM lineas GROUP BY cuenta_id
     ),
     resumen_conc AS (
-        SELECT cuenta_id, max(hasta) AS hasta FROM bancos.conciliaciones GROUP BY cuenta_id
+        SELECT cuenta_id, max(hasta) AS hasta FROM bancos.conciliaciones
+        {f"WHERE cuenta_id = {cuenta}" if cuenta else ""}
+        GROUP BY cuenta_id
     )
     SELECT c.id, c.nombre, c.banco, c.tipo, c.numero, c.moneda, c.saldo_inicial, c.fecha_saldo_inicial,
            c.cuenta_contable_id, cc.codigo AS cuenta_contable_codigo, cc.nombre AS cuenta_contable_nombre,
@@ -152,10 +185,8 @@ def _nombre_cuenta(fila: asyncpg.Record | dict[str, Any]) -> str:
 
 async def _bloquear_cuenta(conn: asyncpg.Connection, cuenta_id: uuid.UUID) -> None:
     """Candado de transacción por cuenta: serializa movimientos, conciliación
-    y cierre de la misma cuenta."""
-    await conn.execute(
-        "SELECT pg_advisory_xact_lock(hashtext('bancos.cuenta'), hashtext($1))", str(cuenta_id)
-    )
+    y cierre de la misma cuenta (también lo toman anular_cobro y anular_pago)."""
+    await bloquear_cuenta_bancaria(conn, cuenta_id)
 
 
 async def _cuenta_fila(conn: asyncpg.Connection, cuenta_id: uuid.UUID) -> asyncpg.Record:
@@ -208,12 +239,12 @@ async def listar_cuentas(pool: asyncpg.Pool, *, activa: bool | None = None) -> l
     if activa is not None:
         where, valores = "WHERE c.activa = $1", [activa]
     async with pool.acquire() as conn:
-        filas = await conn.fetch(f"{_SELECT_CUENTAS} {where} ORDER BY c.activa DESC, c.nombre", *valores)
+        filas = await conn.fetch(f"{_select_cuentas()} {where} ORDER BY c.activa DESC, c.nombre", *valores)
     return [_fila_cuenta(f) for f in filas]
 
 
 async def _cuenta(conn: asyncpg.Connection, cuenta_id: uuid.UUID) -> dict[str, Any]:
-    fila = await conn.fetchrow(f"{_SELECT_CUENTAS} WHERE c.id = $1", cuenta_id)
+    fila = await conn.fetchrow(f"{_select_cuentas('$1')} WHERE c.id = $1", cuenta_id)
     if fila is None:
         raise BancoNoEncontradoError(str(cuenta_id))
     return _fila_cuenta(fila)
@@ -287,7 +318,7 @@ async def actualizar_cuenta(pool: asyncpg.Pool, cuenta_id: uuid.UUID, campos: di
                 raise ConflictoBancosError("La cuenta tiene movimientos: no se puede cambiar su moneda")
             if "fecha_saldo_inicial" in nuevos and nuevos["fecha_saldo_inicial"] > actual["fecha_saldo_inicial"]:
                 anterior = await conn.fetchval(
-                    f"WITH {_CTE_MOVIMIENTOS} SELECT min(fecha) FROM movs WHERE cuenta_id = $1", cuenta_id
+                    f"WITH {_cte_movimientos('$1')} SELECT min(fecha) FROM movs", cuenta_id
                 )
                 if anterior is not None and anterior < nuevos["fecha_saldo_inicial"]:
                     raise ConflictoBancosError(
@@ -383,7 +414,7 @@ async def listar_movimientos(
         valores.extend([limite, offset])
         filas = await conn.fetch(
             f"""
-            WITH {_CTE_MOVIMIENTOS},
+            WITH {_cte_movimientos('$1')},
             con_saldo AS (
                 SELECT m.*, (c.saldo_inicial + sum(m.monto) OVER (
                            ORDER BY m.fecha, m.creado_en, m.origen, m.id ROWS UNBOUNDED PRECEDING))::numeric(18, 2) AS saldo
@@ -399,7 +430,7 @@ async def listar_movimientos(
         )
         totales = await conn.fetchrow(
             f"""
-            WITH {_CTE_MOVIMIENTOS}
+            WITH {_cte_movimientos('$1')}
             SELECT
                 COALESCE(sum(m.monto) FILTER (WHERE $2::date IS NOT NULL AND m.fecha < $2), 0) AS antes,
                 COALESCE(sum(m.monto) FILTER (WHERE ($3::date IS NULL OR m.fecha <= $3)), 0) AS hasta_fin,
@@ -429,7 +460,7 @@ async def listar_movimientos(
 
 async def _movimiento(conn: asyncpg.Connection, origen: str, mov_id: uuid.UUID) -> dict[str, Any] | None:
     fila = await conn.fetchrow(
-        f"WITH {_CTE_MOVIMIENTOS} SELECT * FROM movs_c WHERE origen = $1 AND id = $2", origen, mov_id
+        f"WITH {_cte_movimientos(movimiento='$2')} SELECT * FROM movs_c WHERE origen = $1", origen, mov_id
     )
     return _fila_movimiento(fila) if fila is not None else None
 
@@ -719,9 +750,9 @@ def previsualizar_extracto(contenido: bytes, mapeo: dict[str, Any] | None) -> di
     }
 
 
+# $1 = la cuenta de los extractos.
 _SELECT_EXTRACTOS = f"""
-    WITH {_CTE_MOVIMIENTOS},
-    {_CTE_LINEAS}
+    WITH {_cte_cuenta('$1')}
     SELECT e.id, e.cuenta_id, e.nombre_archivo, e.desde, e.hasta, e.saldo_final, e.importado_en,
            count(l.id)::int AS lineas, count(l.m_id)::int AS conciliadas
     FROM bancos.extractos e
@@ -730,7 +761,11 @@ _SELECT_EXTRACTOS = f"""
 
 
 async def _extracto(conn: asyncpg.Connection, extracto_id: uuid.UUID) -> dict[str, Any]:
-    fila = await conn.fetchrow(f"{_SELECT_EXTRACTOS} WHERE e.id = $1 GROUP BY e.id", extracto_id)
+    fila = await conn.fetchrow(
+        f"{_SELECT_EXTRACTOS} WHERE e.cuenta_id = $1 AND e.id = $2 GROUP BY e.id",
+        await conn.fetchval("SELECT cuenta_id FROM bancos.extractos WHERE id = $1", extracto_id),
+        extracto_id,
+    )
     if fila is None:
         raise BancoNoEncontradoError(str(extracto_id))
     return dict(fila)
@@ -866,10 +901,9 @@ async def _lineas(
 ) -> list[asyncpg.Record]:
     return await conn.fetch(
         f"""
-        WITH {_CTE_MOVIMIENTOS},
-        {_CTE_LINEAS}
+        WITH {_cte_cuenta('$1')}
         SELECT * FROM lineas
-        WHERE cuenta_id = $1 AND ($2::date IS NULL OR fecha > $2) AND ($3::date IS NULL OR fecha <= $3)
+        WHERE ($2::date IS NULL OR fecha > $2) AND ($3::date IS NULL OR fecha <= $3)
           AND (NOT $4 OR m_id IS NULL)
         ORDER BY fecha, fila, id
         """,
@@ -884,9 +918,9 @@ async def _movimientos_pendientes(
     el saldo inicial, hasta `hasta`)."""
     return await conn.fetch(
         f"""
-        WITH {_CTE_MOVIMIENTOS}
+        WITH {_cte_movimientos('$1')}
         SELECT m.* FROM movs_c m JOIN bancos.cuentas c ON c.id = m.cuenta_id
-        WHERE m.cuenta_id = $1 AND m.conciliado_con IS NULL AND m.fecha >= c.fecha_saldo_inicial
+        WHERE m.conciliado_con IS NULL AND m.fecha >= c.fecha_saldo_inicial
           AND ($2::date IS NULL OR m.fecha <= $2)
         ORDER BY m.fecha, m.creado_en
         """,
@@ -900,8 +934,7 @@ async def _cuadre(conn: asyncpg.Connection, cuenta: asyncpg.Record, hasta: date)
     del banco sin conciliar después de la última conciliación."""
     fila = await conn.fetchrow(
         f"""
-        WITH {_CTE_MOVIMIENTOS},
-        {_CTE_LINEAS}
+        WITH {_cte_cuenta('$1')}
         SELECT
             (SELECT COALESCE(sum(m.monto), 0) FROM movs m
              WHERE m.cuenta_id = $1 AND m.fecha >= $2 AND m.fecha <= $3) AS neto_libros,
@@ -923,9 +956,6 @@ async def _cuadre(conn: asyncpg.Connection, cuenta: asyncpg.Record, hasta: date)
             (SELECT COALESCE(sum(l.monto), 0) FROM lineas l
              WHERE l.cuenta_id = $1 AND l.fecha >= $2 AND ($4::date IS NULL OR l.fecha > $4) AND l.fecha <= $3)
                 AS neto_lineas,
-            (SELECT l.saldo FROM lineas l
-             WHERE l.cuenta_id = $1 AND l.fecha <= $3 AND l.saldo IS NOT NULL
-             ORDER BY l.fecha DESC, l.fila DESC NULLS LAST LIMIT 1) AS saldo_ultima_linea,
             (SELECT e.saldo_final FROM bancos.extractos e
              WHERE e.cuenta_id = $1 AND e.hasta = $3 AND e.saldo_final IS NOT NULL
              ORDER BY e.importado_en DESC LIMIT 1) AS saldo_extracto,
@@ -934,10 +964,15 @@ async def _cuadre(conn: asyncpg.Connection, cuenta: asyncpg.Record, hasta: date)
         cuenta["id"], cuenta["fecha_saldo_inicial"], hasta, await _conciliada_hasta(conn, cuenta["id"]),
     )
     saldo_libros = cuenta["saldo_inicial"] + fila["neto_libros"]
+    advertencias: list[str] = []
+    saldo_linea = None
+    if fila["saldo_extracto"] is None:
+        saldo_linea, advertencia = await _saldo_ultima_linea(conn, cuenta["id"], hasta)
+        advertencias += [advertencia] if advertencia else []
     if fila["saldo_extracto"] is not None:
         saldo_banco, origen = fila["saldo_extracto"], "extracto"
-    elif fila["saldo_ultima_linea"] is not None:
-        saldo_banco, origen = fila["saldo_ultima_linea"], "ultima_linea"
+    elif saldo_linea is not None:
+        saldo_banco, origen = saldo_linea, "ultima_linea"
     else:
         base = fila["saldo_anterior"] if fila["saldo_anterior"] is not None else cuenta["saldo_inicial"]
         saldo_banco, origen = base + fila["neto_lineas"], "calculado"
@@ -952,7 +987,34 @@ async def _cuadre(conn: asyncpg.Connection, cuenta: asyncpg.Record, hasta: date)
         "lineas_conciliadas": fila["lineas_conciliadas"],
         "saldo_banco_sugerido": saldo_banco,
         "origen_saldo_banco": origen,
+        "advertencias": advertencias,
     }
+
+
+async def _saldo_ultima_linea(
+    conn: asyncpg.Connection, cuenta_id: uuid.UUID, hasta: date
+) -> tuple[Decimal | None, str | None]:
+    """Saldo (columna "Balance") de la última línea, en el tiempo, con fecha
+    <= `hasta`: la del extracto que tiene la fecha más reciente (el último
+    importado si hay varios). Dentro del extracto el orden (más antiguas o
+    más recientes primero) sale del saldo corrido; ver
+    `bancos_calculos.saldo_al_corte`."""
+    extracto_id = await conn.fetchval(
+        """
+        SELECT l.extracto_id FROM bancos.extracto_lineas l JOIN bancos.extractos e ON e.id = l.extracto_id
+        WHERE l.cuenta_id = $1 AND l.fecha <= $2 AND l.saldo IS NOT NULL
+        ORDER BY l.fecha DESC, e.importado_en DESC
+        LIMIT 1
+        """,
+        cuenta_id, hasta,
+    )
+    if extracto_id is None:
+        return None, None
+    lineas = await conn.fetch(
+        "SELECT fila, fecha, monto, saldo FROM bancos.extracto_lineas WHERE extracto_id = $1 ORDER BY fila, id",
+        extracto_id,
+    )
+    return bancos_calculos.saldo_al_corte([dict(x) for x in lineas], hasta)
 
 
 async def conciliacion(pool: asyncpg.Pool, cuenta_id: uuid.UUID, *, hasta: date | None = None) -> dict[str, Any]:
@@ -984,7 +1046,7 @@ async def conciliacion(pool: asyncpg.Pool, cuenta_id: uuid.UUID, *, hasta: date 
         "resumen": {
             **{k: cuadre[k] for k in (
                 "saldo_libros", "transito_entradas", "transito_salidas", "movimientos_en_transito", "libros_ajustado",
-                "lineas_pendientes", "lineas_conciliadas", "origen_saldo_banco",
+                "lineas_pendientes", "lineas_conciliadas", "origen_saldo_banco", "advertencias",
             )},
             "lineas_total": len(lineas),
             "saldo_banco": cuadre["saldo_banco_sugerido"],
@@ -1001,7 +1063,7 @@ async def _linea_para_cambiar(conn: asyncpg.Connection, linea_id: uuid.UUID) -> 
         raise BancoNoEncontradoError(str(linea_id))
     await _bloquear_cuenta(conn, cuenta_id)
     linea = await conn.fetchrow(
-        f"WITH {_CTE_MOVIMIENTOS}, {_CTE_LINEAS} SELECT * FROM lineas WHERE id = $1", linea_id
+        f"WITH {_cte_cuenta('$2')} SELECT * FROM lineas WHERE id = $1", linea_id, cuenta_id
     )
     cuenta = await _cuenta_fila(conn, cuenta_id)
     conciliada = await _conciliada_hasta(conn, cuenta_id)
@@ -1041,7 +1103,11 @@ async def _conciliar(conn: asyncpg.Connection, linea: asyncpg.Record, origen: st
 
 
 async def _linea(conn: asyncpg.Connection, linea_id: uuid.UUID) -> dict[str, Any]:
-    fila = await conn.fetchrow(f"WITH {_CTE_MOVIMIENTOS}, {_CTE_LINEAS} SELECT * FROM lineas WHERE id = $1", linea_id)
+    fila = await conn.fetchrow(
+        f"WITH {_cte_cuenta('(SELECT cuenta_id FROM bancos.extracto_lineas WHERE id = $1)')} "
+        "SELECT * FROM lineas WHERE id = $1",
+        linea_id,
+    )
     return _fila_linea(fila)
 
 
@@ -1114,6 +1180,7 @@ async def _calcular_sugerencias(
         [{"origen": f["origen"], "id": f["id"], "fecha": f["fecha"], "monto": f["monto"],
           "referencia": f["referencia"], "descripcion": f["descripcion"], "fila": f} for f in movimientos],
         dias=dias,
+        hasta=hasta,
     )
 
 

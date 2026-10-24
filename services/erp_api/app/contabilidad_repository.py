@@ -5,8 +5,9 @@ fijos con su depreciación.
 
 **Asientos automáticos** (ver contabilidad_calculos y docs/ERP_API.md,
 "Contabilidad"): `generar_asientos(desde, hasta)` lee los documentos del
-rango -- e-CF de venta aceptados, cobros, renglones del 606, pagos a
-proveedores, movimientos y transferencias bancarias --, arma su asiento,
+rango -- e-CF de venta aceptados, cobros de facturas aceptadas, renglones
+del 606, pagos a proveedores, movimientos y transferencias bancarias y el
+ajuste mensual por proporcionalidad del ITBIS --, arma su asiento,
 resuelve los conceptos a cuentas con `contabilidad.cuentas_por_defecto` y:
 
 - crea el que falta (idempotente por (`origen`, `origen_id`));
@@ -17,7 +18,9 @@ resuelve los conceptos a cuentas con `contabilidad.cuentas_por_defecto` y:
   e-CF rechazado, renglón del 606 borrado).
 
 Lo que no se puede contabilizar (sin cuenta por defecto, 606 sin
-clasificar, venta gratuita...) va a `no_contabilizados` con el motivo. Nunca
+clasificar, venta gratuita...) va a `no_contabilizados` con el motivo (y si
+el documento tenía asiento, se anula). La compra y los pagos de un mismo
+renglón del 606 se regeneran juntos (`_relacionados_606`). Nunca
 corre dentro de las transacciones de ventas/compras/bancos: es a pedido
 (`POST /contabilidad/asientos/generar`) y no bloquea esos flujos.
 """
@@ -25,6 +28,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import uuid
 from datetime import date
 from decimal import Decimal
@@ -33,7 +37,9 @@ from typing import Any
 import asyncpg
 
 from . import contabilidad_calculos as cc
-from .compras_repository import _ES_NOTA_CREDITO, _TOTAL_CXP, _fecha_606
+from . import impuestos_repository, precalculos
+from .impuestos_repository import ConflictoImpuestosError
+from .compras_repository import _ES_NOTA_CREDITO, _TOTAL_CXP, _exigir_no_presentada, _fecha_606
 from .contabilidad_calculos import AsientoPropuesto, NoContabilizableError
 from .formatos import TIPOS_VENTA_607
 from .precalculos import nombre_periodo
@@ -757,22 +763,34 @@ async def _fuente_ventas(conn, ctx, desde, hasta, ids=None) -> list[Propuesta]:
 
 
 async def _fuente_cobros(conn, ctx, desde, hasta, ids=None) -> list[Propuesta]:
+    """Solo los cobros de facturas aceptadas por la DGII (la venta sin
+    aceptar no se contabiliza: el cobro iría contra una CxC que el mayor no
+    tiene); los demás van a `no_contabilizados`."""
     filas = await conn.fetch(
         f"""
-        SELECT co.*, f.encf,
+        SELECT co.*, f.encf, f.estado AS estado_factura,
                COALESCE(f.datos::jsonb #>> '{{Encabezado,Comprador,RazonSocialComprador}}', '') AS cliente
         FROM ventas.cobros co LEFT JOIN facturacion.facturas f ON f.id = co.factura_id
         WHERE NOT co.anulado AND {_filtro('co.id', 'co.fecha', ids)}
         """,
         desde, hasta, ids,
     )
-    return [
-        (("cobro", str(f["id"])), cc.asiento_cobro(
-            cobro_id=str(f["id"]), fecha=f["fecha"], monto=f["monto"], encf=f["encf"], cliente=f["cliente"],
-            cuenta_banco=ctx.clave_banco(f["cuenta_bancaria_id"], f["metodo"], pago=False),
-        ))
-        for f in filas
-    ]
+    resultado = []
+    for f in filas:
+        if f["estado_factura"] != "aceptado":
+            propuesta = _no_contabilizable(
+                "cobro", str(f["id"]), f["fecha"], f["encf"], f"Cobro {f['encf'] or ''} · {f['cliente']}".strip(" ·"),
+                f["monto"],
+                f"La factura {f['encf'] or ''} no está aceptada por la DGII (estado «{f['estado_factura'] or 'sin factura'}»): "
+                "su venta no está contabilizada; el cobro se contabiliza cuando la DGII la acepte",
+            )
+        else:
+            propuesta = cc.asiento_cobro(
+                cobro_id=str(f["id"]), fecha=f["fecha"], monto=f["monto"], encf=f["encf"], cliente=f["cliente"],
+                cuenta_banco=ctx.clave_banco(f["cuenta_bancaria_id"], f["metodo"], pago=False),
+            )
+        resultado.append((("cobro", str(f["id"])), propuesta))
+    return resultado
 
 
 async def _fuente_compras(conn, ctx, desde, hasta, ids=None) -> list[Propuesta]:
@@ -780,7 +798,9 @@ async def _fuente_compras(conn, ctx, desde, hasta, ids=None) -> list[Propuesta]:
         f"""
         SELECT r.id, r.ncf, r.tipo_bienes_servicios, r.itbis_facturado, r.itbis_costo, fc.fecha,
                {_TOTAL_CXP}::numeric(18, 2) AS total, {_ES_NOTA_CREDITO} AS es_nota_credito,
-               COALESCE(NULLIF(cf.proveedor_nombre, ''), er.razon_social_emisor, r.rnc_cedula) AS proveedor
+               COALESCE(NULLIF(cf.proveedor_nombre, ''), er.razon_social_emisor, r.rnc_cedula) AS proveedor,
+               r.itbis_retenido, r.monto_retencion_renta,
+               EXISTS (SELECT 1 FROM compras.pagos p WHERE p.registro606_id = r.id AND NOT p.anulado) AS tiene_pagos
         FROM compras606.registros r
         LEFT JOIN compras.facturas cf ON cf.registro606_id = r.id
         LEFT JOIN recepcion.ecf_recibidos er ON er.compra606_id = r.id
@@ -797,6 +817,9 @@ async def _fuente_compras(conn, ctx, desde, hasta, ids=None) -> list[Propuesta]:
                 tipo_bienes_servicios=f["tipo_bienes_servicios"], total=f["total"],
                 itbis_facturado=f["itbis_facturado"], itbis_costo=f["itbis_costo"],
                 es_nota_credito=f["es_nota_credito"], pagada_al_contado=f["ncf"].upper().startswith("E43"),
+                # Retenciones del 606 sin pagos: las lleva la compra (con pagos, el último pago).
+                itbis_retenido_606=_CERO if f["tiene_pagos"] else f["itbis_retenido"],
+                isr_retenido_606=_CERO if f["tiene_pagos"] else f["monto_retencion_renta"],
             )
         except NoContabilizableError as exc:
             propuesta = _no_contabilizable("compra", str(f["id"]), f["fecha"], f["ncf"], f"Compra {f['ncf']} · {f['proveedor']}",
@@ -808,7 +831,17 @@ async def _fuente_compras(conn, ctx, desde, hasta, ids=None) -> list[Propuesta]:
 async def _fuente_pagos(conn, ctx, desde, hasta, ids=None) -> list[Propuesta]:
     filas = await conn.fetch(
         f"""
-        SELECT pg.*, r.ncf, COALESCE(NULLIF(cf.proveedor_nombre, ''), er.razon_social_emisor, r.rnc_cedula, '') AS proveedor
+        SELECT pg.*, r.ncf, COALESCE(NULLIF(cf.proveedor_nombre, ''), er.razon_social_emisor, r.rnc_cedula, '') AS proveedor,
+               COALESCE(r.itbis_retenido, 0) AS itbis_606, COALESCE(r.monto_retencion_renta, 0) AS isr_606,
+               pg.id = (
+                   SELECT u.id FROM compras.pagos u WHERE u.registro606_id = pg.registro606_id AND NOT u.anulado
+                   ORDER BY u.fecha DESC, u.creado_en DESC, u.id DESC LIMIT 1
+               ) AS es_ultimo,
+               EXISTS (
+                   SELECT 1 FROM compras.pagos o
+                   WHERE o.registro606_id = pg.registro606_id AND NOT o.anulado
+                     AND (o.retencion_isr > 0 OR o.retencion_itbis > 0)
+               ) AS algun_pago_retiene
         FROM compras.pagos pg
         LEFT JOIN compras606.registros r ON r.id = pg.registro606_id
         LEFT JOIN compras.facturas cf ON cf.registro606_id = pg.registro606_id
@@ -817,14 +850,19 @@ async def _fuente_pagos(conn, ctx, desde, hasta, ids=None) -> list[Propuesta]:
         """,
         desde, hasta, ids,
     )
-    return [
-        (("pago", str(f["id"])), cc.asiento_pago(
+    resultado = []
+    for f in filas:
+        # Retenciones que están en el 606 sin que ningún pago las lleve
+        # (clasificadas antes de pagar, p. ej. un E41): van con el último pago.
+        lleva_606 = f["es_ultimo"] and not f["algun_pago_retiene"]
+        resultado.append((("pago", str(f["id"])), cc.asiento_pago(
             pago_id=str(f["id"]), fecha=f["fecha"], ncf=f["ncf"], proveedor=f["proveedor"], monto=f["monto"],
             retencion_isr=f["retencion_isr"], retencion_itbis=f["retencion_itbis"],
             cuenta_banco=ctx.clave_banco(f["cuenta_bancaria_id"], f["metodo"], pago=True),
-        ))
-        for f in filas
-    ]
+            itbis_retenido_606=f["itbis_606"] if lleva_606 else _CERO,
+            isr_retenido_606=f["isr_606"] if lleva_606 else _CERO,
+        )))
+    return resultado
 
 
 async def _fuente_movimientos(conn, ctx, desde, hasta, ids=None) -> list[Propuesta]:
@@ -869,11 +907,64 @@ async def _fuente_transferencias(conn, ctx, desde, hasta, ids=None) -> list[Prop
     return resultado
 
 
+async def _fuente_proporcionalidad(conn, ctx, desde, hasta, ids=None) -> list[Propuesta]:
+    """Ajuste por proporcionalidad de cada mes que termina en [desde,
+    hasta] (o de los períodos `ids`), con el coeficiente del IT-1 del mes
+    (`precalculos.itbis_adelantado_admitido`). Opcional: sin cuenta por
+    defecto `itbis_no_admitido` no se genera (y se anulan los que había)."""
+    if "itbis_no_admitido" not in ctx.mapeo:
+        return []
+    if ids is None:
+        periodos, periodo = [], cc.periodo_de(desde)
+        while periodo <= cc.periodo_de(hasta):
+            if desde <= cc.ultimo_dia(periodo) <= hasta:
+                periodos.append(periodo)
+            periodo = cc.siguiente_periodo(periodo)
+    else:
+        periodos = ids
+    resultado = []
+    for periodo in periodos:
+        ventas, compras, _ = await impuestos_repository._datos_it1(conn, periodo)
+        calculo = precalculos.itbis_adelantado_admitido(ventas, compras)
+        if calculo.no_admitido > 0:
+            porcentaje = cc.redondear(calculo.proporcion * 100)
+            resultado.append((("proporcionalidad", periodo), cc.asiento_proporcionalidad(
+                periodo, calculo.no_admitido, porcentaje, nombre_periodo(periodo),
+            )))
+    return resultado
+
+
 _FUENTES = {
     "venta": _fuente_ventas, "nota_credito": _fuente_ventas, "nota_debito": _fuente_ventas,
     "cobro": _fuente_cobros, "compra": _fuente_compras, "pago": _fuente_pagos,
     "movimiento": _fuente_movimientos, "transferencia": _fuente_transferencias,
+    "proporcionalidad": _fuente_proporcionalidad,
 }
+
+
+async def _relacionados_606(
+    conn: asyncpg.Connection, desde: date, hasta: date, compras: list[str]
+) -> list[tuple[str, str]]:
+    """La compra y los pagos de cada renglón del 606 que tiene una compra o
+    un pago (vigente o anulado) en el rango: las retenciones del 606 sin
+    pago que las lleve van en la compra o en el último pago, así que un
+    pago nuevo o anulado cambia también el asiento de la compra o de otro
+    pago del mismo renglón, aunque sean de otro mes."""
+    filas = await conn.fetch(
+        """
+        WITH renglones AS (
+            SELECT registro606_id AS id FROM compras.pagos
+            WHERE registro606_id IS NOT NULL AND fecha BETWEEN $1 AND $2
+            UNION
+            SELECT id FROM compras606.registros WHERE id::text = ANY($3::text[])
+        )
+        SELECT 'compra' AS origen, r.id::text AS origen_id FROM compras606.registros r JOIN renglones x ON x.id = r.id
+        UNION ALL
+        SELECT 'pago', p.id::text FROM compras.pagos p JOIN renglones x ON x.id = p.registro606_id WHERE NOT p.anulado
+        """,
+        desde, hasta, compras,
+    )
+    return [(f["origen"], f["origen_id"]) for f in filas]
 
 
 async def _sincronizar(conn: asyncpg.Connection, desde: date, hasta: date, *, aplicar: bool) -> dict[str, Any]:
@@ -881,6 +972,14 @@ async def _sincronizar(conn: asyncpg.Connection, desde: date, hasta: date, *, ap
     propuestas: dict[tuple[str, str], Any] = {}
     for fuente in dict.fromkeys(_FUENTES.values()):
         for clave, propuesta in await fuente(conn, ctx, desde, hasta):
+            propuestas[clave] = propuesta
+    relacionados: dict[Any, list[str]] = {}
+    compras = [origen_id for origen, origen_id in propuestas if origen == "compra"]
+    for origen, origen_id in await _relacionados_606(conn, desde, hasta, compras):
+        if (origen, origen_id) not in propuestas:
+            relacionados.setdefault(_FUENTES[origen], []).append(origen_id)
+    for fuente, ids in relacionados.items():
+        for clave, propuesta in await fuente(conn, ctx, desde, hasta, ids):
             propuestas[clave] = propuesta
     claves = [origen_id for _, origen_id in propuestas]
     existentes = {
@@ -922,6 +1021,17 @@ async def _sincronizar(conn: asyncpg.Connection, desde: date, hasta: date, *, ap
         existente = existentes.get(clave)
         if isinstance(propuesta, dict):
             resultado["no_contabilizados"].append(propuesta)
+            if existente is not None:
+                # El documento ya no se puede contabilizar (p. ej. el 606 quedó
+                # sin clasificar): su asiento anterior no puede quedar vigente.
+                resultado["anulados"] += 1
+                resultado["pendientes"].append({
+                    "accion": "anular", "origen": clave[0], "origen_id": clave[1], "fecha": existente["fecha"],
+                    "descripcion": existente["concepto"], "monto": existente["total"],
+                    "asiento_numero": numero_asiento(existente["numero"]),
+                })
+                if aplicar:
+                    await _anular(conn, existente["id"], f"El documento ya no se puede contabilizar: {propuesta['motivo']}")
             continue
         try:
             lineas = ctx.resolver(propuesta)
@@ -972,7 +1082,9 @@ async def generar_asientos(pool: asyncpg.Pool, desde: date, hasta: date) -> dict
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext('contabilidad.generar'))")
-            return await _sincronizar(conn, desde, hasta, aplicar=True)
+            resultado = await _sincronizar(conn, desde, hasta, aplicar=True)
+    _CONTEOS_PENDIENTES.clear()
+    return resultado
 
 
 async def pendientes_de_contabilizar(pool: asyncpg.Pool, desde: date, hasta: date) -> dict[str, Any]:
@@ -1126,7 +1238,7 @@ def _seccion(cuentas: list[dict[str, Any]], acumulado, tipo: str, signo_resultad
             continue
         monto = (d - cr) * signo_resultado
         if c["nivel"] == 1:
-            total = monto
+            total += monto
         filas.append({"cuenta_id": c["id"], "codigo": c["codigo"], "nombre": c["nombre"], "nivel": c["nivel"],
                       "acepta_movimientos": c["acepta_movimientos"], "monto": monto})
     if not any(f["nivel"] == 1 for f in filas):
@@ -1181,13 +1293,38 @@ async def balance_general(pool: asyncpg.Pool, fecha: date) -> dict[str, Any]:
     }
 
 
+# Conteo de documentos por contabilizar / no contabilizables del tablero:
+# (pool, desde, hasta) -> (momento, por contabilizar, no contabilizables). La
+# simulación completa (`pendientes_de_contabilizar`) lee y arma todos los
+# documentos del rango: el tablero la reutiliza unos segundos en lugar de
+# repetirla en cada carga. `generar_asientos` lo vacía.
+_CONTEOS_PENDIENTES: dict[tuple[int, date, date], tuple[float, int, int]] = {}
+_SEGUNDOS_CONTEOS = 60.0
+
+
+async def _conteo_pendientes(pool: asyncpg.Pool, desde: date, hasta: date) -> tuple[int, int]:
+    ahora = time.monotonic()
+    clave = (id(pool), desde, hasta)
+    guardado = _CONTEOS_PENDIENTES.get(clave)
+    if guardado is not None and ahora - guardado[0] < _SEGUNDOS_CONTEOS:
+        return guardado[1], guardado[2]
+    pendientes = await pendientes_de_contabilizar(pool, desde, hasta)
+    conteo = (len(pendientes["pendientes"]), len(pendientes["no_contabilizados"]))
+    if len(_CONTEOS_PENDIENTES) > 64:
+        _CONTEOS_PENDIENTES.clear()
+    _CONTEOS_PENDIENTES[clave] = (ahora, *conteo)
+    return conteo
+
+
 async def resumen(pool: asyncpg.Pool, desde: date, hasta: date) -> dict[str, Any]:
     """Tablero de Contabilidad: totales del balance al `hasta`, resultado del
-    período, asientos del período y documentos pendientes de contabilizar."""
+    período, asientos del período y documentos pendientes de contabilizar
+    (conteo de hasta `_SEGUNDOS_CONTEOS` de antigüedad; el detalle exacto es
+    `GET /contabilidad/asientos/pendientes`)."""
     _validar_rango(desde, hasta)
     balance = await balance_general(pool, hasta)
     resultados = await estado_resultados(pool, desde, hasta)
-    pendientes = await pendientes_de_contabilizar(pool, desde, hasta)
+    por_contabilizar, no_contabilizables = await _conteo_pendientes(pool, desde, hasta)
     async with pool.acquire() as conn:
         conteo = await conn.fetchrow(
             """
@@ -1206,8 +1343,8 @@ async def resumen(pool: asyncpg.Pool, desde: date, hasta: date) -> dict[str, Any
         "gastos": resultados["gastos"]["total"], "utilidad_neta": resultados["utilidad_neta"],
         "asientos_contabilizados": conteo["contabilizados"], "asientos_manuales": conteo["manuales"],
         "borradores": conteo["borradores"],
-        "documentos_por_contabilizar": len(pendientes["pendientes"]),
-        "documentos_no_contabilizables": len(pendientes["no_contabilizados"]),
+        "documentos_por_contabilizar": por_contabilizar,
+        "documentos_no_contabilizables": no_contabilizables,
     }
 
 
@@ -1221,7 +1358,25 @@ def _activo_calculo(fila: asyncpg.Record | dict[str, Any]) -> cc.Activo:
         categoria=fila["categoria"], metodo=fila["metodo"], costo=fila["costo"], valor_residual=fila["valor_residual"],
         vida_util_meses=fila["vida_util_meses"], depreciar_desde=fila["depreciar_desde"],
         depreciacion_acumulada_inicial=fila["depreciacion_acumulada_inicial"], baja_periodo=baja,
+        fecha_adquisicion=fila["fecha_adquisicion"], fecha_baja=fila["fecha_baja"], valor_venta=fila["valor_venta"],
     )
+
+
+# Campos que cambian la depreciación fiscal (IR-2) del activo.
+_CAMPOS_FISCALES = ("categoria", "fecha_adquisicion", "costo", "depreciar_desde", "depreciacion_acumulada_inicial")
+
+
+async def _exigir_ir2_abierto(conn: asyncpg.Connection, desde_anio: int) -> None:
+    """409 si el IR-2 de `desde_anio` o de un año posterior (hasta el actual)
+    ya está marcado como presentado: la depreciación fiscal de las
+    categorías 2 y 3 pasa de un año al siguiente (cuenta de la categoría),
+    así que cambiar un activo cambia la de todos los años desde que entró.
+    Toma el candado de cada declaración (dentro de una transacción)."""
+    for anio in range(desde_anio, hoy().year + 1):
+        try:
+            await _exigir_no_presentada(conn, "ir2", f"{anio:04d}")
+        except ConflictoImpuestosError as exc:
+            raise ConflictoContabilidadError(f"El cambio altera la depreciación fiscal del IR-2. {exc}") from None
 
 
 _SELECT_ACTIVOS = """
@@ -1320,6 +1475,8 @@ async def crear_activo(pool: asyncpg.Pool, **campos: Any) -> dict[str, Any]:
     async with pool.acquire() as conn:
         async with conn.transaction():
             await _validar_cuenta_activo(conn, datos["cuenta_activo_id"])
+            nuevo = _activo_calculo(datos | {"fecha_baja": None, "valor_venta": None})
+            await _exigir_ir2_abierto(conn, cc.anio_de_entrada(nuevo))
             columnas = list(datos)
             activo_id = await conn.fetchval(
                 f"INSERT INTO contabilidad.activos_fijos ({', '.join(columnas)}) "
@@ -1366,6 +1523,10 @@ async def actualizar_activo(pool: asyncpg.Pool, activo_id: uuid.UUID, campos: di
             datos["valor_residual"] = _redondear(datos["valor_residual"] or _CERO)
             datos["depreciacion_acumulada_inicial"] = _redondear(datos["depreciacion_acumulada_inicial"] or _CERO)
             _validar_activo(datos)
+            if any(datos[k] != actual[k] for k in _CAMPOS_FISCALES):
+                await _exigir_ir2_abierto(conn, min(
+                    cc.anio_de_entrada(_activo_calculo(actual)), cc.anio_de_entrada(_activo_calculo(datos))
+                ))
             if "cuenta_activo_id" in nuevos:
                 await _validar_cuenta_activo(conn, nuevos["cuenta_activo_id"])
             columnas = [c for c in _CAMPOS_ACTIVO if c in nuevos]
@@ -1378,14 +1539,28 @@ async def actualizar_activo(pool: asyncpg.Pool, activo_id: uuid.UUID, campos: di
             return await _activo(conn, activo_id)
 
 
-async def dar_baja_activo(pool: asyncpg.Pool, activo_id: uuid.UUID, fecha: date | None) -> dict[str, Any]:
+async def dar_baja_activo(
+    pool: asyncpg.Pool, activo_id: uuid.UUID, fecha: date | None, valor_venta: Decimal | None = None
+) -> dict[str, Any]:
     """Deja de depreciarse desde el mes siguiente a la baja (409 si ya hay
-    depreciación registrada después de ese mes). `fecha` null = revertir la baja."""
+    depreciación registrada después de ese mes). `valor_venta` = lo que se
+    cobró si se vendió (rebaja la cuenta fiscal de su categoría; ver
+    `contabilidad_calculos.depreciacion_fiscal_del_anio`). `fecha` null =
+    revertir la baja. 409 si cambia un IR-2 ya presentado."""
+    if valor_venta is not None:
+        valor_venta = _redondear(valor_venta)
+        if valor_venta < 0:
+            raise DatosInvalidosError("El valor de venta no puede ser negativo")
+        if fecha is None:
+            raise DatosInvalidosError("El valor de venta requiere la fecha de la baja")
     async with pool.acquire() as conn:
         async with conn.transaction():
             actual = await conn.fetchrow("SELECT * FROM contabilidad.activos_fijos WHERE id = $1 FOR UPDATE", activo_id)
             if actual is None:
                 raise ContabilidadNoEncontradaError(str(activo_id))
+            if (fecha, valor_venta) != (actual["fecha_baja"], actual["valor_venta"]):
+                anios = [f.year for f in (fecha, actual["fecha_baja"]) if f is not None]
+                await _exigir_ir2_abierto(conn, max(min(anios), cc.anio_de_entrada(_activo_calculo(actual))))
             if fecha is not None:
                 if fecha < actual["fecha_adquisicion"]:
                     raise DatosInvalidosError("La baja no puede ser anterior a la adquisición")
@@ -1399,8 +1574,9 @@ async def dar_baja_activo(pool: asyncpg.Pool, activo_id: uuid.UUID, fecha: date 
                         "antes de darlo de baja en esa fecha"
                     )
             await conn.execute(
-                "UPDATE contabilidad.activos_fijos SET fecha_baja = $2, actualizado_en = now() WHERE id = $1",
-                activo_id, fecha,
+                "UPDATE contabilidad.activos_fijos SET fecha_baja = $2, valor_venta = $3, actualizado_en = now()"
+                " WHERE id = $1",
+                activo_id, fecha, valor_venta,
             )
             return await _activo(conn, activo_id)
 
@@ -1408,8 +1584,10 @@ async def dar_baja_activo(pool: asyncpg.Pool, activo_id: uuid.UUID, fecha: date 
 async def eliminar_activo(pool: asyncpg.Pool, activo_id: uuid.UUID) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
-            if not await conn.fetchval("SELECT 1 FROM contabilidad.activos_fijos WHERE id = $1", activo_id):
+            actual = await conn.fetchrow("SELECT * FROM contabilidad.activos_fijos WHERE id = $1 FOR UPDATE", activo_id)
+            if actual is None:
                 raise ContabilidadNoEncontradaError(str(activo_id))
+            await _exigir_ir2_abierto(conn, cc.anio_de_entrada(_activo_calculo(actual)))
             if await conn.fetchval("SELECT 1 FROM contabilidad.depreciaciones WHERE activo_id = $1 LIMIT 1", activo_id):
                 raise ConflictoContabilidadError(
                     "El activo tiene depreciación registrada: dele de baja en lugar de eliminarlo"
@@ -1423,6 +1601,7 @@ async def tabla_depreciacion(pool: asyncpg.Pool, activo_id: uuid.UUID, *, hasta:
     registrado, y la depreciación fiscal (método DGII) de cada año."""
     async with pool.acquire() as conn:
         activo = await _activo(conn, activo_id)
+        todos = await conn.fetch(_SELECT_ACTIVOS_FISCAL)
         registradas = {
             f["periodo"]: f for f in await conn.fetch(
                 """
@@ -1445,8 +1624,14 @@ async def tabla_depreciacion(pool: asyncpg.Pool, activo_id: uuid.UUID, *, hasta:
             "registrada": registro is not None, "monto_registrado": registro["monto"] if registro else None,
             "asiento_numero": numero_asiento(registro["numero"]) if registro else None,
         })
-    anios = sorted({p[:4] for p in cuotas} | ({hasta[:4]} if hasta >= activo["depreciar_desde"] else set()))
-    fiscal = [{"anio": a, "depreciacion": cc.depreciacion_del_anio(calculo, int(a), metodo="dgii")} for a in anios]
+    # Fiscal: la parte del activo en la depreciación del año (cuenta de su
+    # categoría para la 2 y la 3; ver depreciacion_fiscal_del_anio).
+    calculos = [_activo_calculo(f) for f in todos]
+    indice = next(i for i, f in enumerate(todos) if f["id"] == activo_id)
+    fiscal = [
+        {"anio": f"{a:04d}", "depreciacion": cc.depreciacion_fiscal_del_anio(calculos, a).por_activo.get(indice, _CERO)}
+        for a in range(cc.anio_de_entrada(calculo), int(hasta[:4]) + 1)
+    ]
     return {"activo": activo, "hasta": hasta, "cuotas": filas, "fiscal": fiscal}
 
 
@@ -1563,25 +1748,43 @@ async def registrar_depreciacion(pool: asyncpg.Pool, periodo: str) -> dict[str, 
     return {"asiento": asiento, "total": total, "activos": cuotas, "advertencias": _advertencias_depreciacion(cuotas, periodo)}
 
 
+# Todos los activos en un orden fijo (el reparto de centavos de la cuenta
+# de cada categoría depende del orden).
+_SELECT_ACTIVOS_FISCAL = "SELECT * FROM contabilidad.activos_fijos ORDER BY categoria, descripcion, id"
+
+
 async def depreciacion_fiscal(conn: asyncpg.Connection, anio: str) -> dict[str, Any]:
-    """Depreciación fiscal del año (método del Art. 287 para todos los
-    activos, sea cual sea el de sus asientos): la sugerencia del ajuste
-    "Depreciación del ejercicio" del IR-2. `total` es None si no hay activos
-    registrados (el IR-2 sigue pidiéndola a mano)."""
-    filas = await conn.fetch(
-        "SELECT * FROM contabilidad.activos_fijos WHERE depreciar_desde <= $1 ORDER BY categoria, descripcion",
-        f"{anio}12",
-    )
-    activos = []
-    for fila in filas:
-        monto = cc.depreciacion_del_anio(_activo_calculo(fila), int(anio), metodo="dgii")
-        if monto:
-            activos.append({
-                "activo_id": fila["id"], "descripcion": fila["descripcion"], "categoria": fila["categoria"],
-                "tasa_dgii": cc.TASAS_CATEGORIA[fila["categoria"]] * 100, "depreciacion": monto,
-            })
-    total = sum((a["depreciacion"] for a in activos), _CERO)
-    return {"anio": anio, "total": total if filas else None, "activos": activos}
+    """Depreciación fiscal del año (Art. 287 para todos los activos, sea
+    cual sea el método de sus asientos; categorías 2 y 3 por cuenta de
+    categoría, ver `contabilidad_calculos.depreciacion_fiscal_del_anio`): la
+    sugerencia del ajuste "Depreciación del ejercicio" del IR-2. `total` es
+    None si no hay activos registrados hasta ese año (el IR-2 sigue
+    pidiéndola a mano). `ingreso_gravable`: ventas de activos que superan la
+    cuenta de su categoría (renta gravable del año)."""
+    filas = await conn.fetch(_SELECT_ACTIVOS_FISCAL)
+    calculos = [_activo_calculo(f) for f in filas]
+    calculo = cc.depreciacion_fiscal_del_anio(calculos, int(anio))
+    activos = [
+        {
+            "activo_id": fila["id"], "descripcion": fila["descripcion"], "categoria": fila["categoria"],
+            "tasa_dgii": cc.TASAS_CATEGORIA[fila["categoria"]] * 100, "depreciacion": calculo.por_activo[i],
+        }
+        for i, fila in enumerate(filas) if calculo.por_activo.get(i)
+    ]
+    categorias = [
+        {
+            "categoria": c.categoria, "nombre": cc.NOMBRE_CATEGORIA[c.categoria],
+            "tasa_dgii": cc.TASAS_CATEGORIA[c.categoria] * 100, "valor_inicio": c.valor_inicio,
+            "adiciones": c.adiciones, "retiros": c.retiros, "base": c.base, "depreciacion": c.depreciacion,
+            "valor_final": c.valor_final, "ingreso_gravable": c.ingreso_gravable,
+        }
+        for c in calculo.categorias
+    ]
+    hay_activos = any(cc.anio_de_entrada(a) <= int(anio) for a in calculos)
+    return {
+        "anio": anio, "total": calculo.total if hay_activos else None, "activos": activos, "categorias": categorias,
+        "ingreso_gravable": calculo.ingreso_gravable,
+    }
 
 
 async def obtener_depreciacion_fiscal(pool: asyncpg.Pool, anio: str) -> dict[str, Any]:

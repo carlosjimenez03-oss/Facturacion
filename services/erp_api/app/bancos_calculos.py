@@ -61,8 +61,9 @@ SINONIMOS: dict[str, tuple[str, ...]] = {
     "tipo": ("tipo", "tipo transaccion", "tipo de transaccion", "d/c", "db/cr", "dc", "naturaleza", "tipo movimiento"),
 }
 
-_TIPO_DEBITO = ("d", "db", "deb", "debito", "cargo", "retiro", "dr", "debit", "-")
-_TIPO_CREDITO = ("c", "cr", "cre", "credito", "abono", "deposito", "credit", "+")
+# "ND"/"NC" = nota de débito / nota de crédito del banco.
+_TIPO_DEBITO = ("d", "db", "deb", "debito", "cargo", "retiro", "dr", "debit", "nd", "-")
+_TIPO_CREDITO = ("c", "cr", "cre", "credito", "abono", "deposito", "credit", "nc", "+")
 
 FORMATOS_FECHA = {
     "DD/MM/AAAA": ("%d/%m/%Y", "%d-%m-%Y", "%d.%m.%Y", "%d/%m/%y", "%d-%m-%y"),
@@ -85,6 +86,13 @@ def normalizar(texto: Any) -> str:
 
 
 def decodificar(contenido: bytes) -> str:
+    """UTF-16 con BOM (lo que guarda Excel como "Texto Unicode"), UTF-8 (con
+    o sin BOM), Windows-1252 o Latin-1."""
+    if contenido.startswith((b"\xff\xfe", b"\xfe\xff")):
+        try:
+            return contenido.decode("utf-16")
+        except UnicodeDecodeError as exc:
+            raise ExtractoInvalidoError("El archivo dice ser UTF-16 pero no se pudo leer") from exc
     for codificacion in ("utf-8-sig", "cp1252", "latin-1"):
         try:
             return contenido.decode(codificacion)
@@ -102,9 +110,34 @@ def _separador(texto: str) -> str:
         return max(conteos, key=conteos.get) if any(conteos.values()) else ","
 
 
+# Montos que solo se leen de una forma: con miles de punto y decimales de
+# coma ("1.250,00", "1.250.000", "1250,5") o al revés ("1,250.00",
+# "1,250,000", "1250.50"). "1.250" y "1,250" son ambiguos.
+_ESTILO_COMA = re.compile(r"\d{1,3}(\.\d{3}){2,}(,\d+)?|\d{1,3}(\.\d{3})+,\d+|\d+,\d{1,2}")
+_ESTILO_PUNTO = re.compile(r"\d{1,3}(,\d{3}){2,}(\.\d+)?|\d{1,3}(,\d{3})+\.\d+|\d+\.\d{1,2}")
+
+
+def separador_decimal_de(valores: list[str]) -> str | None:
+    """Separador decimal de una columna de montos, por los valores que no son
+    ambiguos: "," si todos esos usan miles de punto / decimales de coma, "."
+    si todos usan el estilo contrario, None si no hay ninguno o se mezclan
+    (cada valor se lee solo, ver `parsear_monto`)."""
+    estilos = set()
+    for valor in valores:
+        texto = re.sub(r"[^\d.,]", "", str(valor or ""))
+        if _ESTILO_COMA.fullmatch(texto):
+            estilos.add(",")
+        elif _ESTILO_PUNTO.fullmatch(texto):
+            estilos.add(".")
+    return estilos.pop() if len(estilos) == 1 else None
+
+
 def parsear_monto(valor: Any, separador_decimal: str | None = None) -> Decimal | None:
     """"RD$ 1,234.56" / "1.234,56" / "(1,250.00)" / "1250.00-" -> Decimal
-    (None si está vacío). Lanza ValueError si no es un número."""
+    (None si está vacío). Lanza ValueError si no es un número. Sin
+    `separador_decimal`, un solo punto es decimal ("1.250" = 1.25) y una
+    sola coma seguida de 3 dígitos es de miles ("1,250" = 1250): el estilo
+    de la columna lo decide `leer_extracto` con `separador_decimal_de`."""
     texto = str(valor or "").strip()
     if not texto or texto in ("-", "--"):
         return None
@@ -229,7 +262,10 @@ def leer_extracto(contenido: bytes, mapeo: dict[str, Any] | None = None, *, cuen
     if not texto.strip():
         raise ExtractoInvalidoError("El archivo está vacío")
     separador = mapeo.get("separador") or _separador(texto)
-    filas = list(csv.reader(io.StringIO(texto), delimiter=separador))
+    try:
+        filas = list(csv.reader(io.StringIO(texto), delimiter=separador))
+    except csv.Error as exc:
+        raise ExtractoInvalidoError(f"El archivo no es un CSV válido: {exc}") from exc
     if mapeo.get("fila_encabezado"):
         fila_encabezado = int(mapeo["fila_encabezado"]) - 1
         if not 0 <= fila_encabezado < len(filas):
@@ -271,12 +307,19 @@ def leer_extracto(contenido: bytes, mapeo: dict[str, Any] | None = None, *, cuen
     formato_fecha = mapeo.get("formato_fecha")
     if formato_fecha and formato_fecha not in FORMATOS_FECHA:
         raise ExtractoInvalidoError(f"Formato de fecha desconocido: {formato_fecha} (use {', '.join(FORMATOS_FECHA)})")
-    decimal = mapeo.get("separador_decimal")
     debito_positivo = mapeo.get("signo_monto") == "debito_positivo"
 
     def celda(fila: list[str], campo: str) -> str:
         i = indices.get(campo)
         return fila[i].strip() if i is not None and i < len(fila) else ""
+
+    # Separador decimal: el del mapeo o, por columna, el estilo de sus
+    # valores no ambiguos ("1.250" con otros "2.300,50" en la columna = 1250).
+    datos = filas[fila_encabezado + 1:]
+    decimales = {
+        campo: mapeo.get("separador_decimal") or separador_decimal_de([celda(f, campo) for f in datos])
+        for campo in ("debito", "credito", "monto", "saldo")
+    }
 
     repetidas: dict[tuple, int] = {}
     for numero, fila in enumerate(filas[fila_encabezado + 1:], start=fila_encabezado + 2):
@@ -292,7 +335,7 @@ def leer_extracto(contenido: bytes, mapeo: dict[str, Any] | None = None, *, cuen
             continue
         try:
             if indices["monto"] is not None and not (celda(fila, "debito") or celda(fila, "credito")):
-                monto = parsear_monto(celda(fila, "monto"), decimal) or _CERO
+                monto = parsear_monto(celda(fila, "monto"), decimales["monto"]) or _CERO
                 tipo = normalizar(celda(fila, "tipo"))
                 if tipo in _TIPO_DEBITO:
                     monto = -abs(monto)
@@ -301,10 +344,10 @@ def leer_extracto(contenido: bytes, mapeo: dict[str, Any] | None = None, *, cuen
                 elif debito_positivo:
                     monto = -monto
             else:
-                debito = parsear_monto(celda(fila, "debito"), decimal) or _CERO
-                credito = parsear_monto(celda(fila, "credito"), decimal) or _CERO
+                debito = parsear_monto(celda(fila, "debito"), decimales["debito"]) or _CERO
+                credito = parsear_monto(celda(fila, "credito"), decimales["credito"]) or _CERO
                 monto = abs(credito) - abs(debito)
-            saldo = parsear_monto(celda(fila, "saldo"), decimal) if indices["saldo"] is not None else None
+            saldo = parsear_monto(celda(fila, "saldo"), decimales["saldo"]) if indices["saldo"] is not None else None
         except ValueError as exc:
             extracto.errores.append({"fila": numero, "motivo": str(exc)})
             continue
@@ -342,16 +385,20 @@ def coincide_referencia(linea: dict[str, Any], movimiento: dict[str, Any]) -> bo
 
 
 def sugerir_conciliacion(
-    lineas: list[dict[str, Any]], movimientos: list[dict[str, Any]], *, dias: int = 3
+    lineas: list[dict[str, Any]], movimientos: list[dict[str, Any]], *, dias: int = 3, hasta: date | None = None
 ) -> list[dict[str, Any]]:
     """Pares (línea del extracto, movimiento) sin conciliar con el MISMO
     monto (con signo) y fechas a no más de `dias` días. Puntaje: 100 − 10
     por día de diferencia, + 50 si coincide la referencia. Se asignan de
-    mayor a menor puntaje, cada línea y cada movimiento a lo sumo una vez."""
+    mayor a menor puntaje, cada línea y cada movimiento a lo sumo una vez.
+    Con el corte `hasta`, una línea de fecha <= corte no se empareja con un
+    movimiento posterior al corte (quedaría pendiente y no dejaría cerrar)."""
     candidatos = []
     for linea in lineas:
         for mov in movimientos:
             if Decimal(linea["monto"]) != Decimal(mov["monto"]):
+                continue
+            if hasta is not None and linea["fecha"] <= hasta < mov["fecha"]:
                 continue
             diferencia = abs((linea["fecha"] - mov["fecha"]).days)
             if diferencia > dias:
@@ -374,6 +421,44 @@ def sugerir_conciliacion(
         usados_movs.add(clave_mov)
         sugerencias.append({"linea": linea, "movimiento": mov, "puntaje": puntaje, "motivo": motivo})
     return sugerencias
+
+
+def saldo_al_corte(lineas: list[dict[str, Any]], hasta: date) -> tuple[Decimal | None, str | None]:
+    """(saldo, advertencia) de un extracto: el saldo de su última línea, en
+    el tiempo, con fecha <= `hasta`. `lineas` en el orden del archivo
+    ({fecha, monto, saldo}). Hay bancos que exportan las más antiguas
+    primero y otros las más recientes primero; el orden sale del saldo
+    corrido (antiguas primero: saldo anterior + monto = saldo; recientes
+    primero: saldo siguiente + monto = saldo) o, si no alcanza, de las
+    fechas. Si nada lo decide se asume antiguas primero y se avisa."""
+    con_saldo = [x for x in lineas if x.get("saldo") is not None]
+    if not con_saldo:
+        return None, None
+    ascendente = descendente = 0
+    for anterior, siguiente in zip(lineas, lineas[1:]):
+        if anterior.get("saldo") is None or siguiente.get("saldo") is None:
+            continue
+        ascendente += Decimal(anterior["saldo"]) + Decimal(siguiente["monto"]) == Decimal(siguiente["saldo"])
+        descendente += Decimal(siguiente["saldo"]) + Decimal(anterior["monto"]) == Decimal(anterior["saldo"])
+    advertencia = None
+    if ascendente != descendente:
+        recientes_primero = descendente > ascendente
+    elif lineas[0]["fecha"] != lineas[-1]["fecha"]:
+        recientes_primero = lineas[0]["fecha"] > lineas[-1]["fecha"]
+    else:
+        recientes_primero = False
+        if len(con_saldo) > 1:
+            advertencia = (
+                "No se pudo saber si el extracto lista primero las líneas más antiguas o las más recientes (el saldo "
+                "de cada línea no sigue a la anterior): se tomó el saldo de la última fila. Verifique el saldo según "
+                "el banco antes de cerrar"
+            )
+    cronologico = list(reversed(lineas)) if recientes_primero else lineas
+    saldo = None
+    for linea in cronologico:
+        if linea["fecha"] <= hasta and linea.get("saldo") is not None:
+            saldo = Decimal(linea["saldo"])
+    return saldo, advertencia
 
 
 def enmascarar_numero(numero: str | None) -> str | None:

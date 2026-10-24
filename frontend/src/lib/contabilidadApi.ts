@@ -141,6 +141,8 @@ export type OrigenAsiento =
   | "pago"
   | "movimiento"
   | "transferencia"
+  /** Ajuste mensual del ITBIS adelantado no admitido por proporcionalidad (origen_id = AAAAMM). */
+  | "proporcionalidad"
   | "depreciacion";
 
 export interface LineaAsiento {
@@ -409,6 +411,8 @@ export interface ActivoFijo {
   numero_serie: string | null;
   ubicacion: string | null;
   fecha_baja: string | null;
+  /** Lo cobrado si se vendió (rebaja la cuenta fiscal de su categoría en el IR-2). */
+  valor_venta: string | null;
   notas: string | null;
   creado_en: string;
   actualizado_en: string;
@@ -493,7 +497,25 @@ export interface DepreciacionFiscal {
   anio: string;
   /** Sugerencia del ajuste "Depreciación del ejercicio" del IR-2 (impuestosApi). */
   total: string;
+  /** Por activo; en las categorías 2 y 3, su parte de la cuenta de la categoría. */
   activos: { activo_id: string; descripcion: string; categoria: number; tasa_dgii: string; depreciacion: string }[];
+  /** Cuenta de las categorías 2 y 3 en el año (Art. 287): base = valor al cierre anterior + adiciones − ventas. */
+  categorias: CuentaCategoriaFiscal[];
+  /** Ventas de activos que superan la cuenta de su categoría: renta gravable del año. */
+  ingreso_gravable: string;
+}
+
+export interface CuentaCategoriaFiscal {
+  categoria: number;
+  nombre: string;
+  tasa_dgii: string;
+  valor_inicio: string;
+  adiciones: string;
+  retiros: string;
+  base: string;
+  depreciacion: string;
+  valor_final: string;
+  ingreso_gravable: string;
 }
 
 export const contabilidadApi = {
@@ -580,9 +602,13 @@ export const contabilidadApi = {
     request<ActivoFijo>(`/contabilidad/activos-fijos/${id}`, { method: "PUT", body: JSON.stringify(payload) }),
   /** 409 si tiene depreciación registrada (dele de baja). */
   eliminarActivo: (id: string) => request<void>(`/contabilidad/activos-fijos/${id}`, { method: "DELETE" }),
-  /** Deja de depreciarse desde el mes siguiente; `fecha: null` revierte la baja. 409 si hay depreciación registrada después. */
-  darBajaActivo: (id: string, fecha: string | null) =>
-    request<ActivoFijo>(`/contabilidad/activos-fijos/${id}/baja`, { method: "POST", body: JSON.stringify({ fecha }) }),
+  /** Deja de depreciarse desde el mes siguiente; `fecha: null` revierte la baja. 409 si hay depreciación registrada
+   * después o si cambia un IR-2 ya presentado. `valorVenta`: lo cobrado si se vendió (opcional). */
+  darBajaActivo: (id: string, fecha: string | null, valorVenta?: string | null) =>
+    request<ActivoFijo>(`/contabilidad/activos-fijos/${id}/baja`, {
+      method: "POST",
+      body: JSON.stringify(valorVenta == null ? { fecha } : { fecha, valor_venta: valorVenta }),
+    }),
   /** Cuadro mensual hasta `hasta` (AAAAMM; por defecto diciembre del año en curso). */
   tablaDepreciacion: (id: string, hasta?: string) =>
     request<TablaDepreciacion>(`/contabilidad/activos-fijos/${id}/depreciacion${consulta({ hasta })}`),

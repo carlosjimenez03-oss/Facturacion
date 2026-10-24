@@ -309,20 +309,20 @@ class Compras606:
     itbis_proporcionalidad: Decimal = _CERO
 
 
-def calcular_it1(
-    *,
-    periodo: str,
-    ventas: VentasItbis,
-    compras: Compras606,
-    itbis_retenido_proveedores: Decimal,
-    ajustes: dict[str, Decimal],
-    saldo_favor_sugerido: Decimal,
-    hoy: date,
-) -> tuple[dict[str, Any], Decimal]:
-    """Devuelve (pre-cálculo, nuevo saldo a favor) -- el saldo a favor es el
-    valor sugerido de "saldo a favor anterior" del mes siguiente."""
+@dataclass
+class Proporcionalidad:
+    adelantado: Decimal
+    admitido: Decimal
+    no_admitido: Decimal
+    proporcion: Decimal
+    advertencias: list[str]
+
+
+def itbis_adelantado_admitido(ventas: VentasItbis, compras: Compras606) -> Proporcionalidad:
+    """ITBIS adelantado del mes y la parte admitida por la proporcionalidad
+    (casilla 10/11 del IT-1). Lo usan el IT-1 y el asiento mensual de ajuste
+    de Contabilidad (mismo coeficiente)."""
     total_ingresos = ventas.g18 + ventas.g16 + ventas.exportaciones + ventas.exentas
-    itbis_facturado = ventas.i18 + ventas.i16
     # ITBIS por adelantar del 606 (campo 16 = facturado [campo 14] - llevado
     # al costo [campo 15]).
     adelantado = compras.itbis_facturado - compras.itbis_costo
@@ -351,7 +351,27 @@ def calcular_it1(
         admitido = redondear(adelantado - sujeto + sujeto * proporcion)
     else:
         admitido = redondear(adelantado)
-    no_admitido = adelantado - admitido
+    return Proporcionalidad(adelantado, admitido, adelantado - admitido, proporcion, advertencias)
+
+
+def calcular_it1(
+    *,
+    periodo: str,
+    ventas: VentasItbis,
+    compras: Compras606,
+    itbis_retenido_proveedores: Decimal,
+    ajustes: dict[str, Decimal],
+    saldo_favor_sugerido: Decimal,
+    hoy: date,
+) -> tuple[dict[str, Any], Decimal]:
+    """Devuelve (pre-cálculo, nuevo saldo a favor) -- el saldo a favor es el
+    valor sugerido de "saldo a favor anterior" del mes siguiente."""
+    total_ingresos = ventas.g18 + ventas.g16 + ventas.exportaciones + ventas.exentas
+    itbis_facturado = ventas.i18 + ventas.i16
+    proporcionalidad = itbis_adelantado_admitido(ventas, compras)
+    adelantado, admitido = proporcionalidad.adelantado, proporcionalidad.admitido
+    no_admitido, proporcion = proporcionalidad.no_admitido, proporcionalidad.proporcion
+    advertencias: list[str] = list(proporcionalidad.advertencias)
     retenido_terceros = _valor(ajustes, "itbis_retenido_terceros")
     saldo_anterior = _valor(ajustes, "saldo_favor_anterior", saldo_favor_sugerido)
     propio = itbis_facturado - admitido - retenido_terceros - saldo_anterior
