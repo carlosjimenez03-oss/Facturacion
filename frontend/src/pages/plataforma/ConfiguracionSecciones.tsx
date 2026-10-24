@@ -16,9 +16,9 @@ import { formatoRnc, nombreAmbiente } from "../../lib/marca";
 import { sesionActual } from "../../lib/sesion";
 import { encf, fechaCorta, mensajeError, numero, type Avisar } from "./configuracionUtil";
 
-type RefSeccion = (el: HTMLElement | null) => void;
+export type RefSeccion = (el: HTMLElement | null) => void;
 
-function Tarjeta({ id, refSeccion, titulo, extra, children }: { id: string; refSeccion: RefSeccion; titulo: string; extra?: ReactNode; children: ReactNode }) {
+export function Tarjeta({ id, refSeccion, titulo, extra, children }: { id: string; refSeccion: RefSeccion; titulo: string; extra?: ReactNode; children: ReactNode }) {
   return (
     <section id={id} ref={refSeccion} className="card" style={{ scrollMarginTop: 16 }}>
       <div className="card-h">
@@ -30,7 +30,7 @@ function Tarjeta({ id, refSeccion, titulo, extra, children }: { id: string; refS
   );
 }
 
-function Interruptor({ on, onChange, label, disabled }: { on: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
+export function Interruptor({ on, onChange, label, disabled }: { on: boolean; onChange: (v: boolean) => void; label: string; disabled?: boolean }) {
   return <button type="button" className={on ? "sw on" : "sw"} onClick={() => onChange(!on)} aria-pressed={on} aria-label={label} disabled={disabled} />;
 }
 

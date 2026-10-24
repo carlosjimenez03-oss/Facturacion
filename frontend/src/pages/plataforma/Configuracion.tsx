@@ -13,6 +13,7 @@ import {
   SeccionVendedores,
 } from "./ConfiguracionSecciones";
 import { mensajeError } from "./configuracionUtil";
+import { SeccionPagos } from "./SeccionPagos";
 import "./plataforma.css";
 
 const SECCIONES = [
@@ -22,6 +23,7 @@ const SECCIONES = [
   { id: "secuencias", label: "Secuencias autorizadas" },
   { id: "inventario", label: "Método de inventario" },
   { id: "envio", label: "WhatsApp y correo" },
+  { id: "pagos", label: "Pagos en línea" },
   { id: "vendedores", label: "Vendedores" },
   { id: "usuarios", label: "Usuarios" },
 ] as const;
@@ -149,6 +151,7 @@ export function ConfiguracionPage() {
           <SeccionSecuencias refSeccion={ref("secuencias")} avisar={mostrarAviso} />
           <SeccionInventario refSeccion={ref("inventario")} metodo={metodo} setMetodo={setMetodo} />
           <SeccionEnvio refSeccion={ref("envio")} avisar={mostrarAviso} empresa={empresa} />
+          <SeccionPagos refSeccion={ref("pagos")} avisar={mostrarAviso} />
           <SeccionVendedores refSeccion={ref("vendedores")} avisar={mostrarAviso} />
           <SeccionUsuarios refSeccion={ref("usuarios")} avisar={mostrarAviso} />
         </div>

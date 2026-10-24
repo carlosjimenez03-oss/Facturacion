@@ -49,6 +49,7 @@ import { SuscripcionesNominaPage } from "./pages/nomina/Suscripciones";
 import { Inicio } from "./pages/Inicio";
 import { PlanesPage } from "./pages/planes/Planes";
 import { PortalClientesPage } from "./pages/portal/PortalClientes";
+import { PagoResultadoPage } from "./pages/portal/PagoResultado";
 import { PortalPublicoPage } from "./pages/portal/PortalPublico";
 import { PosPage } from "./pages/pos/Pos";
 import { VentasPage } from "./pages/ventas/Ventas";
@@ -78,6 +79,7 @@ export default function App() {
     return (
       <Routes>
         <Route path="/p/:token" element={<PortalPublicoPage />} />
+        <Route path="/p/pago/:referencia" element={<PagoResultadoPage />} />
       </Routes>
     );
   }

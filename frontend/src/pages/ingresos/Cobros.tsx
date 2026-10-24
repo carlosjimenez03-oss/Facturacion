@@ -6,6 +6,8 @@ import type { CuentaBancaria } from "../../lib/bancosApi";
 import { erpApi } from "../../lib/erpApi";
 import type { Cobro, CuentaPorCobrar, EstadoCuentaCobrar, MetodoCobro } from "../../lib/erpApi";
 import { formatoMonto, formatoRnc } from "../../lib/marca";
+import { ESTADO_PAGO_EN_LINEA, pagosApi } from "../../lib/pagosApi";
+import type { PagoEnLinea } from "../../lib/pagosApi";
 import { empresaActual } from "../../lib/configuracionApi";
 import { AvisoError, Buscador, Cargando, Estadistica, IngresosEncabezado, Modal, SinResultados, Vacio } from "./IngresosShell";
 import { useAviso } from "./useAviso";
@@ -67,6 +69,7 @@ export function CobrosPage() {
   const [cuentas, setCuentas] = useState<CuentaPorCobrar[]>([]);
   const [cobros, setCobros] = useState<Cobro[]>([]);
   const [bancos, setBancos] = useState<CuentaBancaria[]>([]);
+  const [enLinea, setEnLinea] = useState<PagoEnLinea[]>([]);
   const [cargando, setCargando] = useState(true);
   const [errorCuentas, setErrorCuentas] = useState<string | null>(null);
   const [errorCobros, setErrorCobros] = useState<string | null>(null);
@@ -84,7 +87,12 @@ export function CobrosPage() {
 
   const cargar = useCallback(async () => {
     setCargando(true);
-    const [cxc, hist, ctas] = await Promise.allSettled([erpApi.listarCuentasPorCobrar({ estado: "todas" }), erpApi.listarCobros(), bancosApi.listarCuentas()]);
+    const [cxc, hist, ctas, linea] = await Promise.allSettled([
+      erpApi.listarCuentasPorCobrar({ estado: "todas" }),
+      erpApi.listarCobros(),
+      bancosApi.listarCuentas(),
+      pagosApi.listar(),
+    ]);
     if (cxc.status === "fulfilled") {
       setCuentas(cxc.value);
       setErrorCuentas(null);
@@ -101,6 +109,8 @@ export function CobrosPage() {
     }
     // Sin Bancos (servicio caído o sin cuentas) queda solo el texto libre de la cuenta de destino.
     setBancos(ctas.status === "fulfilled" ? ctas.value : []);
+    // Pagos con tarjeta desde el portal de clientes (fase 7): la sección solo aparece si hay alguno.
+    setEnLinea(linea.status === "fulfilled" ? linea.value : []);
     setCargando(false);
   }, []);
 
@@ -547,6 +557,78 @@ export function CobrosPage() {
           </div>
         )}
       </section>
+
+      {enLinea.length > 0 && (
+        <section className="card" data-pagos-en-linea>
+          <div className="card-h">
+            <h2>Pagos en línea</h2>
+            <span className="hint">Pagos con tarjeta desde el portal de clientes · los aprobados ya están en el historial de cobros</span>
+          </div>
+          <div className="tw">
+            <table className="tbl" style={{ minWidth: 980 }}>
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>e-NCF</th>
+                  <th>Cliente</th>
+                  <th className="num">Monto (RD$)</th>
+                  <th>Estado</th>
+                  <th>Autorización · RRN</th>
+                  <th>Orden</th>
+                  <th>Cobro</th>
+                </tr>
+              </thead>
+              <tbody>
+                {enLinea.map((p) => (
+                  <tr key={p.id} data-orden={p.orden}>
+                    <td className="nowrap">{new Date(p.creado_en).toLocaleDateString("es-DO", { day: "2-digit", month: "2-digit", year: "numeric" })}</td>
+                    <td className="mono">
+                      <Link to={`/facturas/${p.factura_id}`} className="link mono">
+                        {p.encf || "(sin e-NCF)"}
+                      </Link>
+                    </td>
+                    <td>{p.cliente_nombre}</td>
+                    <td className="num">{formatoMonto(p.monto)}</td>
+                    <td>
+                      <span className={ESTADO_PAGO_EN_LINEA[p.estado].badge}>{ESTADO_PAGO_EN_LINEA[p.estado].label}</span>
+                      {p.proveedor === "simulado" && <div className="hint">Simulado</div>}
+                      {p.estado === "declinado" && p.respuesta && <div className="hint">{p.respuesta}</div>}
+                    </td>
+                    <td className="mono">
+                      {p.codigo_autorizacion || p.rrn ? (
+                        <>
+                          {p.codigo_autorizacion ?? "—"}
+                          <div className="hint mono">RRN {p.rrn ?? "—"}</div>
+                        </>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
+                    <td className="mono hint">
+                      {p.orden}
+                      {p.orden_proveedor && p.proveedor === "azul" && <div>Azul {p.orden_proveedor}</div>}
+                    </td>
+                    <td>
+                      {p.cobro_id ? (
+                        p.cobro_anulado ? <span className="bd b-rech">Anulado</span> : <span className="bd b-acep">Registrado</span>
+                      ) : p.estado === "aprobado" ? (
+                        <span className="bd b-rech">Revisar</span>
+                      ) : (
+                        "—"
+                      )}
+                      {p.incidencia && (
+                        <div className="hint" style={{ color: "#B45309", maxWidth: 260 }}>
+                          {p.incidencia}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {anular && (
         <Modal

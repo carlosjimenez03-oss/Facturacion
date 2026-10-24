@@ -8,6 +8,8 @@ import { erpApi } from "../../lib/erpApi";
 import type { Cliente } from "../../lib/erpApi";
 import { formatoMonto, formatoRnc } from "../../lib/marca";
 import { empresaActual } from "../../lib/configuracionApi";
+import { pagosApi } from "../../lib/pagosApi";
+import type { ConfigPagos } from "../../lib/pagosApi";
 import { solucionesApi } from "../../lib/solucionesApi";
 import type { Canales, ConfigPortal, EnlacePortal, MetodoPagoPortal, PortalPublico } from "../../lib/solucionesApi";
 import { AvisoError, IconoBuscar, Modal } from "../ingresos/IngresosShell";
@@ -55,6 +57,7 @@ export function PortalClientesPage() {
   const [canales, setCanales] = useState<Canales>({ correo: false, whatsapp: false });
   const [enviandoCorreo, setEnviandoCorreo] = useState(false);
   const [ayuda, setAyuda] = useState(false);
+  const [pagosLinea, setPagosLinea] = useState<ConfigPagos | null>(null);
   const [toast, mostrarToast] = useAviso();
   const busqueda = useRef(0);
 
@@ -64,7 +67,11 @@ export function PortalClientesPage() {
       () => undefined,
     );
     solucionesApi.canales().then(setCanales, () => undefined);
+    pagosApi.config().then(setPagosLinea, () => undefined);
   }, []);
+
+  const tarjetaActiva = Boolean(pagosLinea?.activo && pagosLinea.listo);
+  const nombreProveedor = pagosLinea?.proveedores.find((p) => p.clave === pagosLinea.proveedor)?.nombre ?? "";
 
   // Búsqueda de clientes (≥ 3 letras) en Contactos de erp-api.
   useEffect(() => {
@@ -234,6 +241,11 @@ export function PortalClientesPage() {
       <section className="card">
         <div className="card-h">
           <h2>Enviar enlace a mis clientes</h2>
+          {pagosLinea && (
+            <Link to="/configuracion/pagos" className={tarjetaActiva ? "bd b-acep" : "bd b-borr"} data-pagos-en-linea={tarjetaActiva ? "activos" : "inactivos"}>
+              {tarjetaActiva ? "Pagos con tarjeta en línea: activos" : "Pagos con tarjeta en línea: inactivos"}
+            </Link>
+          )}
         </div>
         <div className="card-b" style={{ display: "flex", flexDirection: "column", gap: 20 }}>
           {error && <AvisoError mensaje={error} />}
@@ -370,7 +382,10 @@ export function PortalClientesPage() {
               )}
             </div>
             <span className="hint">
-              {metodos.includes("tarjeta") && "Pago con tarjeta: el portal lo muestra como «Próximamente» (aún no hay pasarela de pago). "}
+              {metodos.includes("tarjeta") &&
+                (tarjetaActiva
+                  ? `Pago con tarjeta: el cliente paga en línea desde el portal (${nombreProveedor}${pagosLinea?.proveedor === "azul" && pagosLinea.ambiente === "pruebas" ? " · pruebas" : ""}) y el cobro se registra solo. `
+                  : "Pago con tarjeta: los pagos en línea están inactivos (actívelos en Configuración → Pagos en línea); mientras tanto el portal lo muestra como «Próximamente». ")}
               Los cambios aplican a los enlaces que genere desde ahora.
             </span>
           </div>

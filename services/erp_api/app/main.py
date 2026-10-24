@@ -40,6 +40,7 @@ from . import (
     contabilidad,
     impuestos,
     nomina,
+    pagos,
     plataforma,
     reportes,
     repository,
@@ -167,6 +168,8 @@ app.include_router(configuracion.router)
 app.include_router(plataforma.router)
 app.include_router(nomina.router)
 app.include_router(soluciones.router)
+# Fase 7 · Pagos con tarjeta en línea desde el portal de clientes (docs/PAGOS.md).
+app.include_router(pagos.router)
 
 
 def _pool():

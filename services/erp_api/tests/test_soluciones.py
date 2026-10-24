@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 from fastapi.testclient import TestClient
 
-from services.erp_api.app import main, soluciones
+from services.erp_api.app import main, pagos, soluciones
 from services.erp_api.app import soluciones_repository as repo
 from services.erp_api.app.repository import DatosInvalidosError
 from services.erp_api.app.soluciones_canales import CanalesEnvio, FacturasApiError, get_soluciones_settings
@@ -36,6 +36,8 @@ def client(monkeypatch):
     monkeypatch.setattr(get_soluciones_settings(), "smtp_host", "")
     # Sin nada en Configuración → WhatsApp y correo: solo las variables de entorno.
     monkeypatch.setattr(soluciones, "canales_de_envio", _async(lambda pool, settings: CanalesEnvio(settings)))
+    # Pagos en línea apagados (se prueban en test_pagos.py).
+    monkeypatch.setattr(pagos, "pago_en_linea_del_portal", _async(None))
     with TestClient(main.app) as c:
         yield c
 
