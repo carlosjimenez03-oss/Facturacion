@@ -127,6 +127,9 @@ export function construirDatos(form: FormState, config: TipoEcfConfig): FacturaD
     if (form.correoComprador) comprador.CorreoComprador = form.correoComprador;
     if (form.direccionComprador) comprador.DireccionComprador = form.direccionComprador;
   }
+  // En el E32 el nodo Comprador es obligatorio (minOccurs=1) aunque vaya
+  // vacío: consumidor final sin identificar.
+  if (!comprador && form.tipoEcf === "32") comprador = {};
 
   const totalesCalculados = calcularTotales(form.items);
   const totales: Record<string, unknown> = {};

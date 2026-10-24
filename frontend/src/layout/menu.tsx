@@ -118,9 +118,9 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
 
 export const MENU_SOLUCIONES: MenuItem[] = [
   { id: "nomina", label: "Nómina", icon: <IconNomina />, to: pendiente("nomina") },
-  { id: "pos", label: "POS", icon: <IconPos />, to: pendiente("pos") },
-  { id: "portal", label: "Portal de clientes", icon: <IconPortal />, to: pendiente("portal-clientes") },
-  { id: "ventas", label: "Ventas", icon: <IconReportes />, to: pendiente("ventas") },
+  { id: "pos", label: "POS", icon: <IconPos />, to: "/pos" },
+  { id: "portal", label: "Portal de clientes", icon: <IconPortal />, to: "/portal-clientes" },
+  { id: "ventas", label: "Kontara Ventas", icon: <IconReportes />, to: "/ventas" },
 ];
 
 /** Descripción de cada módulo pendiente, para la página "En construcción". */

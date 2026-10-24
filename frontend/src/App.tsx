@@ -34,6 +34,11 @@ import { AlmacenesPage } from "./pages/inventario/Almacenes";
 import { KardexPage } from "./pages/inventario/Kardex";
 import { LotesPage } from "./pages/inventario/Lotes";
 import { Inicio } from "./pages/Inicio";
+import { PlanesPage } from "./pages/planes/Planes";
+import { PortalClientesPage } from "./pages/portal/PortalClientes";
+import { PortalPublicoPage } from "./pages/portal/PortalPublico";
+import { PosPage } from "./pages/pos/Pos";
+import { VentasPage } from "./pages/ventas/Ventas";
 import { Proximamente } from "./pages/Proximamente";
 
 /** /facturas/nueva?cotizacion=…, ?copiar=…, ?tipo=… comparten ruta: la clave
@@ -44,6 +49,15 @@ function FacturaNueva() {
 }
 
 export default function App() {
+  const { pathname } = useLocation();
+  // Portal de clientes público (/p/:token): sin menú ni sesión.
+  if (pathname.startsWith("/p/")) {
+    return (
+      <Routes>
+        <Route path="/p/:token" element={<PortalPublicoPage />} />
+      </Routes>
+    );
+  }
   return (
     <AppShell>
       <Routes>
@@ -104,6 +118,11 @@ export default function App() {
           element={<Formato606RegistroForm />}
         />
         <Route path="/formato-606/registros/:id/editar" element={<Formato606RegistroForm />} />
+
+        <Route path="/pos" element={<PosPage />} />
+        <Route path="/portal-clientes" element={<PortalClientesPage />} />
+        <Route path="/planes" element={<PlanesPage />} />
+        <Route path="/ventas" element={<VentasPage />} />
 
         <Route path="/modulo/:slug" element={<Proximamente />} />
         <Route path="*" element={<Proximamente />} />

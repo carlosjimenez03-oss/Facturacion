@@ -28,8 +28,19 @@ def test_010_compras_tiene_el_mismo_ddl_que_migraciones():
     assert migraciones.DDL_COMPRAS.strip() in archivo
 
 
+def test_016_soluciones_tiene_el_mismo_ddl_que_migraciones():
+    archivo = (REPO_ROOT / "db" / "init" / "016_soluciones.sql").read_text(encoding="utf-8")
+    assert migraciones.DDL_SOLUCIONES.strip() in archivo
+
+
 def test_ddl_es_idempotente():
-    for ddl in (migraciones.DDL_VENTAS, migraciones.DDL_IMPUESTOS, migraciones.DDL_FUNCIONES, migraciones.DDL_COMPRAS):
+    for ddl in (
+        migraciones.DDL_VENTAS,
+        migraciones.DDL_IMPUESTOS,
+        migraciones.DDL_FUNCIONES,
+        migraciones.DDL_COMPRAS,
+        migraciones.DDL_SOLUCIONES,
+    ):
         for linea in ddl.splitlines():
             if linea.startswith("CREATE "):
                 assert "IF NOT EXISTS" in linea or linea.startswith("CREATE OR REPLACE "), linea
@@ -83,3 +94,4 @@ async def test_aplicar_migraciones_toma_el_lock_antes_del_ddl():
     assert conn.execute_calls[2][0] == migraciones.DDL_IMPUESTOS
     assert conn.execute_calls[3][0] == migraciones.DDL_FUNCIONES
     assert conn.execute_calls[4][0] == migraciones.DDL_COMPRAS
+    assert conn.execute_calls[5][0] == migraciones.DDL_SOLUCIONES

@@ -13,7 +13,9 @@ cliente y `/documentos-venta` se calculan LEYENDO `facturacion.facturas`
 
 El contrato con el frontend es `frontend/src/lib/erpApi.ts` (y
 `frontend/src/lib/impuestosApi.ts` para impuestos,
-`frontend/src/lib/comprasApi.ts` para compras).
+`frontend/src/lib/comprasApi.ts` para compras y
+`frontend/src/lib/solucionesApi.ts` para Soluciones: planes, portal de
+clientes, Kontara Ventas y POS, con sus rutas en `soluciones.py`).
 """
 import asyncio
 import logging
@@ -26,7 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from libs.ecf_common.db import cerrar_pool, crear_pool
 
-from . import compras, impuestos, repository
+from . import compras, impuestos, repository, soluciones
 from .config import ErpApiSettings, get_settings
 from .migraciones import aplicar_migraciones
 from .repository import (
@@ -108,6 +110,7 @@ app.add_middleware(
 
 app.include_router(impuestos.router)
 app.include_router(compras.router)
+app.include_router(soluciones.router)
 
 
 def _pool():
