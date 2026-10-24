@@ -140,7 +140,8 @@ AJUSTES: dict[str, dict[str, tuple[str, str]]] = {
         ),
         "depreciacion": (
             "Depreciación del ejercicio",
-            "Depreciación fiscal de los activos (las adquisiciones de activos del 606 no son gasto del año).",
+            "Depreciación fiscal de los activos (las adquisiciones de activos del 606 no son gasto del año). Por "
+            "defecto, la de los activos fijos registrados en Contabilidad (Art. 287 del Código Tributario).",
         ),
         "ajustes_fiscales": (
             "Ajustes fiscales",
@@ -542,9 +543,13 @@ def calcular_ir2(
     valuacion_inventario: Decimal,
     ajustes: dict[str, Decimal],
     hoy: date,
+    depreciacion_sugerida: Decimal | None = None,
 ) -> dict[str, Any]:
     """`compras_por_tipo`: monto del 606 del año (servicios + bienes + ITBIS
-    llevado al costo) por tipo de bienes y servicios (None = sin clasificar)."""
+    llevado al costo) por tipo de bienes y servicios (None = sin clasificar).
+    `depreciacion_sugerida`: depreciación fiscal del año según los activos
+    fijos de Contabilidad (None = no hay activos registrados); un valor
+    manual guardado del ajuste la reemplaza."""
     advertencias: list[str] = []
     inventario_inicial = _valor(ajustes, "inventario_inicial")
     inventario_final = _valor(ajustes, "inventario_final", valuacion_inventario)
@@ -561,13 +566,20 @@ def calcular_ir2(
         for tipo, monto in sorted(compras_por_tipo.items(), key=lambda kv: (kv[0] is None, kv[0] or 0))
         if tipo not in (TIPO_COSTO_VENTA, TIPO_ADQUISICION_ACTIVOS, None) and monto
     ]
-    depreciacion = _valor(ajustes, "depreciacion")
+    depreciacion = _valor(ajustes, "depreciacion", depreciacion_sugerida or _CERO)
     if depreciacion:
         gastos.append(("Depreciación", depreciacion))
     if compras_por_tipo.get(TIPO_ADQUISICION_ACTIVOS):
+        if depreciacion_sugerida is None:
+            cola = "Ingrese la depreciación del ejercicio como ajuste."
+        else:
+            cola = (
+                "La depreciación sugerida sale de los activos fijos de Contabilidad (método del Art. 287 del Código "
+                "Tributario): verifique que estén todos registrados."
+            )
         advertencias.append(
             f"Las adquisiciones de activos del 606 (RD${_fmt(compras_por_tipo[TIPO_ADQUISICION_ACTIVOS])}) no se "
-            "restan como gasto: se deprecian. Ingrese la depreciación del ejercicio como ajuste."
+            f"restan como gasto: se deprecian. {cola}"
         )
     if compras_por_tipo.get(None):
         advertencias.append(
@@ -649,6 +661,11 @@ def calcular_ir2(
             {"etiqueta": "Renta neta imponible", "valor": _monto(renta_imponible)},
             {"etiqueta": "Tasa efectiva s/ ingresos", "valor": f"{tasa_efectiva:.2f}%"},
         ],
-        "ajustes": lista_ajustes("ir2", ajustes, {"inventario_final": valuacion_inventario}),
+        "ajustes": lista_ajustes(
+            "ir2",
+            ajustes,
+            {"inventario_final": valuacion_inventario}
+            | ({"depreciacion": depreciacion_sugerida} if depreciacion_sugerida is not None else {}),
+        ),
         "advertencias": advertencias,
     }

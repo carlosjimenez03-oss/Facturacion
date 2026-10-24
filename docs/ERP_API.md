@@ -1,4 +1,4 @@
-# erp-api: ventas (contactos, cotizaciones, cobros), impuestos y compras
+# erp-api: ventas (contactos, cotizaciones, cobros), impuestos, compras, bancos y contabilidad
 
 `services/erp_api` es el backend de las pantallas de **Contactos**,
 **Cotizaciones**, **Cobros / cuentas por cobrar** y **Notas** del frontend.
@@ -22,6 +22,10 @@ fechas como `YYYY-MM-DD` y marcas de tiempo en ISO 8601.
   copia en [`db/init/009_fecha_dgii_segura.sql`](../db/init/009_fecha_dgii_segura.sql)):
   devuelve NULL para una fecha imposible como `31-02-2026` en vez de hacer
   fallar la consulta entera como haría `to_date`.
+- Fase 5 agrega los esquemas **`bancos`** y **`contabilidad`** (mismas
+  migraciones, `DDL_CONTABILIDAD` y `DDL_BANCOS`; copia en
+  [`db/init/012_bancos_contabilidad.sql`](../db/init/012_bancos_contabilidad.sql))
+  y la columna `cuenta_bancaria_id` en `ventas.cobros` y `compras.pagos`.
 - **Solo lee** `facturacion.facturas` (de `facturas-api`) -- nunca la
   modifica. De `datos` (columna `json`) toma TipoPago, FechaEmision,
   FechaLimitePago, comprador, MontoTotal e InformacionReferencia.
@@ -40,7 +44,7 @@ fechas como `YYYY-MM-DD` y marcas de tiempo en ISO 8601.
 | `POST /cotizaciones/{id}/facturada` | La marca facturada y guarda `factura_id` |
 | `DELETE /cotizaciones/{id}` | Solo abiertas (409) |
 | `GET /cuentas-por-cobrar?estado=&cliente_rnc=` | Facturas de venta (E31, E32, E33, E44, E45, E46) enviadas/aceptadas a crédito (TipoPago 2) con cobrado, pendiente (total − notas de crédito enviadas/aceptadas que la referencian − cobros), estado (`pendiente`/`vencida`/`cobrada`) y el teléfono del contacto. Sin `estado`: lo no cobrado; `estado=todas`: todo. Sin FechaLimitePago, vence a los 30 días de la emisión |
-| `GET /cobros?factura_id=` · `POST /cobros` | Registra un cobro: 422 si la factura no es a crédito/no fue enviada o si el monto es ≤ 0 o supera lo pendiente. Fecha por defecto = hoy |
+| `GET /cobros?factura_id=` · `POST /cobros` | Registra un cobro: 422 si la factura no es a crédito/no fue enviada o si el monto es ≤ 0 o supera lo pendiente. Fecha por defecto = hoy. `cuenta_bancaria_id` (opcional): cuenta de Bancos donde entra el dinero (ver "Bancos") |
 | `POST /cobros/{id}/anular` | Anula el cobro (deja de contar como cobrado); 409 si ya estaba anulado |
 | `GET /documentos-venta?tipo_ecf=&estado=&q=` | Cualquier factura con cliente, fecha de emisión, total y, en notas de crédito/débito, el e-NCF afectado y el código de modificación. Más recientes primero |
 
@@ -277,8 +281,12 @@ y 05-2019), igual que el 606 (`docs/dgii/FORMATO_606.md`):
      costo_promedio` del Kardex, con una advertencia: solo es exacto al 31
      de diciembre. Se puede reemplazar con un ajuste.
    - **Gastos:** las categorías del 606. El tipo 10 (adquisiciones de
-     activos) no es gasto, así que se pide la depreciación como ajuste. Las
-     compras sin clasificar se excluyen, con una advertencia.
+     activos) no es gasto, así que se pide la depreciación como ajuste. Su
+     valor **sugerido** es la depreciación fiscal del año de los activos
+     fijos de Contabilidad (método del Art. 287, ver "Contabilidad"); un
+     valor manual guardado la reemplaza, y borrarlo vuelve a la sugerencia.
+     Sin activos registrados no hay sugerencia (0). Las compras sin
+     clasificar se excluyen, con una advertencia.
    - **Tasa:** 27 %, o 30 % en 2026–2028 si los ingresos son de RD$1,000
      millones o más.
 8. **Vencimientos.**
@@ -480,6 +488,269 @@ el 606.
   y `ENTREGA_EMISOR_TIMEOUT_SEGUNDOS` (30), para entregar el ACECF al
   proveedor.
 - `EMISOR_RAZON_SOCIAL` (opcional) para el certificado de retención.
+
+## Bancos
+
+Fase 5: cuentas bancarias, movimientos, transferencias entre cuentas,
+importación del extracto (CSV) y conciliación. El contrato es
+[`frontend/src/lib/bancosApi.ts`](../frontend/src/lib/bancosApi.ts) (pantalla
+`Bancos.dc.html` del prototipo: pestañas Movimientos, Conciliación y
+Transferencias). Rutas en `app/bancos.py`, consultas en
+`app/bancos_repository.py`, lectura del CSV y sugerencias en
+`app/bancos_calculos.py` (puras). Esquema `bancos` (`DDL_BANCOS`, copia en
+[`db/init/012_bancos_contabilidad.sql`](../db/init/012_bancos_contabilidad.sql)).
+
+### Modelo
+
+- **Cuenta bancaria** (`bancos.cuentas`): banco, tipo (`corriente`,
+  `ahorro`, `caja_chica`, `tarjeta`), número (se guarda completo; la API
+  solo devuelve `numero_enmascarado` = `****` + los últimos 4), moneda
+  (DOP/USD; la caja chica solo DOP), saldo inicial al empezar
+  `fecha_saldo_inicial`, cuenta contable opcional y `activa`.
+  **Saldo actual = saldo inicial + movimientos desde esa fecha.**
+- **Movimientos** de una cuenta = los registrados en Bancos
+  (`bancos.movimientos`: depósito, retiro, cargo bancario, interés,
+  comisión y las dos patas de cada transferencia) **más** los cobros
+  (`ventas.cobros`) y pagos a proveedores (`compras.pagos`) con
+  `cuenta_bancaria_id`. Los cobros/pagos no se copian: anularlos los saca de
+  la cuenta sin tocar Bancos. Cada movimiento se identifica por (`origen`
+  `manual` | `cobro` | `pago`, `id`); el monto va con signo (+ entra,
+  − sale). Un pago a proveedor mueve el banco por `monto` (neto de
+  retenciones); un pago solo de retenciones (monto 0) no es movimiento.
+- **`cuenta_bancaria_id` en cobros y pagos** (`POST /cobros`,
+  `POST /compras/pagos`): opcional; el texto libre `cuenta_destino` /
+  `cuenta_origen` se conserva por compatibilidad. 422 si la cuenta no
+  existe, está inactiva, es en USD (los cobros y pagos son en RD$) o la
+  fecha es anterior a su saldo inicial. La columna la agrega `DDL_BANCOS`
+  con `ALTER TABLE … ADD COLUMN IF NOT EXISTS`.
+- **Transferencias** (`bancos.transferencias`): la transferencia y sus dos
+  movimientos (`transferencia_salida` / `transferencia_entrada`) se crean y
+  se anulan en una sola transacción, con el candado de las dos cuentas en
+  orden fijo (no hay transferencias a medias ni bloqueos cruzados). Entre
+  monedas distintas exige `monto_destino` y la tasa sale de los dos montos;
+  entre dos cuentas en USD exige `tasa_cambio`. Los movimientos manuales en
+  una cuenta en USD exigen `tasa_cambio` (para el asiento en RD$).
+- **Extracto** (`bancos.extractos`, `bancos.extracto_lineas`): se sube el
+  CSV (multipart `archivo`, opcional `mapeo` en JSON y `saldo_final`). Se
+  detectan el separador (`,` `;` tabulador `|`), la fila de encabezado (la
+  primera con una columna de fecha y otra de monto/débito/crédito; admite
+  títulos antes) y cada columna por sinónimos: "Fecha", "Fecha Posteo",
+  "Fecha Transacción"; "Descripción", "Concepto", "Detalle";
+  "Referencia", "No. Referencia", "Documento", "Cheque"; "Débito",
+  "Retiros", "Cargos"; "Crédito", "Depósitos", "Abonos"; un solo "Monto"
+  con signo o con una columna D/C ("Tipo", "DB/CR"); "Balance", "Saldo".
+  Montos con `RD$`, miles con coma o punto, negativos con `-`, `(…)` o
+  `-` al final; fechas día primero (DD/MM/AAAA) o ISO. UTF-8 o
+  Windows-1252. `mapeo` fija cualquier columna por nombre o posición, el
+  formato de fecha, el separador decimal, el signo de la columna única y la
+  fila del encabezado. Las filas sin fecha (totales) se ignoran; las que no
+  se pueden leer van a `errores` con su número de fila. Cada línea tiene una
+  huella (cuenta, fecha, monto, referencia, descripción y número de
+  repetición dentro del archivo): volver a subir el mismo archivo no duplica
+  (`duplicadas`). `POST /bancos/extractos/previsualizar` lee sin guardar
+  para la pantalla de mapeo. Los layouts de los bancos dominicanos no están
+  publicados: los sinónimos son supuestos razonables, y el mapeo explícito
+  cubre lo demás.
+- **Conciliación:** una línea se concilia con un movimiento de la misma
+  cuenta y el **mismo monto** (con signo; si difieren, se registra la
+  diferencia aparte). Un movimiento se concilia con a lo sumo una línea;
+  una línea cuyo movimiento se anuló vuelve a contar como no conciliada.
+  - **Sugerencias / automática:** pares sin conciliar con el mismo monto y
+    fechas a ±`dias` (3 por defecto); puntaje 100 − 10 por día de
+    diferencia + 50 si la referencia de uno aparece en la referencia o
+    descripción del otro (sin espacios ni guiones). Se asignan de mayor a
+    menor puntaje, uno a uno.
+  - **Línea sin registro** (comisión, cargo por SMS, intereses): `POST
+    /bancos/extracto-lineas/{id}/movimiento` crea el movimiento (cargo
+    bancario o depósito por defecto, según el signo) y la concilia.
+  - **Cierre** al corte `hasta`: saldo según el banco (`saldo_banco`
+    enviado, o el `saldo_final` del extracto que termina ese día, o la
+    columna de saldo de su última línea, o el anterior + las líneas) contra
+    saldo en libros − partidas en tránsito (movimientos con fecha <= corte
+    no conciliados con una línea de fecha <= corte). 409 si quedan líneas
+    del extracto sin conciliar hasta el corte o si la diferencia no es 0.
+    Cerrada, todo lo que Bancos registra con fecha <= corte (movimientos,
+    transferencias, conciliar/desconciliar, cambiar el saldo inicial) da
+    409 hasta reabrirla (`DELETE`, solo la última); las líneas de un
+    extracto con esas fechas se omiten al importar (van a `errores`). Los cobros y pagos **no** se bloquean (no se frenan los flujos
+    de Ventas/Compras): uno con fecha ya conciliada queda como partida en
+    tránsito de la siguiente.
+- Todas las operaciones que cambian una cuenta toman su candado
+  (`pg_advisory_xact_lock`), igual que el cierre.
+
+### Endpoints
+
+| Método y ruta | Qué hace |
+|---|---|
+| `GET /bancos/cuentas?activa=` · `POST` · `GET/PUT/DELETE /bancos/cuentas/{id}` | Cuentas con `saldo_actual`, `movimientos_sin_conciliar`, `lineas_sin_conciliar`, `conciliada_hasta`. `PUT` cambia solo lo enviado (409: saldo inicial con conciliaciones cerradas, moneda con movimientos, fecha inicial posterior a un movimiento). `DELETE`: 409 si tiene movimientos, cobros, pagos o extractos |
+| `GET /bancos/cuentas/{id}/movimientos?desde=&hasta=&conciliado=&q=` | Movimientos (más recientes primero) con el saldo después de cada uno, saldo al inicio y al final, entradas y salidas |
+| `POST /bancos/movimientos` · `POST /bancos/movimientos/{id}/anular` | Depósito, retiro, cargo bancario, interés o comisión (monto positivo). 409 si la fecha está conciliada; anular: 409 si es de una transferencia |
+| `GET /bancos/transferencias?cuenta_id=` · `POST` · `POST /bancos/transferencias/{id}/anular` | Transferencias entre cuentas propias (atómicas) |
+| `POST /bancos/extractos/previsualizar` (multipart) | Lee el CSV sin guardar: columnas, mapeo, 20 primeras líneas, errores |
+| `POST /bancos/cuentas/{id}/extractos` (multipart) · `GET` · `DELETE /bancos/extractos/{id}` | Importa (`importadas`, `duplicadas`, `errores`); 413 si pasa de 5 MB. `DELETE`: 409 con líneas conciliadas |
+| `GET /bancos/cuentas/{id}/conciliacion?hasta=` | Líneas posteriores a la última conciliación, movimientos sin conciliar y el cuadre (`puede_cerrar`) |
+| `GET /bancos/cuentas/{id}/conciliacion/sugerencias?dias=` · `POST …/conciliacion/auto` | Sugerencias / aplicarlas (todas o `lineas`) |
+| `POST /bancos/extracto-lineas/{id}/conciliar` `{origen, movimiento_id}` · `…/desconciliar` · `…/movimiento` | Conciliación manual y "crear movimiento desde la línea" |
+| `GET/POST /bancos/cuentas/{id}/conciliaciones` · `DELETE /bancos/conciliaciones/{id}` | Conciliaciones cerradas / cerrar / reabrir la última |
+
+## Contabilidad
+
+Fase 5: catálogo de cuentas, cuentas por defecto, asientos manuales y
+automáticos, reportes y activos fijos. El contrato es
+[`frontend/src/lib/contabilidadApi.ts`](../frontend/src/lib/contabilidadApi.ts)
+(pantalla `Contabilidad.dc.html`: pestañas Catálogo de cuentas, Asientos y
+Activos fijos). Rutas en `app/contabilidad.py`, consultas en
+`app/contabilidad_repository.py`, armado de asientos, catálogo sugerido y
+depreciación en `app/contabilidad_calculos.py` (puras). Esquema
+`contabilidad` (`DDL_CONTABILIDAD`, copia en `db/init/012_…`). Las pruebas
+contra un Postgres real están en `tests/test_bancos_contabilidad_postgres.py`
+(se salta sin `CONTABILIDAD_TEST_DATABASE_URL`).
+
+### Catálogo de cuentas
+
+- Árbol por código: `1.1.01.03` es hija de `1.1.01`. Al crear una cuenta el
+  padre sale del código (422 si no existe), el tipo del padre y la
+  naturaleza del tipo (activo, costo y gasto deudoras; pasivo, patrimonio e
+  ingreso acreedoras; las cuentas "contra" se marcan con la contraria).
+  Solo las hojas aceptan movimientos: una cuenta que recibe una subcuenta
+  pasa a ser de grupo (409 si ya tiene movimientos o es una cuenta por
+  defecto / de un banco), y vuelve a ser de movimiento cuando se borra su
+  última subcuenta.
+- **Catálogo sugerido** (estilo NIIF para PYMES, como lo usan las PYMES
+  dominicanas): 1 Activos (caja general, caja chica, bancos, CxC clientes,
+  inventario, ITBIS pagado por compensar, anticipos y retenciones de ISR que
+  nos hicieron, propiedad planta y equipo por categoría del Art. 287 y su
+  depreciación acumulada), 2 Pasivos (CxP proveedores, tarjetas, ITBIS por
+  pagar, otros impuestos, ITBIS e ISR retenidos por pagar, nómina,
+  préstamos), 3 Patrimonio (capital, reserva legal, resultados), 4 Ingresos
+  (ventas gravadas, exentas, exportaciones, devoluciones en ventas,
+  ingresos financieros), 5 Costos (costo de ventas) y 6 Gastos (uno por
+  categoría del 606, depreciación, redondeo, gastos financieros y
+  comisiones bancarias). 79 cuentas. Se siembra al arrancar (bloque `DO`
+  de `DDL_CONTABILIDAD`, generado desde
+  `contabilidad_calculos.CATALOGO_SUGERIDO`) **solo si el catálogo está
+  vacío**: nunca toca uno que el usuario ya tenga.
+- Saldo de cada cuenta (con sus subcuentas) según su naturaleza, solo con
+  asientos `contabilizado`.
+
+### Asientos
+
+- **Manuales:** fecha, concepto, referencia y líneas débito/crédito (una de
+  las dos por línea, en cuentas de movimiento activas). `borrador` (puede
+  estar descuadrado, se edita y se borra) → `contabilizado` (debe cuadrar,
+  422 con la diferencia) → `anulado`. Numeración `AS-0001` correlativa.
+- **Automáticos** (`POST /contabilidad/asientos/generar {desde, hasta}`): a
+  pedido, nunca dentro de las transacciones de Ventas/Compras/Bancos, con un
+  candado propio. Para cada documento del rango arma el asiento, lo resuelve
+  con las cuentas por defecto y:
+  - lo **crea** si falta (idempotente: índice único parcial por (`origen`,
+    `origen_id`) de los no anulados);
+  - lo deja igual si su `huella` (fecha, concepto, cuentas y montos) no
+    cambió;
+  - si cambió el documento (p. ej. se reclasificó el 606) o una cuenta por
+    defecto, **anula** el anterior y crea uno nuevo (`actualizados`);
+  - **anula** el de un documento que ya no existe o se anuló (cobro o pago
+    anulado, e-CF rechazado comercialmente, renglón del 606 borrado). Un
+    documento que cambió de fecha se busca por su id.
+  - Lo que no se puede contabilizar va a `no_contabilizados` con el motivo:
+    falta la cuenta por defecto, 606 sin "tipo de bienes y servicios",
+    venta gratuita (TipoPago 3), e-CF sin MontoTotal.
+  - `GET /contabilidad/asientos/pendientes` hace lo mismo sin guardar (lo
+    que se crearía/actualizaría/anularía y los no contabilizables).
+  - Los automáticos no se editan ni se anulan a mano (409): se corrige el
+    documento y se vuelve a generar. La depreciación del mes sí se puede
+    anular (para recalcularla).
+
+**Asientos automáticos y cuentas por defecto** (`concepto` → cuenta del
+catálogo sugerido; se cambian en `PUT /contabilidad/cuentas-por-defecto`):
+
+| Documento (origen) | Fecha | Débito | Crédito |
+|---|---|---|---|
+| e-CF de venta **aceptado** E31/E32/E44/E45/E46 (`venta`) y nota de débito E33 (`nota_debito`) | FechaEmision | `cxc_clientes` 1.1.02.01 (TipoPago 2) o `caja` 1.1.01.01 (contado) por el MontoTotal | `ventas_gravadas` 4.1.01 (base 18 % + 16 %), `ventas_exentas` 4.1.02, `exportaciones` 4.1.03 (tasa 0 %), `itbis_por_pagar` 2.1.02.01 (ITBIS 18 % + 16 %); la diferencia con el MontoTotal (selectivo, otros impuestos, propina) a `otros_impuestos_por_pagar` 2.1.02.02, o a `redondeo` 6.1.10 si es ≤ RD$1 |
+| Nota de crédito E34 (`nota_credito`) | FechaEmision | `devoluciones_ventas` 4.1.04 (base) + `itbis_por_pagar` | `cxc_clientes` si la factura que modifica fue a crédito, si no `caja` |
+| Cobro (`cobro`) | fecha | la cuenta bancaria (su cuenta contable o `banco` 1.1.01.03 / `caja_chica` / `tarjeta_credito` según su tipo); sin cuenta bancaria: `caja` si es en efectivo, si no `banco` | `cxc_clientes` |
+| Renglón del 606 (`compra`; no los e-CF rechazados) | fecha del comprobante | `gasto_606_NN` según el tipo de bienes y servicios (01→6.1.01 personal, 02→6.1.02 servicios, 03→6.1.03 arrendamientos, 04→6.1.04, 05→6.1.05, 06→6.1.06, 07→6.2.01 financieros, 08→6.1.09, 09→5.1.01 costo de ventas, 10→1.2.01.03 activo fijo, 11→6.1.07 seguros) por el total − ITBIS adelantado; `itbis_adelantado` 1.1.04.01 por ITBIS facturado − ITBIS llevado al costo | `cxp_proveedores` 2.1.01.01 por el total por pagar (MontoTotal del e-CF o la suma de las casillas del 606); E43 gasto menor: `caja_chica`. Nota de crédito del proveedor (B04/E34): al revés |
+| Pago a proveedor (`pago`) | fecha | `cxp_proveedores` por monto + retenciones | la cuenta bancaria por `monto` (sin cuenta: `caja` en efectivo, `tarjeta_credito` con tarjeta, si no `banco`), `itbis_retenido_por_pagar` 2.1.03.01, `isr_retenido_por_pagar` 2.1.03.02 |
+| Movimiento bancario (`movimiento`) | fecha | depósito/interés: la cuenta bancaria; retiro/cargo/comisión: la contrapartida | depósito/interés: contrapartida; retiro/cargo/comisión: la cuenta bancaria. Contrapartida = la `cuenta_contable_id` del movimiento o `caja` (depósito, retiro), `gastos_bancarios` 6.2.02 (cargo, comisión), `ingresos_financieros` 4.2.01 (interés). En USD: monto × tasa |
+| Transferencia (`transferencia`) | fecha | cuenta de destino | cuenta de origen (en RD$: el lado en pesos, o monto × tasa entre dos cuentas en USD) |
+| Depreciación del mes (`depreciacion`, `POST /contabilidad/depreciacion`) | último día del mes | `gasto_depreciacion` 6.1.08 | `depreciacion_acumulada_N` 1.2.02.0N por categoría |
+
+Coherencia (verificada contra Postgres real en las pruebas): con el mismo
+desglose por tasa que el IT-1 y el 607 (`formatos.desglose_por_tasa`), los
+ingresos del estado de resultados = total de ingresos del IT-1, el saldo de
+ITBIS por pagar = ITBIS facturado del IT-1, ITBIS adelantado = el del 606,
+ITBIS retenido por pagar = "ITBIS retenido a proveedores" del IT-1 del mes
+del pago, ISR retenido por pagar = el IR-17, y CxC/CxP = lo pendiente de
+Ventas/Compras. Diferencias esperadas: el ajuste por proporcionalidad del
+ITBIS adelantado (IT-1, casilla 54) y el saldo a favor no se asientan solos
+(asiento manual); los saldos iniciales de las cuentas bancarias tampoco
+(registre un asiento de apertura); las facturas solo "enviadas" (sin
+aceptación de la DGII) no se contabilizan, igual que en el IT-1. El costo
+de ventas es periódico (las compras del 606 tipo 09 van a 5.1.01; el ajuste
+de inventario final es un asiento manual), como el IR-2.
+
+### Reportes
+
+Solo asientos contabilizados; sin fechas, el mes en curso (hora RD).
+
+| Método y ruta | Qué hace |
+|---|---|
+| `GET /contabilidad/resumen?desde=&hasta=` | Tablero: activos, pasivos y patrimonio al `hasta`; ingresos, costos, gastos y utilidad del período; asientos y documentos por contabilizar |
+| `GET /contabilidad/libro-diario?desde=&hasta=` | Asientos con sus líneas y totales |
+| `GET /contabilidad/mayor?cuenta_id=&desde=&hasta=` | Movimientos de la cuenta (y sus subcuentas) con saldo inicial y saldo corrido según su naturaleza |
+| `GET /contabilidad/balanza?desde=&hasta=&nivel=` | Balanza de comprobación: saldo inicial, débitos, créditos, saldo final (deudor/acreedor); `cuadrada` = débitos = créditos y saldos deudores = acreedores |
+| `GET /contabilidad/estado-resultados?desde=&hasta=` | Ingresos (netos de devoluciones), costos, utilidad bruta, gastos y utilidad neta, por cuenta |
+| `GET /contabilidad/balance-general?fecha=` | Activos, pasivos y patrimonio; sin asientos de cierre, el resultado se muestra como "del ejercicio" (desde el 1 de enero) y "de ejercicios anteriores no cerrados". `cuadrado` |
+
+Otros endpoints: `GET/POST /contabilidad/cuentas`, `GET/PUT/DELETE
+/contabilidad/cuentas/{id}`, `GET/PUT /contabilidad/cuentas-por-defecto`,
+`GET/POST /contabilidad/asientos?desde=&hasta=&origen=&estado=&q=&cuenta_id=`,
+`GET/PUT/DELETE /contabilidad/asientos/{id}`, `POST
+/contabilidad/asientos/{id}/contabilizar`, `POST …/anular`.
+
+### Activos fijos y depreciación
+
+- `GET/POST /contabilidad/activos-fijos`, `GET/PUT/DELETE …/{id}`, `POST
+  …/{id}/baja {fecha}`, `GET …/{id}/depreciacion?hasta=AAAAMM` (cuadro
+  mensual y depreciación fiscal por año), `GET /contabilidad/depreciacion?periodo=`
+  (vista previa del mes), `POST /contabilidad/depreciacion {periodo}`
+  (asiento del mes; 409 si ya está registrada, se anula el asiento para
+  recalcularla), `GET /contabilidad/depreciacion/fiscal?anio=`.
+- **Categorías (Art. 287, literal e, del Código Tributario, Ley 11-92):**
+  1 = edificaciones y sus componentes estructurales, **5 %** anual;
+  2 = automóviles y camiones livianos de uso común, equipos y muebles de
+  oficina, computadoras y equipos de procesamiento de datos, **25 %**;
+  3 = cualquier otra propiedad depreciable, **15 %**.
+- **Métodos:** `dgii` (fiscal): categoría 1 sobre el costo (línea recta al
+  5 %); categorías 2 y 3 por saldo decreciente, la tasa sobre el valor
+  fiscal pendiente al inicio de cada año. `linea_recta`: (costo − residual
+  − depreciación acumulada inicial) / vida útil en meses; el último mes
+  ajusta los centavos. Cuota mensual = anual / 12. Se deprecia desde
+  `depreciar_desde` (por defecto el mes siguiente a la adquisición) y hasta
+  el mes de la baja; `depreciacion_acumulada_inicial` es la que el activo
+  ya tenía hasta el mes anterior a `depreciar_desde`.
+- **IR-2:** la depreciación fiscal del año (`dgii` para todos los activos,
+  sea cual sea el método de sus asientos) es el valor sugerido del ajuste
+  `depreciacion` del pre-cálculo IR-2; un valor manual lo reemplaza.
+- Con depreciación registrada no se cambian costo, categoría, método ni
+  fechas (409) ni se borra el activo (se da de baja). La venta o retiro
+  del activo (ganancia/pérdida) se registra con un asiento manual.
+
+**Interpretaciones (activos):** el Art. 287 aplica el porcentaje a la
+cuenta de cada categoría (las categorías 2 y 3 en una cuenta conjunta por
+categoría) al cierre del año fiscal; aquí se calcula por activo (equivale
+al saldo de la cuenta cuando no hay ventas ni retiros en la categoría) y
+el primer año se prorratea por los meses en uso. La NG de la DGII en
+consulta sobre depreciación acelerada (doble tasa de la categoría 3 para
+maquinaria industrial, Ley 30-26) no se aplica: es un borrador.
+
+**Fuentes:** [Código Tributario, Título II (ISR), DGII](https://dgii.gov.do/legislacion/codigoTributario/Cdigo%20Tributario/Titulo2.pdf)
+(Art. 287 literal e: categorías y porcentajes 5/25/15 y su aplicación a la
+cuenta de activos al cierre del año) y el
+[borrador de Norma General sobre depreciación acelerada](https://dgii.gov.do/publicacionesOficiales/foroContribuyentes/Documents/Borrador-NG-dispone-lista-de-bienes-podra-acogerse-a-depreciacion-acelerada.pdf)
+(Ley 30-26, numeral IX del literal e). dgii.gov.do no respondió desde el
+entorno de desarrollo (403): el contenido se tomó del resumen del buscador
+de esas páginas oficiales; conviene revisar el texto completo.
 
 ## Despliegue
 

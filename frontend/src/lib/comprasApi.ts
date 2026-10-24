@@ -253,6 +253,8 @@ export interface PagoProveedor {
   monto: string;
   metodo: MetodoPago;
   cuenta_origen: string | null;
+  /** Cuenta de Bancos de la que salió el dinero; null si no se indicó. */
+  cuenta_bancaria_id: string | null;
   referencia: string | null;
   notas: string | null;
   tipo_retencion_isr: number | null;
@@ -276,6 +278,11 @@ export interface PagoProveedorPayload {
   monto: string;
   metodo: MetodoPago;
   cuenta_origen?: string | null;
+  /**
+   * Cuenta de Bancos (en RD$, activa) de la que sale `monto`: el pago pasa a ser un movimiento conciliable de esa
+   * cuenta. 422 si no existe, está inactiva, es en dólares o la fecha es anterior a su saldo inicial.
+   */
+  cuenta_bancaria_id?: string | null;
   referencia?: string | null;
   notas?: string | null;
   /** 1-9 (catálogo del 606); obligatorio si retencion_isr > 0. */

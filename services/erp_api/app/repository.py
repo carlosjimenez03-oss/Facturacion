@@ -736,10 +736,36 @@ async def listar_cuentas_por_cobrar(
 
 # --- Cobros ---------------------------------------------------------
 
+async def validar_cuenta_bancaria(
+    conn: asyncpg.Connection, cuenta_id: uuid.UUID | None, fecha: date, *, documento: str
+) -> None:
+    """Cuenta de Bancos de un cobro o pago (`cuenta_bancaria_id`): debe
+    existir, estar activa, ser en pesos (los cobros y pagos son en RD$) y la
+    fecha no puede ser anterior a su saldo inicial. 422 si no."""
+    if cuenta_id is None:
+        return
+    cuenta = await conn.fetchrow(
+        "SELECT nombre, activa, moneda, fecha_saldo_inicial FROM bancos.cuentas WHERE id = $1", cuenta_id
+    )
+    if cuenta is None:
+        raise DatosInvalidosError("La cuenta bancaria indicada no existe")
+    if not cuenta["activa"]:
+        raise DatosInvalidosError(f"La cuenta bancaria «{cuenta['nombre']}» está inactiva")
+    if cuenta["moneda"] != "DOP":
+        raise DatosInvalidosError(
+            f"La cuenta «{cuenta['nombre']}» es en {cuenta['moneda']}: el {documento} es en RD$, use una cuenta en pesos"
+        )
+    if fecha < cuenta["fecha_saldo_inicial"]:
+        raise DatosInvalidosError(
+            f"La fecha del {documento} es anterior al saldo inicial de «{cuenta['nombre']}» "
+            f"({cuenta['fecha_saldo_inicial']:%d/%m/%Y})"
+        )
+
+
 _SELECT_COBROS = """
     SELECT co.id, co.factura_id, f.encf,
            COALESCE(f.datos::jsonb #>> '{Encabezado,Comprador,RazonSocialComprador}', '') AS cliente_nombre,
-           co.fecha, co.monto, co.metodo, co.cuenta_destino, co.referencia, co.notas,
+           co.fecha, co.monto, co.metodo, co.cuenta_destino, co.cuenta_bancaria_id, co.referencia, co.notas,
            co.anulado, co.creado_en
     FROM ventas.cobros co
     LEFT JOIN facturacion.facturas f ON f.id = co.factura_id
@@ -781,17 +807,21 @@ async def registrar_cobro(
     cuenta_destino: str | None,
     referencia: str | None,
     notas: str | None,
+    cuenta_bancaria_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Registra un cobro de una factura a crédito, validando que no supere
     lo pendiente. El advisory lock por factura evita que dos cobros
     simultáneos de la misma factura pasen ambos la validación (no se puede
     usar FOR UPDATE: facturacion.facturas es de solo lectura para este
-    servicio)."""
+    servicio). Con `cuenta_bancaria_id`, el cobro es un movimiento de esa
+    cuenta de Bancos (ver `validar_cuenta_bancaria`)."""
     monto = _redondear(monto)
     if monto <= 0:
         raise DatosInvalidosError("El monto del cobro debe ser mayor que cero")
+    fecha = fecha or hoy()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            await validar_cuenta_bancaria(conn, cuenta_bancaria_id, fecha, documento="cobro")
             await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", str(factura_id))
             cuenta = await conn.fetchrow(
                 f"WITH {_CTE_CXC} SELECT pendiente FROM cxc WHERE factura_id = $1", factura_id
@@ -808,17 +838,18 @@ async def registrar_cobro(
             cobro_id = await conn.fetchval(
                 """
                 INSERT INTO ventas.cobros
-                    (factura_id, fecha, monto, metodo, cuenta_destino, referencia, notas)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    (factura_id, fecha, monto, metodo, cuenta_destino, referencia, notas, cuenta_bancaria_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 RETURNING id
                 """,
                 factura_id,
-                fecha or hoy(),
+                fecha,
                 monto,
                 metodo,
                 cuenta_destino,
                 referencia,
                 notas,
+                cuenta_bancaria_id,
             )
             fila = await conn.fetchrow(f"{_SELECT_COBROS} WHERE co.id = $1", cobro_id)
     return _fila_cobro(fila)

@@ -3,17 +3,20 @@ cobros y cuentas por cobrar, y un resumen de los documentos de venta; y el
 módulo de impuestos (formatos 607/608, pre-cálculos IT-1/IR-17/IR-2 y
 declaraciones), con sus rutas en `impuestos.py`; y Compras (bandeja de
 entrada de e-CF recibidos, cuentas por pagar, pagos a proveedores y
-retenciones), con sus rutas en `compras.py`.
+retenciones), con sus rutas en `compras.py`; Bancos (cuentas, movimientos,
+transferencias y conciliación) en `bancos.py` y Contabilidad (catálogo,
+asientos, reportes y activos fijos) en `contabilidad.py`.
 
-Vive en sus propios esquemas `ventas`, `impuestos` y `compras` (más
-`recepcion.ecf_recibidos`), que este servicio crea
+Vive en sus propios esquemas `ventas`, `impuestos`, `compras`, `bancos` y
+`contabilidad` (más `recepcion.ecf_recibidos`), que este servicio crea
 por sí mismo al arrancar (ver `migraciones.py`). Las cuentas por cobrar, el saldo de cada
 cliente y `/documentos-venta` se calculan LEYENDO `facturacion.facturas`
 (de `facturas_api`) -- este servicio nunca la modifica.
 
 El contrato con el frontend es `frontend/src/lib/erpApi.ts` (y
 `frontend/src/lib/impuestosApi.ts` para impuestos,
-`frontend/src/lib/comprasApi.ts` para compras).
+`frontend/src/lib/comprasApi.ts` para compras, `bancosApi.ts` y
+`contabilidadApi.ts` para bancos y contabilidad).
 """
 import asyncio
 import logging
@@ -26,7 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from libs.ecf_common.db import cerrar_pool, crear_pool
 
-from . import compras, impuestos, repository
+from . import bancos, compras, contabilidad, impuestos, repository
 from .config import ErpApiSettings, get_settings
 from .migraciones import aplicar_migraciones
 from .repository import (
@@ -108,6 +111,8 @@ app.add_middleware(
 
 app.include_router(impuestos.router)
 app.include_router(compras.router)
+app.include_router(bancos.router)
+app.include_router(contabilidad.router)
 
 
 def _pool():

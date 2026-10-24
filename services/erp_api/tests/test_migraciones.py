@@ -1,6 +1,6 @@
 """El DDL que erp_api aplica al arrancar (Supabase) y db/init/007_ventas.sql,
-008_impuestos.sql, 009_fecha_dgii_segura.sql y 010_compras.sql (Postgres
-local) deben ser el mismo."""
+008_impuestos.sql, 009_fecha_dgii_segura.sql, 010_compras.sql y
+012_bancos_contabilidad.sql (Postgres local) deben ser el mismo."""
 from pathlib import Path
 
 from services.erp_api.app import migraciones
@@ -28,11 +28,28 @@ def test_010_compras_tiene_el_mismo_ddl_que_migraciones():
     assert migraciones.DDL_COMPRAS.strip() in archivo
 
 
+def test_012_bancos_contabilidad_tiene_el_mismo_ddl_que_migraciones():
+    archivo = (REPO_ROOT / "db" / "init" / "012_bancos_contabilidad.sql").read_text(encoding="utf-8")
+    assert migraciones.DDL_CONTABILIDAD.strip() in archivo
+    assert migraciones.DDL_BANCOS.strip() in archivo
+    # Contabilidad antes que Bancos: bancos.cuentas referencia contabilidad.cuentas.
+    assert archivo.index(migraciones.DDL_CONTABILIDAD.strip()) < archivo.index(migraciones.DDL_BANCOS.strip())
+
+
+def test_la_semilla_del_catalogo_solo_corre_con_el_catalogo_vacio():
+    assert "IF NOT EXISTS (SELECT 1 FROM contabilidad.cuentas) THEN" in migraciones.DDL_CONTABILIDAD
+
+
 def test_ddl_es_idempotente():
-    for ddl in (migraciones.DDL_VENTAS, migraciones.DDL_IMPUESTOS, migraciones.DDL_FUNCIONES, migraciones.DDL_COMPRAS):
+    for ddl in (
+        migraciones.DDL_VENTAS, migraciones.DDL_IMPUESTOS, migraciones.DDL_FUNCIONES, migraciones.DDL_COMPRAS,
+        migraciones.DDL_CONTABILIDAD, migraciones.DDL_BANCOS,
+    ):
         for linea in ddl.splitlines():
             if linea.startswith("CREATE "):
                 assert "IF NOT EXISTS" in linea or linea.startswith("CREATE OR REPLACE "), linea
+            if linea.startswith("ALTER TABLE") or linea.strip().startswith("ADD COLUMN"):
+                assert "ADD COLUMN" not in linea or "IF NOT EXISTS" in linea, linea
 
 
 class _NullTransaction:
@@ -83,3 +100,5 @@ async def test_aplicar_migraciones_toma_el_lock_antes_del_ddl():
     assert conn.execute_calls[2][0] == migraciones.DDL_IMPUESTOS
     assert conn.execute_calls[3][0] == migraciones.DDL_FUNCIONES
     assert conn.execute_calls[4][0] == migraciones.DDL_COMPRAS
+    assert conn.execute_calls[5][0] == migraciones.DDL_CONTABILIDAD
+    assert conn.execute_calls[6][0] == migraciones.DDL_BANCOS
