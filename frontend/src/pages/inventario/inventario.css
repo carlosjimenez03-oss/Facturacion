@@ -1,0 +1,55 @@
+/* Complementos de las pantallas de Inventario (el sistema de diseño está en index.css). */
+.inv-split{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.inv-main{flex:2 1 600px;min-width:0;display:flex;flex-direction:column;gap:16px}
+.inv-side{flex:1 1 320px;min-width:0;display:flex;flex-direction:column;gap:16px}
+.inv-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px;align-items:start}
+.inv-grid .inv-full{grid-column:1/-1}
+.inv-filtros{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.inv-filtros>select.inp{width:auto;flex:0 1 180px;min-width:140px}
+.inv-filtros .tb-search{flex:1 1 220px}
+@media (max-width:640px){.inv-filtros>select.inp{flex:1 1 140px}}
+
+.fila-acc.inv-acc{flex-wrap:nowrap;white-space:nowrap}
+
+/* Interruptor con etiqueta */
+.inv-sw{display:flex;align-items:flex-start;gap:12px}
+.inv-sw .sw{margin-top:2px}
+.inv-sw label{display:flex;flex-direction:column;gap:2px;cursor:pointer;font-size:14px;color:#374151}
+.inv-sw label b{font-weight:600;color:var(--ink)}
+
+/* Detalle de un faltante (409) */
+.inv-faltante{display:flex;flex-direction:column;gap:6px;min-width:0}
+.inv-faltante dl{display:grid;grid-template-columns:repeat(3,auto);justify-content:start;gap:2px 24px;margin:2px 0}
+.inv-faltante dt{grid-row:1;font-size:12px;color:#991B1B}
+.inv-faltante dd{grid-row:2;margin:0;font-weight:700;font-variant-numeric:tabular-nums;color:#7F1D1D}
+
+/* Tablas de líneas (ajustes, transferencias) */
+.inv-lineas th,.inv-lineas td{padding-left:8px;padding-right:8px}
+.inv-lineas th:first-child,.inv-lineas td:first-child{padding-left:16px}
+.inv-lineas th:last-child,.inv-lineas td:last-child{padding-right:12px}
+.inv-lineas td{vertical-align:top}
+.inv-lineas select.inp-sm{min-width:112px}
+.inv-lineas td:first-child select.inp-sm{min-width:220px}
+.inv-lineas input.inp-sm{min-width:84px}
+.inv-lineas input[type=number]{-moz-appearance:textfield;appearance:textfield}
+.inv-lineas input[type=number]::-webkit-inner-spin-button,.inv-lineas input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.inv-stock{font-variant-numeric:tabular-nums;font-weight:600;color:#374151;white-space:nowrap;line-height:34px}
+.inv-stock.bad{color:#B91C1C}
+.inv-tot{grid-template-columns:1fr auto}
+.inv-tot .t{font-weight:650;color:#111827}
+.inv-tot dd.t{font-weight:700;font-size:16px}
+.inv-entrada{color:#15803D;font-weight:600}
+.inv-salida{color:#B91C1C;font-weight:600}
+.inv-lotes{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+
+/* Kardex: versión impresa */
+.inv-imp{display:none}
+@media print{
+  .inv-imp{display:block!important;margin-bottom:12px}
+  .inv-imp h1{margin:0;font-size:20px}
+  .inv-imp p{margin:2px 0 0;font-size:12px;color:#4B5563}
+  .inv-kardex .tw{overflow:visible}
+  .inv-kardex .tbl{min-width:0!important;font-size:11px}
+  .inv-kardex .tbl th,.inv-kardex .tbl td{padding:5px 6px}
+  .card{border:0}
+}
