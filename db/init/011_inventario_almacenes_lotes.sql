@@ -6,8 +6,9 @@
 -- Es EXACTAMENTE el `DDL_FASE4` de services/inventario_api/app/migraciones.py
 -- (lo verifica services/inventario_api/tests/test_migraciones.py):
 -- inventario-api lo aplica él mismo al arrancar (Supabase no ejecuta
--- db/init); este archivo es para el Postgres local de desarrollo. Todo es
--- idempotente, así que correrlo de nuevo no cambia nada.
+-- db/init) UNA sola vez, y lo anota como versión 11 en
+-- inventario.schema_version; este archivo es para el Postgres local de
+-- desarrollo. Todo es idempotente, así que correrlo de nuevo no cambia nada.
 
 -- Productos: datos que pide la pantalla de Productos. `tipo` 'servicio' no
 -- lleva existencia (no genera movimientos ni se valida stock al facturar).
@@ -23,6 +24,10 @@ ALTER TABLE inventario.productos
     ADD COLUMN IF NOT EXISTS categoria text,
     ADD COLUMN IF NOT EXISTS stock_minimo numeric(14, 4) NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS maneja_lotes boolean NOT NULL DEFAULT false;
+
+-- Un código de barras vacío es "sin código" (NULL): si no, el índice único
+-- de abajo solo admitiría un producto con ''.
+UPDATE inventario.productos SET codigo_barras = NULL WHERE btrim(codigo_barras) = '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS productos_codigo_barras_idx
     ON inventario.productos (codigo_barras) WHERE codigo_barras IS NOT NULL;
@@ -99,15 +104,23 @@ CREATE INDEX IF NOT EXISTS existencias_lote_almacen_idx ON inventario.existencia
 
 -- Kardex: almacén y lote de cada movimiento, la línea del documento de
 -- origen (NumeroLinea de la factura), el número legible del documento
--- (e-NCF, AJ-0001, TR-0001...) y un correlativo que ordena los movimientos
--- de una misma transacción (comparten `creado_en`). `referencia_tipo` suma
--- 'transferencia' y 'lote' (entrada manual de un lote).
+-- (e-NCF, AJ-0001, TR-0001...) y un correlativo `secuencia`, que es el
+-- orden real de los movimientos: se asigna al insertar, después de bloquear
+-- el producto (stock.py), así que para un mismo producto sigue el orden en
+-- que se aplicaron aunque una transacción que empezó antes confirme
+-- después. `referencia_tipo` suma 'transferencia' y 'lote' (entrada manual
+-- de un lote).
 ALTER TABLE inventario.movimientos
     ADD COLUMN IF NOT EXISTS almacen_id uuid REFERENCES inventario.almacenes (id),
     ADD COLUMN IF NOT EXISTS lote_id uuid REFERENCES inventario.lotes (id),
     ADD COLUMN IF NOT EXISTS referencia_linea text,
     ADD COLUMN IF NOT EXISTS documento text,
     ADD COLUMN IF NOT EXISTS secuencia bigint GENERATED ALWAYS AS IDENTITY;
+
+-- `creado_en` con la hora real del INSERT (no la del inicio de la
+-- transacción, que es lo que da now()): la fecha del Kardex coincide con
+-- el orden de `secuencia`.
+ALTER TABLE inventario.movimientos ALTER COLUMN creado_en SET DEFAULT clock_timestamp();
 
 CREATE INDEX IF NOT EXISTS movimientos_almacen_idx
     ON inventario.movimientos (almacen_id, producto_id, creado_en);
@@ -119,6 +132,13 @@ CREATE INDEX IF NOT EXISTS movimientos_lote_idx ON inventario.movimientos (lote_
 -- producto) de 004 ya no aplica. La idempotencia de la salida por factura
 -- pasa a ser por factura completa (advisory lock + "¿ya hay salidas de
 -- esta factura?", ver `repository.registrar_salida_por_factura`).
+--
+-- OJO al desplegar: el código de antes de la Fase 4 hace
+-- `ON CONFLICT (referencia_id, producto_id) WHERE ...` contra este índice;
+-- sin él TODA salida por factura de una réplica vieja falla. No hay forma
+-- de conservar un índice que esa sentencia acepte y que a la vez permita
+-- varios movimientos por factura × producto, así que la versión vieja y la
+-- nueva no deben atender a la vez (ver docs/INVENTARIO.md, "Despliegue").
 DROP INDEX IF EXISTS inventario.movimientos_salida_factura_idx;
 
 -- Movimientos de antes de la Fase 4: eran del único almacén que había.
@@ -126,10 +146,11 @@ UPDATE inventario.movimientos
 SET almacen_id = (SELECT id FROM inventario.almacenes WHERE es_principal)
 WHERE almacen_id IS NULL;
 
--- `stock_actual` manda sobre el total: si no coincide con la suma de
--- `existencias` (productos de antes de la Fase 4, o escritos por una
--- versión anterior del servicio) la diferencia se asigna al almacén
--- principal. En una base al día no cambia nada.
+-- `stock_actual` manda sobre el total: los productos de antes de la Fase 4
+-- no tienen `existencias`, así que su existencia completa se asigna al
+-- almacén principal. Corre una sola vez (con la migración); una diferencia
+-- que aparezca después NO se corrige sola: el arranque la reporta en el log
+-- (`migraciones.verificar_existencias`) para revisarla a mano.
 INSERT INTO inventario.existencias (producto_id, almacen_id, cantidad)
 SELECT p.id, a.id, p.stock_actual - COALESCE(e.total, 0)
 FROM inventario.productos p
@@ -214,3 +235,17 @@ CREATE TABLE IF NOT EXISTS inventario.transferencia_items (
 
 CREATE INDEX IF NOT EXISTS transferencia_items_transferencia_idx
     ON inventario.transferencia_items (transferencia_id);
+
+-- Migraciones ya aplicadas (el número es el del archivo de db/init). Con la
+-- fila 11 presente, inventario-api ya no vuelve a correr este DDL al
+-- arrancar (cada ALTER TABLE toma un AccessExclusiveLock sobre productos y
+-- movimientos aunque no cambie nada).
+CREATE TABLE IF NOT EXISTS inventario.schema_version (
+    version      integer PRIMARY KEY,
+    descripcion  text NOT NULL,
+    aplicada_en  timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO inventario.schema_version (version, descripcion)
+VALUES (11, '011_inventario_almacenes_lotes')
+ON CONFLICT (version) DO NOTHING;

@@ -6,8 +6,11 @@
 //
 // Errores: 404 = no existe (o un almacén/lote referenciado no existe), 409 =
 // la operación no aplica en el estado actual (ajuste ya aplicado, almacén
-// inactivo, sin existencia...), 422 = datos inválidos. Un 409 por falta de
-// existencia trae además `faltante` (ver InventarioApiError).
+// inactivo, lote de otro producto, sin existencia...), 422 = datos inválidos.
+// Un 409 por falta de existencia trae además `faltante` (ver
+// InventarioApiError). (La ruta interna de facturas-api
+// POST /movimientos/validar-disponibilidad responde 422 en vez de 404 por un
+// almacén/lote inexistente; no se usa desde el frontend.)
 import type {
   Ajuste,
   AjusteItemPayload,
@@ -97,6 +100,7 @@ function consulta(params: Record<string, string | number | boolean | undefined |
 export interface ProductoCamposFase4 {
   tipo?: TipoProducto;
   tasa_itbis?: TasaItbis;
+  /** "" (o solo espacios) se guarda como null. */
   codigo_barras?: string | null;
   categoria?: string | null;
   stock_minimo?: string;
@@ -119,7 +123,8 @@ export interface ProductoPayload extends ProductoCamposFase4 {
 /** PUT /productos/{id}: los campos de `ProductoCamposFase4` que NO se
  * envían se conservan (enviar `categoria: null` sí la borra). `tipo`,
  * `tasa_itbis`, `stock_minimo` y `maneja_lotes` no aceptan null. Pasar a
- * "servicio" exige existencia cero (409). */
+ * "servicio" exige existencia cero (409); `maneja_lotes: false` exige que
+ * ningún lote tenga existencia (409). */
 export interface ProductoActualizarPayload extends ProductoCamposFase4 {
   sku: string;
   nombre: string;

@@ -99,12 +99,22 @@ async def actualizar_almacen(
 ) -> dict[str, Any]:
     """`es_principal` True lo vuelve el principal (y deja de serlo el
     anterior); no se puede quitar la marca sin designar otro. No se inactiva
-    el principal ni un almacén que todavía tiene existencia."""
+    el principal ni un almacén que todavía tiene existencia (la fila queda
+    bloqueada FOR UPDATE: una transferencia, compra o ajuste en curso hacia
+    este almacén termina antes y su existencia cuenta)."""
     async with pool.acquire() as conn:
         async with conn.transaction():
-            actual = await conn.fetchrow(
-                "SELECT * FROM inventario.almacenes WHERE id = $1 FOR UPDATE", almacen_id
+            # Este almacén (y, si pasa a ser el principal, el principal
+            # actual), en orden de id: las transferencias bloquean sus dos
+            # almacenes FOR SHARE en ese mismo orden.
+            ids = [almacen_id]
+            if es_principal:
+                ids.append(await conn.fetchval("SELECT id FROM inventario.almacenes WHERE es_principal"))
+            filas = await conn.fetch(
+                "SELECT * FROM inventario.almacenes WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE",
+                [i for i in ids if i is not None],
             )
+            actual = next((fila for fila in filas if fila["id"] == almacen_id), None)
             if actual is None:
                 raise AlmacenNoEncontradoError(str(almacen_id))
             principal = actual["es_principal"] if es_principal is None else es_principal
@@ -284,8 +294,14 @@ async def crear_transferencia(
         raise OperacionInvalidaError("La transferencia no tiene líneas")
     async with pool.acquire() as conn:
         async with conn.transaction():
-            origen = await stock.obtener_almacen(conn, almacen_origen_id)
-            destino = await stock.obtener_almacen(conn, almacen_destino_id)
+            # Los dos activos y bloqueados (FOR SHARE) en orden de id, para
+            # que no se inactiven a mitad de la transferencia.
+            almacenes = {
+                almacen_id: await stock.obtener_almacen(conn, almacen_id)
+                for almacen_id in sorted((almacen_origen_id, almacen_destino_id))
+            }
+            origen = almacenes[almacen_origen_id]
+            destino = almacenes[almacen_destino_id]
             correlativo = await conn.fetchval("SELECT nextval('inventario.transferencias_numero_seq')")
             numero = f"TR-{correlativo:04d}"
             fila = await conn.fetchrow(
@@ -385,7 +401,11 @@ async def valuacion(pool: asyncpg.Pool) -> dict[str, Any]:
     """Valor del inventario (existencia × costo promedio) total, por almacén
     y por categoría, y los contadores de alertas de stock. `valor_total` es
     exactamente lo que el IR-2 de erp_api toma como inventario final
-    (`sum(GREATEST(stock_actual, 0) * costo_promedio)` de productos)."""
+    (`sum(GREATEST(stock_actual, 0) * costo_promedio)` de productos), igual
+    que `por_categoria`. `por_almacen` aplica el GREATEST a la existencia
+    de cada almacén: con algún almacén en negativo, la suma por almacén es
+    MAYOR que `valor_total` (ver docs/INVENTARIO.md, "Valuación con
+    existencia negativa")."""
     async with pool.acquire() as conn:
         totales = await conn.fetchrow(
             """

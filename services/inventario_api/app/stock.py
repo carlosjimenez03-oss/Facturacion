@@ -22,6 +22,12 @@ servicio debe tocar a mano):
 - Costo: promedio ponderado global por producto. Las entradas lo
   recalculan; las salidas (y las transferencias) salen al costo promedio
   vigente, que queda grabado en `movimientos.costo_unitario` para el Kardex.
+  La excepción es la anulación de una entrada: sale al costo con que entró
+  y el promedio se recalcula sin ella (`costo_promedio_sin_entrada`).
+- Lotes: toda entrada a un lote activa `maneja_lotes` del producto, y
+  `maneja_lotes` no se puede apagar mientras haya lotes con existencia
+  (repository.actualizar_producto). Así lo "sin lote" de un producto sin
+  lotes es toda su existencia.
 """
 from __future__ import annotations
 
@@ -66,6 +72,20 @@ def costo_promedio_ponderado(
     if stock_previo <= 0 or nuevo_stock <= 0:
         return costo_unitario
     return (stock_previo * costo_previo + cantidad * costo_unitario) / nuevo_stock
+
+
+def costo_promedio_sin_entrada(
+    stock_previo: Decimal, costo_previo: Decimal, cantidad: Decimal, costo_unitario: Decimal
+) -> Decimal:
+    """Costo promedio tras sacar `cantidad` al `costo_unitario` con que
+    entró (anulación de esa entrada): deshace el promedio ponderado,
+    (existencia·promedio − cantidad·costo) / (existencia − cantidad). Si no
+    queda existencia positiva, el costo queda en el de la entrada anulada
+    (igual que `costo_promedio_ponderado` sin existencia previa)."""
+    nuevo_stock = stock_previo - cantidad
+    if nuevo_stock <= 0:
+        return costo_unitario
+    return (stock_previo * costo_previo - cantidad * costo_unitario) / nuevo_stock
 
 
 def estado_lote(
@@ -116,11 +136,17 @@ async def almacen_principal_id(conn: asyncpg.Connection) -> uuid.UUID:
 async def obtener_almacen(
     conn: asyncpg.Connection, almacen_id: uuid.UUID | None, *, exigir_activo: bool = True
 ) -> asyncpg.Record:
-    """El almacén indicado o, si es None, el principal."""
+    """El almacén indicado o, si es None, el principal. Con `exigir_activo`
+    (toda operación que mete o saca mercancía salvo la salida por factura y
+    las anulaciones) además bloquea la fila FOR SHARE hasta el fin de la
+    transacción: inactivar el almacén (FOR UPDATE en
+    `almacenes_repository.actualizar_almacen`) espera a que termine y ve la
+    existencia que dejó, o la operación espera y lo ve inactivo."""
+    bloqueo = " FOR SHARE" if exigir_activo else ""
     if almacen_id is None:
-        fila = await conn.fetchrow("SELECT * FROM inventario.almacenes WHERE es_principal")
+        fila = await conn.fetchrow(f"SELECT * FROM inventario.almacenes WHERE es_principal{bloqueo}")
     else:
-        fila = await conn.fetchrow("SELECT * FROM inventario.almacenes WHERE id = $1", almacen_id)
+        fila = await conn.fetchrow(f"SELECT * FROM inventario.almacenes WHERE id = $1{bloqueo}", almacen_id)
     if fila is None:
         raise AlmacenNoEncontradoError(str(almacen_id) if almacen_id else "principal")
     if exigir_activo and not fila["activo"]:
@@ -336,6 +362,11 @@ async def registrar_entrada(
     producto = await _producto_bloqueado(conn, producto_id)
     if lote_id is not None:
         await obtener_lote_de_producto(conn, lote_id, producto_id)
+        if not producto["maneja_lotes"]:
+            await conn.execute(
+                "UPDATE inventario.productos SET maneja_lotes = true, actualizado_en = now() WHERE id = $1",
+                producto_id,
+            )
     costo: Decimal = costo_unitario if costo_unitario is not None else producto["costo_promedio"]
 
     if not es_transferencia:
@@ -380,6 +411,7 @@ async def registrar_salida(
     lote_id: uuid.UUID | None = None,
     forzar: bool = False,
     fefo: bool = True,
+    costo_entrada: Decimal | None = None,
     motivo: str | None,
     referencia_tipo: str,
     referencia_id: str | None = None,
@@ -396,8 +428,15 @@ async def registrar_salida(
       Puede generar varios movimientos (uno por lote). Con `fefo` False
       sale directo de lo "sin lote" (la anulación de una entrada sin lote).
     - Sin `forzar` y en un almacén que no `permite_negativo`, lanza
-      `StockInsuficienteError` si no hay existencia suficiente. `forzar` lo
-      usa la salida por factura: el e-CF ya se envió y no se puede deshacer.
+      `StockInsuficienteError` si no hay existencia suficiente: del lote,
+      o de lo "sin lote" (existencia del almacén menos sus lotes) si la
+      salida no lleva lote ni FEFO -- no basta con el total del almacén, o
+      lo "sin lote" quedaría negativo con los lotes en positivo. `forzar`
+      lo usa la salida por factura: el e-CF ya se envió y no se puede
+      deshacer.
+    - `costo_entrada`: solo la anulación de una entrada. Sale a ese costo
+      (el de la entrada) en vez del promedio vigente, y el promedio se
+      recalcula como si la entrada no hubiera ocurrido.
     """
     almacen_id = almacen["id"]
     producto = await _producto_bloqueado(conn, producto_id)
@@ -441,9 +480,19 @@ async def registrar_salida(
                 )
             tomas.append((None, resto))
     else:
+        if valida:
+            sin_lote = disponible - await cantidad_en_lotes(conn, producto_id, almacen_id)
+            if sin_lote < cantidad:
+                raise StockInsuficienteError(
+                    producto_id=str(producto_id),
+                    nombre=producto["nombre"],
+                    almacen_id=str(almacen_id),
+                    solicitado=cantidad,
+                    disponible=max(sin_lote, Decimal("0")),
+                )
         tomas = [(None, cantidad)]
 
-    costo: Decimal = producto["costo_promedio"]
+    costo: Decimal = producto["costo_promedio"] if costo_entrada is None else costo_entrada
     movimientos = []
     for lote_toma, cantidad_toma in tomas:
         if lote_toma is not None:
@@ -466,13 +515,19 @@ async def registrar_salida(
         )
     await _sumar_existencia(conn, producto_id, almacen_id, -cantidad)
     if not es_transferencia:
+        nuevo_costo = producto["costo_promedio"]
+        if costo_entrada is not None:
+            nuevo_costo = costo_promedio_sin_entrada(
+                producto["stock_actual"], producto["costo_promedio"], cantidad, costo_entrada
+            )
         await conn.execute(
             """
             UPDATE inventario.productos
-            SET stock_actual = stock_actual - $2, actualizado_en = now()
+            SET stock_actual = stock_actual - $2, costo_promedio = $3, actualizado_en = now()
             WHERE id = $1
             """,
             producto_id,
             cantidad,
+            nuevo_costo,
         )
     return movimientos

@@ -186,7 +186,7 @@ class Faltante(BaseModel):
     disponible: Decimal
     almacen_id: UUID | None = None
     lote_id: UUID | None = None
-    motivo: Literal["stock", "lote_vencido", "lote_bloqueado"] = "stock"
+    motivo: Literal["stock", "lote_vencido", "lote_bloqueado", "almacen_inactivo"] = "stock"
 
 
 class ValidarDisponibilidadResponse(BaseModel):

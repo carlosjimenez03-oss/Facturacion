@@ -286,9 +286,11 @@ async def _aplicar(conn: asyncpg.Connection, ajuste_id: uuid.UUID) -> None:
 async def anular_ajuste(pool: asyncpg.Pool, ajuste_id: uuid.UUID) -> dict[str, Any]:
     """Revierte un ajuste aplicado con el movimiento inverso de cada uno de
     sus movimientos (mismo almacén y lote; `referencia_tipo`
-    'anulacion_ajuste'). Revertir una entrada es una salida y valida
-    existencia: si esa mercancía ya se vendió o transfirió, la anulación
-    falla con `StockInsuficienteError` y el ajuste queda aplicado."""
+    'anulacion_ajuste'). Revertir una entrada es una salida al costo con
+    que entró (el promedio se recalcula sin ella) y valida existencia --
+    del lote, o de lo "sin lote" si entró sin lote --: si esa mercancía ya
+    se vendió o transfirió, la anulación falla con `StockInsuficienteError`
+    y el ajuste queda aplicado."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             actual = await _bloquear_ajuste(conn, ajuste_id, "aplicado")
@@ -326,11 +328,14 @@ async def anular_ajuste(pool: asyncpg.Pool, ajuste_id: uuid.UUID) -> dict[str, A
                         **comunes,
                     )
                 else:
+                    # Sale al costo con que entró (no al promedio de hoy) y
+                    # el promedio vuelve a ser el de antes de la entrada.
                     await stock.registrar_salida(
                         conn,
                         almacen=almacenes[mov["almacen_id"]],
                         cantidad=mov["cantidad"],
                         fefo=False,
+                        costo_entrada=mov["costo_unitario"],
                         **comunes,
                     )
             await conn.execute(

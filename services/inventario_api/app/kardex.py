@@ -9,13 +9,23 @@ producto (o del producto en un almacén) desde el primero:
   inventario): cada movimiento vale lo que quedó grabado en
   `movimientos.costo_unitario` (las salidas se graban al costo promedio
   vigente). Movimientos de antes de la Fase 4 sin costo se valúan al
-  promedio acumulado del Kardex.
+  promedio acumulado del Kardex. Igual que `stock.costo_promedio_ponderado`,
+  una entrada sin existencia previa positiva (cero o negativa por ventas
+  forzadas) no se promedia con lo anterior: el saldo pasa a valer
+  existencia × costo de esa entrada, así que el saldo final coincide con
+  `stock_actual × costo_promedio` del producto.
 - 'peps' (primero en entrar, primero en salir): mismas entradas, pero cada
   salida consume las capas de entrada más antiguas. Es solo una vista: no
   cambia el costo con que se registran las salidas.
 
 Sin `almacen_id` las transferencias entre almacenes no se muestran (cada
 una es una salida y una entrada del mismo producto que se anulan).
+
+Orden: `movimientos.secuencia`, que se asigna al insertar con el producto
+ya bloqueado (stock.py) -- el orden en que de verdad se aplicaron. No
+`creado_en`: hasta la migración 11 era now() (inicio de la transacción), y
+una transacción que empezó antes pero bloqueó el producto después quedaba
+antes en el Kardex, con un saldo distinto del real.
 """
 from __future__ import annotations
 
@@ -80,8 +90,8 @@ def _saldo(cantidad: Decimal, valor: Decimal) -> dict[str, Decimal]:
 def calcular_kardex(
     movimientos: list[dict[str, Any]], *, metodo: str = "promedio", inicio: datetime | None = None
 ) -> dict[str, Any]:
-    """Recorre `movimientos` (en orden cronológico, todos los del producto
-    hasta el fin del período) y arma las filas de los que caen desde
+    """Recorre `movimientos` (en el orden en que se aplicaron -- `secuencia`
+    --, todos los del producto hasta el fin del período) y arma las filas de los que caen desde
     `inicio`. Función pura: los tests la usan directamente."""
     if metodo not in METODOS:
         raise ValueError(f"Método de valuación desconocido: {metodo}")
@@ -95,7 +105,10 @@ def calcular_kardex(
     salidas = _CERO
 
     for mov in movimientos:
-        en_periodo = inicio is None or mov["creado_en"] >= inicio
+        # Una vez dentro del período, todo lo que sigue (en orden de
+        # secuencia) también lo está, aunque un movimiento viejo tenga un
+        # `creado_en` (inicio de su transacción) apenas anterior.
+        en_periodo = saldo_inicial is not None or inicio is None or mov["creado_en"] >= inicio
         if en_periodo and saldo_inicial is None:
             saldo_inicial = _saldo(cantidad, valor)
         q: Decimal = mov["cantidad"]
@@ -103,8 +116,13 @@ def calcular_kardex(
         if mov["tipo"] == "entrada":
             unitario = mov["costo_unitario"] if mov["costo_unitario"] is not None else promedio
             total = q * unitario
+            if cantidad <= 0 or cantidad + q <= 0:
+                # Misma regla que stock.costo_promedio_ponderado: sin
+                # existencia previa positiva, el costo es el de la entrada.
+                valor = (cantidad + q) * unitario
+            else:
+                valor += total
             cantidad += q
-            valor += total
             capas.append([q, unitario])
             ultimo_costo = unitario
             signo = Decimal("1")
@@ -219,7 +237,7 @@ async def obtener_kardex(
             LEFT JOIN inventario.almacenes a ON a.id = m.almacen_id
             LEFT JOIN inventario.lotes l ON l.id = m.lote_id
             WHERE {' AND '.join(condiciones)}
-            ORDER BY m.creado_en, m.secuencia
+            ORDER BY m.secuencia
             """,
             *valores,
         )

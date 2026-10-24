@@ -507,3 +507,295 @@ async def test_lote_explicito_y_fefo_del_mismo_producto_en_una_factura(pool):
     }
     assert restantes == {"L-A": D("0"), "L-B": D("0"), "L-VENCIDO": D("7")}
     assert await _existencias(pool, str(pid)) == {"Principal": D("7")}
+
+
+# --- Revisión de la Fase 4 ---------------------------------------------------------
+
+async def _locks_access_exclusive(conn) -> list[str]:
+    filas = await conn.fetch(
+        "SELECT relation::regclass::text AS rel FROM pg_locks "
+        "WHERE pid = pg_backend_pid() AND locktype = 'relation' AND mode = 'AccessExclusiveLock' ORDER BY 1"
+    )
+    return [fila["rel"] for fila in filas]
+
+
+async def test_migracion_aplicada_no_vuelve_a_correr_ddl(pool):
+    """Un arranque con la base al día no toma ningún AccessExclusiveLock
+    (antes cada ALTER TABLE ... IF NOT EXISTS lo tomaba sobre productos,
+    movimientos, compras y compra_items)."""
+    async with pool.acquire() as conn:
+        assert await migraciones.version_aplicada(conn) == migraciones.VERSION_ACTUAL == 11
+        async with conn.transaction():
+            # Mismo camino que aplicar_migraciones, en una transacción para
+            # poder mirar los locks que deja.
+            assert await migraciones._migrar(conn) == []
+            assert await _locks_access_exclusive(conn) == []
+    assert await migraciones.aplicar_migraciones(pool) == []
+
+
+async def test_db_init_local_queda_anotado_y_la_app_no_lo_repite(base_vacia):
+    """Postgres local: db/init corre 004 y 011; el arranque ya no migra."""
+    async with base_vacia.acquire() as conn:
+        for archivo in ("004_inventario.sql", "011_inventario_almacenes_lotes.sql"):
+            await conn.execute((REPO_ROOT / "db" / "init" / archivo).read_text(encoding="utf-8"))
+    assert await migraciones.aplicar_migraciones(base_vacia) == []
+
+
+async def test_migracion_no_deja_en_deadlock_a_una_salida_en_curso(base_vacia):
+    """Escenario del revisor: una salida por factura ya leyó `movimientos`
+    (AccessShare) y luego bloquea `productos` mientras otra réplica arranca
+    y migra. La migración espera cada tabla menos que deadlock_timeout: se
+    rinde ella primero, suelta todo y reintenta; la salida termina sin
+    error."""
+    ddl_004 = (REPO_ROOT / "db" / "init" / "004_inventario.sql").read_text(encoding="utf-8")
+    async with base_vacia.acquire() as conn:
+        await conn.execute(ddl_004)
+        pid = await conn.fetchval(
+            "INSERT INTO inventario.productos (sku, nombre, stock_actual, costo_promedio) "
+            "VALUES ('A', 'A', 10, 100) RETURNING id"
+        )
+    venta = await base_vacia.acquire()
+    tx = venta.transaction()
+    await tx.start()
+    await venta.fetch("SELECT * FROM inventario.movimientos WHERE referencia_tipo = 'factura'")
+    esperas: list[float] = []
+
+    async def dormir(segundos):
+        esperas.append(segundos)
+        await asyncio.sleep(0.2)
+
+    migracion = asyncio.create_task(migraciones.aplicar_migraciones(base_vacia, dormir=dormir))
+    await asyncio.sleep(0.3)
+    await venta.fetch("SELECT id FROM inventario.productos WHERE id = $1 FOR NO KEY UPDATE", pid)
+    await tx.commit()
+    await base_vacia.release(venta)
+    assert await asyncio.wait_for(migracion, 30) == [11]
+    assert esperas  # tuvo que reintentar
+    assert await _existencias(base_vacia, str(pid)) == {"Principal": D("10")}
+
+
+async def test_descuadre_posterior_a_la_migracion_se_reporta_sin_corregir(pool, caplog):
+    producto = await _producto(pool, sku="DESC", stock_inicial=D("5"), costo=D("1"))
+    async with pool.acquire() as conn:  # lo que escribiría una réplica de antes de la Fase 4
+        await conn.execute(
+            "UPDATE inventario.productos SET stock_actual = stock_actual - 2 WHERE id = $1", uuid.UUID(producto["id"])
+        )
+    with caplog.at_level("WARNING", logger=migraciones.__name__):
+        await migraciones.aplicar_migraciones(pool)
+    assert "DESC (stock_actual 3.0000, almacenes 5.0000)" in caplog.text
+    async with pool.acquire() as conn:
+        assert await conn.fetchval(
+            "SELECT sum(cantidad) FROM inventario.existencias WHERE producto_id = $1", uuid.UUID(producto["id"])
+        ) == D("5")
+
+
+async def test_anular_entrada_sale_al_costo_original_y_restaura_el_promedio(pool):
+    producto = await _producto(pool, sku="ANU", stock_inicial=D("10"), costo=D("100"))
+    pid = uuid.UUID(producto["id"])
+    ajuste = await ajustes_repository.crear_ajuste(
+        pool, almacen_id=None, motivo="otro", fecha=None, notas=None, aplicar=True,
+        items=[{"producto_id": pid, "tipo": "entrada", "cantidad": D("10"), "costo_unitario": D("200")}],
+    )
+    assert (await repository.obtener_producto(pool, pid))["costo_promedio"] == D("150")
+    await ajustes_repository.anular_ajuste(pool, uuid.UUID(ajuste["id"]))
+    producto = await repository.obtener_producto(pool, pid)
+    assert (producto["stock_actual"], producto["costo_promedio"]) == (D("10"), D("100"))
+    inverso = (await repository.listar_movimientos(pool, referencia_tipo="anulacion_ajuste"))[0]
+    assert inverso["costo_unitario"] == D("200")
+    final = (await kardex.obtener_kardex(pool, producto_id=pid))["saldo_final"]
+    assert final == {"cantidad": D("10"), "costo_promedio": D("100.0000"), "valor": D("1000.00")}
+
+
+async def test_salida_sin_lote_no_toma_unidades_de_los_lotes(pool):
+    """Anular una entrada sin lote cuando lo "sin lote" ya se vendió: antes
+    pasaba (el total del almacén alcanzaba con el lote vencido) y lo "sin
+    lote" quedaba en -5 con el lote en +10."""
+    producto = await _producto(pool, sku="LOT")
+    pid = uuid.UUID(producto["id"])
+    await lotes_repository.crear_lote(
+        pool, producto_id=pid, numero="L1", fecha_vencimiento=stock.hoy_rd() - timedelta(days=1), notas=None,
+        dias_alerta=30, cantidad_inicial=D("10"), costo_unitario=D("10"),
+    )
+    ajuste = await ajustes_repository.crear_ajuste(
+        pool, almacen_id=None, motivo="otro", fecha=None, notas=None, aplicar=True,
+        items=[{"producto_id": pid, "tipo": "entrada", "cantidad": D("5"), "costo_unitario": D("10")}],
+    )
+    await repository.registrar_salida_por_factura(pool, "F-2", [{"producto_id": pid, "cantidad": D("5")}])
+    with pytest.raises(StockInsuficienteError) as error:
+        await ajustes_repository.anular_ajuste(pool, uuid.UUID(ajuste["id"]))
+    assert error.value.disponible == D("0")
+    existencias = await almacenes_repository.existencias_producto(pool, pid, dias_alerta=30)
+    assert existencias["almacenes"][0]["sin_lote"] == D("0")
+
+
+async def test_maneja_lotes_no_se_apaga_con_lotes_con_existencia(pool):
+    producto = await _producto(pool, sku="ML", stock_inicial=D("3"), costo=D("1"))
+    pid = uuid.UUID(producto["id"])
+    datos = {"sku": "ML", "nombre": "ML", "descripcion": None, "unidad_medida": None,
+             "precio_venta": D("1"), "activo": True}
+    # Una compra con lote de un producto que no maneja lotes se lo activa.
+    compra = await repository.crear_compra(
+        pool, proveedor_id=None, numero_documento=None, notas=None,
+        items=[{"producto_id": pid, "cantidad": D("2"), "costo_unitario": D("1"), "lote_numero": "C-1"}],
+    )
+    await repository.confirmar_compra(pool, uuid.UUID(compra["id"]))
+    assert (await repository.obtener_producto(pool, pid))["maneja_lotes"] is True
+    with pytest.raises(OperacionInvalidaError, match="1 lote"):
+        await repository.actualizar_producto(pool, pid, **datos, maneja_lotes=False)
+    # Sin existencia en lotes sí se puede.
+    lote = (await lotes_repository.listar_lotes(pool, dias_alerta=30, producto_id=pid))[0]
+    await ajustes_repository.crear_ajuste(
+        pool, almacen_id=None, motivo="otro", fecha=None, notas=None, aplicar=True,
+        items=[{"producto_id": pid, "tipo": "salida", "cantidad": D("2"), "lote_id": uuid.UUID(str(lote["id"]))}],
+    )
+    actualizado = await repository.actualizar_producto(pool, pid, **datos, maneja_lotes=False)
+    assert actualizado["maneja_lotes"] is False
+
+
+async def test_kardex_con_existencia_negativa_coincide_con_el_servicio(pool):
+    producto = await _producto(pool, sku="NEG", stock_inicial=D("5"), costo=D("100"))
+    pid = uuid.UUID(producto["id"])
+    await repository.registrar_salida_por_factura(pool, "F-1", [{"producto_id": pid, "cantidad": D("10")}])
+    await ajustes_repository.crear_ajuste(
+        pool, almacen_id=None, motivo="otro", fecha=None, notas=None, aplicar=True,
+        items=[{"producto_id": pid, "tipo": "entrada", "cantidad": D("10"), "costo_unitario": D("120")}],
+    )
+    producto = await repository.obtener_producto(pool, pid)
+    final = (await kardex.obtener_kardex(pool, producto_id=pid))["saldo_final"]
+    assert final["cantidad"] == producto["stock_actual"] == D("5")
+    assert final["costo_promedio"] == producto["costo_promedio"] == D("120")
+    assert final["valor"] == D("600.00")
+
+
+async def test_kardex_sigue_el_orden_real_de_aplicacion(pool):
+    """T1 empieza primero pero bloquea el producto después de que T2 (una
+    entrada a otro costo) confirma: el Kardex debe mostrar T2 antes."""
+    producto = await _producto(pool, sku="ORD", stock_inicial=D("10"), costo=D("100"))
+    pid = uuid.UUID(producto["id"])
+    c1 = await pool.acquire()
+    c2 = await pool.acquire()
+    try:
+        t1 = c1.transaction()
+        await t1.start()
+        await c1.execute("SELECT 1")
+        await asyncio.sleep(0.05)
+        async with c2.transaction():
+            await stock.registrar_entrada(
+                c2, producto_id=pid, almacen_id=await stock.almacen_principal_id(c2), cantidad=D("10"),
+                costo_unitario=D("200"), motivo="x", referencia_tipo="ajuste",
+            )
+        almacen = await stock.obtener_almacen(c1, None)
+        await stock.registrar_salida(
+            c1, producto_id=pid, almacen=almacen, cantidad=D("15"), motivo="y", referencia_tipo="ajuste"
+        )
+        await t1.commit()
+    finally:
+        await pool.release(c1)
+        await pool.release(c2)
+    resultado = await kardex.obtener_kardex(pool, producto_id=pid)
+    assert [f["saldo_cantidad"] for f in resultado["filas"]] == [D("10"), D("20"), D("5")]
+    assert [f["saldo_valor"] for f in resultado["filas"]] == [D("1000.00"), D("3000.00"), D("750.00")]
+    fechas = [f["fecha"] for f in resultado["filas"]]
+    assert fechas == sorted(fechas)  # creado_en = clock_timestamp()
+
+
+async def test_codigo_barras_vacio_es_null(pool):
+    a = await _producto(pool, sku="CB-1", codigo_barras="")
+    b = await _producto(pool, sku="CB-2", codigo_barras="  ")
+    assert a["codigo_barras"] is None and b["codigo_barras"] is None
+    datos = {"sku": "CB-1", "nombre": "x", "descripcion": None, "unidad_medida": None,
+             "precio_venta": D("1"), "activo": True}
+    actualizado = await repository.actualizar_producto(pool, uuid.UUID(a["id"]), **datos, codigo_barras=" 746 ")
+    assert actualizado["codigo_barras"] == "746"
+    actualizado = await repository.actualizar_producto(pool, uuid.UUID(a["id"]), **datos, codigo_barras="")
+    assert actualizado["codigo_barras"] is None
+
+
+async def test_validar_disponibilidad_almacen_inactivo_y_lote_ajeno(pool):
+    sucursal = await almacenes_repository.crear_almacen(pool, nombre="Cerrada", direccion=None)
+    await almacenes_repository.actualizar_almacen(
+        pool, uuid.UUID(sucursal["id"]), nombre="Cerrada", direccion=None, permite_negativo=True, activo=False
+    )
+    producto = await _producto(pool, sku="VD", stock_inicial=D("5"), costo=D("1"))
+    pid = uuid.UUID(producto["id"])
+    disponible, faltantes = await repository.validar_disponibilidad(
+        pool, [{"producto_id": pid, "cantidad": D("1"), "almacen_id": uuid.UUID(sucursal["id"])}]
+    )
+    assert disponible is False and faltantes[0]["motivo"] == "almacen_inactivo"
+
+    otro = await _producto(pool, sku="VD-2")
+    lote = await lotes_repository.crear_lote(
+        pool, producto_id=uuid.UUID(otro["id"]), numero="X", fecha_vencimiento=None, notas=None, dias_alerta=30
+    )
+    with pytest.raises(OperacionInvalidaError):
+        await repository.validar_disponibilidad(
+            pool, [{"producto_id": pid, "cantidad": D("1"), "lote_id": uuid.UUID(str(lote["id"]))}]
+        )
+    # Sin lotes, lo pedido sin lote se compara con lo "sin lote" (= todo).
+    disponible, _ = await repository.validar_disponibilidad(pool, [{"producto_id": pid, "cantidad": D("5")}])
+    assert disponible is True
+
+
+async def test_inactivar_almacen_espera_a_la_transferencia_en_curso(pool):
+    principal = await _principal(pool)
+    sucursal = await almacenes_repository.crear_almacen(pool, nombre="Destino", direccion=None)
+    sid = uuid.UUID(sucursal["id"])
+    producto = await _producto(pool, sku="TR", stock_inicial=D("5"), costo=D("1"))
+    conn = await pool.acquire()
+    try:
+        tx = conn.transaction()
+        await tx.start()
+        # FOR SHARE de los dos almacenes en orden de id, como crear_transferencia.
+        bloqueados = {
+            almacen_id: await stock.obtener_almacen(conn, almacen_id)
+            for almacen_id in sorted((uuid.UUID(principal["id"]), sid))
+        }
+        destino = bloqueados[sid]
+        inactivar = asyncio.create_task(
+            almacenes_repository.actualizar_almacen(
+                pool, sid, nombre="Destino", direccion=None, permite_negativo=False, activo=False
+            )
+        )
+        await asyncio.sleep(0.3)
+        assert not inactivar.done()  # espera el FOR SHARE
+        await stock.registrar_salida(
+            conn, producto_id=uuid.UUID(producto["id"]), almacen=bloqueados[uuid.UUID(principal["id"])],
+            cantidad=D("2"), motivo="t", referencia_tipo="transferencia", es_transferencia=True,
+        )
+        await stock.registrar_entrada(
+            conn, producto_id=uuid.UUID(producto["id"]), almacen_id=destino["id"], cantidad=D("2"),
+            motivo="t", referencia_tipo="transferencia", es_transferencia=True,
+        )
+        await tx.commit()
+    finally:
+        await pool.release(conn)
+    with pytest.raises(OperacionInvalidaError, match="todavía tiene existencia"):
+        await inactivar
+    assert await _existencias(pool, producto["id"]) == {principal["nombre"]: D("3"), "Destino": D("2")}
+
+    # Y al revés: inactivo primero, la transferencia hacia él se rechaza.
+    vacio = await almacenes_repository.crear_almacen(pool, nombre="Vacío", direccion=None)
+    await almacenes_repository.actualizar_almacen(
+        pool, uuid.UUID(vacio["id"]), nombre="Vacío", direccion=None, permite_negativo=False, activo=False
+    )
+    with pytest.raises(OperacionInvalidaError, match="inactivo"):
+        await almacenes_repository.crear_transferencia(
+            pool, almacen_origen_id=uuid.UUID(principal["id"]), almacen_destino_id=uuid.UUID(vacio["id"]),
+            notas=None, items=[{"producto_id": uuid.UUID(producto["id"]), "cantidad": D("1")}],
+        )
+
+
+async def test_valuacion_por_almacen_con_existencia_negativa(pool):
+    """Documentado: cada almacén se valúa con GREATEST(cantidad, 0) y el
+    total por producto (como el IR-2), así que con un almacén en negativo
+    la suma por almacén es mayor que `valor_total`."""
+    sucursal = await almacenes_repository.crear_almacen(pool, nombre="Neg", direccion=None, permite_negativo=True)
+    producto = await _producto(pool, sku="VN", stock_inicial=D("10"), costo=D("2"))
+    await repository.registrar_salida_por_factura(
+        pool, "F-N", [{"producto_id": uuid.UUID(producto["id"]), "cantidad": D("4"),
+                       "almacen_id": uuid.UUID(sucursal["id"])}],
+    )
+    valuacion = await almacenes_repository.valuacion(pool)
+    por_almacen = {a["nombre"]: a["valor"] for a in valuacion["por_almacen"]}
+    assert por_almacen == {"Principal": D("20.00"), "Neg": D("0.00")}
+    assert valuacion["valor_total"] == D("12.00")  # (10 − 4) × 2

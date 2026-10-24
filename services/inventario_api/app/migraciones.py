@@ -13,19 +13,42 @@ pool, igual que `erp_api` (ver services/erp_api/app/migraciones.py):
   una base que ya lo tiene NO se vuelve a correr, porque recrearía el
   índice único `movimientos_salida_factura_idx` que `DDL_FASE4` reemplaza
   (ver el comentario ahí).
-- `DDL_FASE4` es exactamente `db/init/011_inventario_almacenes_lotes.sql`
-  y se ejecuta en cada arranque: todo es idempotente (`IF NOT EXISTS`,
-  `ADD COLUMN IF NOT EXISTS`, `INSERT ... WHERE NOT EXISTS` / `ON
-  CONFLICT`). tests/test_migraciones.py verifica que los textos no se
-  separen.
+- `MIGRACIONES`: cada una (`DDL_FASE4` = exactamente
+  `db/init/011_inventario_almacenes_lotes.sql`) se aplica UNA vez y queda
+  anotada en `inventario.schema_version` (la última sentencia de su DDL).
+  Los arranques siguientes solo leen esa tabla: ningún ALTER TABLE, así que
+  no toman AccessExclusiveLock sobre `productos`/`movimientos` ni frenan
+  (o bloquean en deadlock) las ventas que están entrando. El DDL sigue
+  siendo idempotente (`IF NOT EXISTS`...): correrlo de nuevo -- p. ej. el
+  archivo de db/init en el Postgres local -- no cambia nada.
+  tests/test_migraciones.py verifica que los textos no se separen.
 
-Para cambios de esquema futuros: agregar sentencias idempotentes al final
-de `DDL_FASE4` (o un `DDL_FASE5` nuevo) y copiarlas también en un nuevo
-`db/init/0NN_*.sql`.
+La vez que sí hay que migrar (despliegue de la versión nueva), la
+transacción:
+- usa `lock_timeout` de 5 s (advisory lock entre réplicas incluido);
+- toma de entrada, con un solo `LOCK TABLE`, el AccessExclusiveLock de las
+  tablas existentes que va a alterar (`tablas`), esperando por cada una
+  MENOS que `deadlock_timeout` (`_SQL_ESPERA_LOCK_MS`). Si mientras la
+  migración tiene unas tablas y espera otra, una operación en curso pide
+  una de las suyas (p. ej. una salida por factura que ya leyó
+  `movimientos` y bloquea `productos`), es la migración la que se rinde
+  primero (lock_timeout) -- antes de que el detector de deadlocks de la
+  otra sesión la elija a ella como víctima --, suelta todo y reintenta con
+  espera creciente (`_REINTENTOS`). No se usa NOWAIT: con ventas entrando
+  sin parar nunca encontraría las tablas libres; esperando, su pedido entra
+  en la cola de locks y las transacciones nuevas esperan detrás de ella.
+
+Para cambios de esquema futuros: un `DDL_FASE5` nuevo que termine
+anotando su versión en `inventario.schema_version`, agregado a
+`MIGRACIONES` (con las tablas existentes que altera), y copiado tal cual en
+un nuevo `db/init/0NN_*.sql`.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
+from typing import NamedTuple
 
 import asyncpg
 
@@ -147,6 +170,10 @@ ALTER TABLE inventario.productos
     ADD COLUMN IF NOT EXISTS stock_minimo numeric(14, 4) NOT NULL DEFAULT 0,
     ADD COLUMN IF NOT EXISTS maneja_lotes boolean NOT NULL DEFAULT false;
 
+-- Un código de barras vacío es "sin código" (NULL): si no, el índice único
+-- de abajo solo admitiría un producto con ''.
+UPDATE inventario.productos SET codigo_barras = NULL WHERE btrim(codigo_barras) = '';
+
 CREATE UNIQUE INDEX IF NOT EXISTS productos_codigo_barras_idx
     ON inventario.productos (codigo_barras) WHERE codigo_barras IS NOT NULL;
 CREATE INDEX IF NOT EXISTS productos_categoria_idx ON inventario.productos (categoria);
@@ -222,15 +249,23 @@ CREATE INDEX IF NOT EXISTS existencias_lote_almacen_idx ON inventario.existencia
 
 -- Kardex: almacén y lote de cada movimiento, la línea del documento de
 -- origen (NumeroLinea de la factura), el número legible del documento
--- (e-NCF, AJ-0001, TR-0001...) y un correlativo que ordena los movimientos
--- de una misma transacción (comparten `creado_en`). `referencia_tipo` suma
--- 'transferencia' y 'lote' (entrada manual de un lote).
+-- (e-NCF, AJ-0001, TR-0001...) y un correlativo `secuencia`, que es el
+-- orden real de los movimientos: se asigna al insertar, después de bloquear
+-- el producto (stock.py), así que para un mismo producto sigue el orden en
+-- que se aplicaron aunque una transacción que empezó antes confirme
+-- después. `referencia_tipo` suma 'transferencia' y 'lote' (entrada manual
+-- de un lote).
 ALTER TABLE inventario.movimientos
     ADD COLUMN IF NOT EXISTS almacen_id uuid REFERENCES inventario.almacenes (id),
     ADD COLUMN IF NOT EXISTS lote_id uuid REFERENCES inventario.lotes (id),
     ADD COLUMN IF NOT EXISTS referencia_linea text,
     ADD COLUMN IF NOT EXISTS documento text,
     ADD COLUMN IF NOT EXISTS secuencia bigint GENERATED ALWAYS AS IDENTITY;
+
+-- `creado_en` con la hora real del INSERT (no la del inicio de la
+-- transacción, que es lo que da now()): la fecha del Kardex coincide con
+-- el orden de `secuencia`.
+ALTER TABLE inventario.movimientos ALTER COLUMN creado_en SET DEFAULT clock_timestamp();
 
 CREATE INDEX IF NOT EXISTS movimientos_almacen_idx
     ON inventario.movimientos (almacen_id, producto_id, creado_en);
@@ -242,6 +277,13 @@ CREATE INDEX IF NOT EXISTS movimientos_lote_idx ON inventario.movimientos (lote_
 -- producto) de 004 ya no aplica. La idempotencia de la salida por factura
 -- pasa a ser por factura completa (advisory lock + "¿ya hay salidas de
 -- esta factura?", ver `repository.registrar_salida_por_factura`).
+--
+-- OJO al desplegar: el código de antes de la Fase 4 hace
+-- `ON CONFLICT (referencia_id, producto_id) WHERE ...` contra este índice;
+-- sin él TODA salida por factura de una réplica vieja falla. No hay forma
+-- de conservar un índice que esa sentencia acepte y que a la vez permita
+-- varios movimientos por factura × producto, así que la versión vieja y la
+-- nueva no deben atender a la vez (ver docs/INVENTARIO.md, "Despliegue").
 DROP INDEX IF EXISTS inventario.movimientos_salida_factura_idx;
 
 -- Movimientos de antes de la Fase 4: eran del único almacén que había.
@@ -249,10 +291,11 @@ UPDATE inventario.movimientos
 SET almacen_id = (SELECT id FROM inventario.almacenes WHERE es_principal)
 WHERE almacen_id IS NULL;
 
--- `stock_actual` manda sobre el total: si no coincide con la suma de
--- `existencias` (productos de antes de la Fase 4, o escritos por una
--- versión anterior del servicio) la diferencia se asigna al almacén
--- principal. En una base al día no cambia nada.
+-- `stock_actual` manda sobre el total: los productos de antes de la Fase 4
+-- no tienen `existencias`, así que su existencia completa se asigna al
+-- almacén principal. Corre una sola vez (con la migración); una diferencia
+-- que aparezca después NO se corrige sola: el arranque la reporta en el log
+-- (`migraciones.verificar_existencias`) para revisarla a mano.
 INSERT INTO inventario.existencias (producto_id, almacen_id, cantidad)
 SELECT p.id, a.id, p.stock_actual - COALESCE(e.total, 0)
 FROM inventario.productos p
@@ -337,16 +380,162 @@ CREATE TABLE IF NOT EXISTS inventario.transferencia_items (
 
 CREATE INDEX IF NOT EXISTS transferencia_items_transferencia_idx
     ON inventario.transferencia_items (transferencia_id);
+
+-- Migraciones ya aplicadas (el número es el del archivo de db/init). Con la
+-- fila 11 presente, inventario-api ya no vuelve a correr este DDL al
+-- arrancar (cada ALTER TABLE toma un AccessExclusiveLock sobre productos y
+-- movimientos aunque no cambie nada).
+CREATE TABLE IF NOT EXISTS inventario.schema_version (
+    version      integer PRIMARY KEY,
+    descripcion  text NOT NULL,
+    aplicada_en  timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO inventario.schema_version (version, descripcion)
+VALUES (11, '011_inventario_almacenes_lotes')
+ON CONFLICT (version) DO NOTHING;
 """
 
 
-async def aplicar_migraciones(pool: asyncpg.Pool) -> None:
-    """Crea (si no existe) el esquema `inventario` y lo lleva a la Fase 4
-    (almacenes, existencias, lotes, ajustes, transferencias)."""
+class Migracion(NamedTuple):
+    version: int
+    ddl: str
+    # Tablas que ya existían antes de esta migración y que su DDL altera:
+    # se bloquean todas de entrada (ver el docstring del módulo).
+    tablas: tuple[str, ...]
+
+
+MIGRACIONES: tuple[Migracion, ...] = (
+    Migracion(
+        11,
+        DDL_FASE4,
+        (
+            "inventario.productos",
+            "inventario.movimientos",
+            "inventario.compras",
+            "inventario.compra_items",
+        ),
+    ),
+)
+
+VERSION_ACTUAL = MIGRACIONES[-1].version
+
+_LOCK_TIMEOUT = "5s"
+# Espera máxima por cada tabla del LOCK TABLE inicial: 80 % de
+# `deadlock_timeout` (1 s por defecto), entre 50 y 900 ms.
+_SQL_ESPERA_LOCK_MS = """
+    SELECT GREATEST(LEAST(
+        extract(epoch FROM current_setting('deadlock_timeout')::interval) * 1000 * 0.8, 900), 50)::int
+"""
+_REINTENTOS = 8
+_ESPERA_INICIAL_SEGUNDOS = 0.5
+_ESPERA_MAXIMA_SEGUNDOS = 15.0
+
+
+async def version_aplicada(conn: asyncpg.Connection) -> int:
+    """Última migración anotada en `inventario.schema_version` (0 si la
+    tabla todavía no existe: base nueva o de antes de anotar versiones)."""
+    if await conn.fetchval("SELECT to_regclass('inventario.schema_version')") is None:
+        return 0
+    return await conn.fetchval("SELECT COALESCE(max(version), 0) FROM inventario.schema_version")
+
+
+async def _migrar(conn: asyncpg.Connection) -> list[int]:
+    """Un intento: aplica las migraciones pendientes en una sola
+    transacción. Devuelve las versiones aplicadas ([] si no había nada)."""
+    # Camino normal (base ya al día): solo una lectura, sin locks de tabla.
+    if await version_aplicada(conn) >= VERSION_ACTUAL:
+        return []
+    aplicadas: list[int] = []
+    async with conn.transaction():
+        await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
+        await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
+        # Otra réplica pudo migrar mientras esperábamos el advisory lock.
+        actual = await version_aplicada(conn)
+        if actual >= VERSION_ACTUAL:
+            return []
+        if await conn.fetchval("SELECT to_regclass('inventario.movimientos')") is None:
+            await conn.execute(DDL_BASE)
+        for migracion in MIGRACIONES:
+            if migracion.version <= actual:
+                continue
+            espera_ms = await conn.fetchval(_SQL_ESPERA_LOCK_MS)
+            await conn.execute(f"SET LOCAL lock_timeout = '{espera_ms}ms'")
+            await conn.execute(f"LOCK TABLE {', '.join(migracion.tablas)} IN ACCESS EXCLUSIVE MODE")
+            await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
+            await conn.execute(migracion.ddl)
+            aplicadas.append(migracion.version)
+    return aplicadas
+
+
+async def verificar_existencias(pool: asyncpg.Pool) -> int:
+    """Reporta (log WARNING, sin corregir nada) los productos cuyo
+    `stock_actual` no coincide con la suma de `existencias` por almacén --
+    p. ej. salidas que escribió una réplica de antes de la Fase 4 durante
+    un despliegue. Solo lee. Devuelve cuántos hay."""
     async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
-            if await conn.fetchval("SELECT to_regclass('inventario.movimientos')") is None:
-                await conn.execute(DDL_BASE)
-            await conn.execute(DDL_FASE4)
-    logger.info("Esquema 'inventario' verificado/migrado")
+        filas = await conn.fetch(
+            """
+            SELECT p.sku, p.stock_actual, COALESCE(e.total, 0) AS en_almacenes
+            FROM inventario.productos p
+            LEFT JOIN (
+                SELECT producto_id, sum(cantidad) AS total FROM inventario.existencias GROUP BY producto_id
+            ) e ON e.producto_id = p.id
+            WHERE p.stock_actual <> COALESCE(e.total, 0)
+            ORDER BY p.sku
+            """
+        )
+    if filas:
+        detalle = ", ".join(
+            f"{fila['sku']} (stock_actual {fila['stock_actual']}, almacenes {fila['en_almacenes']})"
+            for fila in filas[:20]
+        )
+        logger.warning(
+            "%s producto(s) con stock_actual distinto de la suma por almacén (no se corrige solo; "
+            "ver docs/INVENTARIO.md, 'Despliegue'): %s%s",
+            len(filas),
+            detalle,
+            "..." if len(filas) > 20 else "",
+        )
+    return len(filas)
+
+
+async def aplicar_migraciones(
+    pool: asyncpg.Pool,
+    *,
+    reintentos: int = _REINTENTOS,
+    dormir: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> list[int]:
+    """Crea (si no existe) el esquema `inventario` y le aplica las
+    migraciones pendientes; reintenta con espera creciente si una tabla
+    está ocupada (lock_timeout) o si cae en un deadlock. Al final
+    verifica (solo log) que `stock_actual` cuadre con las existencias.
+    Devuelve las versiones aplicadas en este arranque."""
+    espera = _ESPERA_INICIAL_SEGUNDOS
+    aplicadas: list[int] = []
+    for intento in range(1, reintentos + 1):
+        try:
+            async with pool.acquire() as conn:
+                aplicadas = await _migrar(conn)
+            break
+        except (asyncpg.LockNotAvailableError, asyncpg.DeadlockDetectedError) as exc:
+            if intento == reintentos:
+                raise
+            logger.warning(
+                "Migración de 'inventario' en espera (intento %s/%s, %s): reintentando en %ss",
+                intento,
+                reintentos,
+                exc.__class__.__name__,
+                espera,
+            )
+            await dormir(espera)
+            espera = min(espera * 2, _ESPERA_MAXIMA_SEGUNDOS)
+    if aplicadas:
+        logger.info("Esquema 'inventario' migrado a la versión %s", aplicadas[-1])
+    else:
+        logger.info("Esquema 'inventario' al día (versión %s)", VERSION_ACTUAL)
+    try:
+        await verificar_existencias(pool)
+    except asyncpg.PostgresError:
+        logger.exception("No se pudo verificar la consistencia de existencias")
+    return aplicadas

@@ -124,7 +124,8 @@ export interface Producto {
   categoria: string | null;
   stock_minimo: string;
   /** true = las salidas sin lote se toman por FEFO de sus lotes. Se activa
-   * solo al registrar el primer lote. */
+   * sola al registrar un lote o al entrar mercancía a un lote (p. ej. una
+   * compra con lote). */
   maneja_lotes: boolean;
   estado_stock: EstadoStock;
 }
@@ -429,6 +430,9 @@ export interface Valuacion {
   con_existencia: number;
   sin_existencia: number;
   bajo_minimo: number;
+  /** `valor` = Σ max(existencia del almacén, 0) × costo promedio. Con algún
+   * almacén en negativo, la suma de estos valores es MAYOR que `valor_total`
+   * (que aplica el max al total del producto, como el IR-2). */
   por_almacen: { almacen_id: string; nombre: string; activo: boolean; productos: number; cantidad: string; valor: string }[];
   /** `categoria` null = sin categoría. */
   por_categoria: { categoria: string | null; productos: number; cantidad: string; valor: string }[];

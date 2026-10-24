@@ -62,6 +62,14 @@ def estado_stock(producto: dict[str, Any]) -> str:
     return "disponible"
 
 
+def normalizar_codigo_barras(valor: str | None) -> str | None:
+    """Sin espacios alrededor; vacío = sin código (NULL). Si no, el índice
+    único de `codigo_barras` solo admitiría un producto con ''."""
+    if valor is None:
+        return None
+    return valor.strip() or None
+
+
 def _producto(fila: asyncpg.Record) -> dict[str, Any]:
     datos = _con_id_str(fila)
     datos["estado_stock"] = estado_stock(datos)
@@ -107,7 +115,7 @@ async def crear_producto(
                 precio_venta,
                 tipo,
                 tasa_itbis,
-                codigo_barras,
+                normalizar_codigo_barras(codigo_barras),
                 categoria,
                 stock_minimo,
                 maneja_lotes,
@@ -211,7 +219,9 @@ async def actualizar_producto(
     **opcionales: Any,
 ) -> dict[str, Any]:
     """`opcionales`: solo los de `CAMPOS_PRODUCTO_OPCIONALES` que el cliente
-    mandó. Pasar a 'servicio' exige existencia cero."""
+    mandó. Pasar a 'servicio' exige existencia cero; apagar `maneja_lotes`,
+    que ningún lote tenga existencia (si no, las salidas sin lote dejarían
+    lo "sin lote" en negativo con los lotes en positivo)."""
     cambios: dict[str, Any] = {
         "sku": sku,
         "nombre": nombre,
@@ -221,14 +231,32 @@ async def actualizar_producto(
         "activo": activo,
     }
     cambios.update({k: v for k, v in opcionales.items() if k in CAMPOS_PRODUCTO_OPCIONALES})
+    if "codigo_barras" in cambios:
+        cambios["codigo_barras"] = normalizar_codigo_barras(cambios["codigo_barras"])
     asignaciones = ", ".join(f"{campo} = ${i}" for i, campo in enumerate(cambios, start=2))
     async with pool.acquire() as conn:
         async with conn.transaction():
             actual = await conn.fetchrow(
-                "SELECT tipo, stock_actual FROM inventario.productos WHERE id = $1 FOR UPDATE", producto_id
+                "SELECT tipo, stock_actual, maneja_lotes FROM inventario.productos WHERE id = $1 FOR UPDATE",
+                producto_id,
             )
             if actual is None:
                 raise ProductoNoEncontradoError(str(producto_id))
+            if cambios.get("maneja_lotes") is False and actual["maneja_lotes"]:
+                en_lotes = await conn.fetchval(
+                    """
+                    SELECT count(DISTINCT l.id)
+                    FROM inventario.existencias_lote el
+                    JOIN inventario.lotes l ON l.id = el.lote_id
+                    WHERE l.producto_id = $1 AND el.cantidad <> 0
+                    """,
+                    producto_id,
+                )
+                if en_lotes:
+                    raise OperacionInvalidaError(
+                        f"El producto tiene existencia en {en_lotes} lote(s): sáquela o ajústela "
+                        "antes de dejar de manejar lotes"
+                    )
             if cambios.get("tipo") == "servicio" and actual["tipo"] != "servicio" and actual["stock_actual"] != 0:
                 raise OperacionInvalidaError(
                     "Solo se puede convertir en servicio un producto sin existencia "
@@ -604,7 +632,15 @@ async def validar_disponibilidad(
     `almacen_id` (None = principal) y `lote_id`. Se suma lo pedido por
     (producto, almacén) y por lote antes de comparar (dos líneas del mismo
     producto cuentan juntas). Los servicios siempre están disponibles. Un
-    lote vencido o bloqueado se reporta como faltante (`motivo`)."""
+    lote vencido o bloqueado, o un almacén inactivo, se reporta como
+    faltante (`motivo`). Lo pedido sin lote se compara con lo que se le
+    puede dar: lotes vendibles (FEFO) + "sin lote" si el producto maneja
+    lotes, o solo lo "sin lote" (existencia − lotes) si no -- igual que
+    valida `stock.registrar_salida`.
+
+    Un almacén o lote que no existe lanza `AlmacenNoEncontradoError` /
+    `LoteNoEncontradoError` (422 en main.py); un lote de otro producto,
+    `OperacionInvalidaError` (409)."""
     faltantes: list[dict[str, Any]] = []
     por_almacen: dict[tuple[uuid.UUID, uuid.UUID], Decimal] = {}
     sin_lote: dict[tuple[uuid.UUID, uuid.UUID], Decimal] = {}
@@ -649,6 +685,12 @@ async def validar_disponibilidad(
             )
 
         for (producto_id, almacen_id), solicitado in por_almacen.items():
+            if not almacenes[almacen_id]["activo"]:
+                # No se vende desde un almacén inactivo (la salida por factura
+                # no lo rechaza: para entonces el e-CF ya se envió).
+                disponible = await stock.existencia(conn, producto_id, almacen_id)
+                _faltante(producto_id, almacen_id, solicitado, disponible, motivo="almacen_inactivo")
+                continue
             if almacenes[almacen_id]["permite_negativo"]:
                 continue
             disponible = await stock.existencia(conn, producto_id, almacen_id)
@@ -656,7 +698,11 @@ async def validar_disponibilidad(
                 _faltante(producto_id, almacen_id, solicitado, disponible)
                 continue
             pedido_sin_lote = sin_lote.get((producto_id, almacen_id), Decimal("0"))
-            if productos[producto_id]["maneja_lotes"] and pedido_sin_lote > 0:
+            if not productos[producto_id]["maneja_lotes"] and pedido_sin_lote > 0:
+                sin_lote_disponible = disponible - await stock.cantidad_en_lotes(conn, producto_id, almacen_id)
+                if sin_lote_disponible < pedido_sin_lote:
+                    _faltante(producto_id, almacen_id, pedido_sin_lote, max(sin_lote_disponible, Decimal("0")))
+            elif pedido_sin_lote > 0:
                 # Sin lote indicado se venderá por FEFO: solo cuentan los lotes
                 # vendibles (ni vencidos ni bloqueados) y lo que está sin lote.
                 # Lo pedido con lote explícito de esos mismos lotes ya no está
@@ -676,6 +722,8 @@ async def validar_disponibilidad(
 
         for (producto_id, almacen_id, lote_id), solicitado in por_lote.items():
             lote = await stock.obtener_lote_de_producto(conn, lote_id, producto_id)
+            if not almacenes[almacen_id]["activo"]:
+                continue  # ya reportado arriba
             estado = stock.estado_lote(
                 fecha_vencimiento=lote["fecha_vencimiento"], bloqueado=lote["bloqueado"], hoy=hoy, dias_alerta=0
             )

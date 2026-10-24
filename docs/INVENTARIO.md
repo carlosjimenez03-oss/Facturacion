@@ -23,29 +23,101 @@ en ISO 8601.
     (productos, proveedores, compras, movimientos). Solo se ejecuta si
     `inventario.movimientos` no existe (base nueva).
   - `DDL_FASE4` = [`db/init/011_inventario_almacenes_lotes.sql`](../db/init/011_inventario_almacenes_lotes.sql).
-    Se ejecuta en cada arranque; todo es idempotente.
+    Se ejecuta **una sola vez** y queda anotado como versión `11` en
+    `inventario.schema_version` (lo anota su última sentencia, así que el
+    Postgres local que corre `db/init` también queda al día). Los arranques
+    siguientes solo leen esa tabla: no corren ningún `ALTER TABLE` (cada
+    uno toma un AccessExclusiveLock sobre `productos`/`movimientos` aunque
+    no cambie nada, y frenaba o dejaba en deadlock las ventas en curso).
+    El DDL sigue siendo idempotente.
+  - La vez que sí migra: `lock_timeout` de 5 s y, de entrada, `LOCK TABLE
+    productos, movimientos, compras, compra_items` esperando cada tabla
+    menos que `deadlock_timeout` (800 ms con el valor por defecto de 1 s):
+    si se cruza con una operación en curso es la migración la que se rinde
+    (nunca la venta), suelta todo y reintenta con espera creciente (0,5 s a
+    15 s, 8 intentos); si aun así no puede, el arranque falla y Docker lo
+    reinicia. La migración reescribe `movimientos` (columna identidad
+    `secuencia`): mientras corre, las operaciones de inventario esperan.
   - `tests/test_migraciones.py` verifica que el DDL de Python y los
-    archivos de `db/init` no se separen.
+    archivos de `db/init` no se separen y que cada migración anote su
+    versión.
 - Al migrar una base existente: se crea el almacén **Principal**, toda la
   existencia actual (`productos.stock_actual`) queda en él y los
-  movimientos viejos se marcan con ese almacén. Si alguna vez
-  `stock_actual` no coincide con la suma por almacén (p. ej. lo escribió
-  una versión anterior durante un despliegue), el siguiente arranque asigna
-  la diferencia al principal.
+  movimientos viejos se marcan con ese almacén. Eso ocurre solo en la
+  migración. Si después `stock_actual` deja de coincidir con la suma por
+  almacén (p. ej. lo escribió una versión anterior durante un despliegue
+  que se solapó), **no se corrige solo**: cada arranque lo reporta en el
+  log (`WARNING ... stock_actual distinto de la suma por almacén`, con los
+  SKU). Ver "Despliegue".
+
+### Despliegue (versión anterior a Fase 4)
+
+La Fase 4 elimina el índice único `movimientos_salida_factura_idx`
+(factura × producto) porque una factura puede sacar el mismo producto en
+varios movimientos (dos líneas, varios lotes por FEFO, varios almacenes).
+El `inventario-api` anterior registra la salida por factura con `ON
+CONFLICT (referencia_id, producto_id) WHERE ...`, que **exige** ese índice:
+no hay ningún índice que esa sentencia acepte y que a la vez permita varios
+movimientos por factura × producto. Por eso:
+
+- **La versión anterior y la nueva no deben atender a la vez** después de
+  que la nueva migró. Con el Compose de Dokploy (una réplica, `docker
+  compose up -d` detiene el contenedor viejo y arranca el nuevo) no hay
+  solape. No usar un despliegue "rolling"/"start-first" para esta versión.
+- Si aun así una réplica vieja atendió después de la migración: cada salida
+  por factura que procesó **falló** (facturas-api la deja con
+  `facturacion.facturas.inventario_sincronizado = false` e
+  `inventario_error` con `no unique or exclusion constraint matching the ON
+  CONFLICT specification`). Se recupera reenviando esas facturas a
+  `POST /movimientos/salida-por-factura` (idempotente por factura) desde la
+  versión nueva. Lo que la versión vieja sí haya escrito (compras,
+  productos) queda en `stock_actual` sin reparto por almacén y aparece en
+  el aviso del log; se corrige asignando la diferencia al principal:
+
+  ```sql
+  INSERT INTO inventario.existencias (producto_id, almacen_id, cantidad)
+  SELECT p.id, a.id, p.stock_actual - COALESCE(e.total, 0)
+  FROM inventario.productos p
+  CROSS JOIN inventario.almacenes a
+  LEFT JOIN (SELECT producto_id, sum(cantidad) AS total FROM inventario.existencias GROUP BY producto_id) e
+      ON e.producto_id = p.id
+  WHERE a.es_principal AND p.stock_actual <> COALESCE(e.total, 0)
+  ON CONFLICT (producto_id, almacen_id)
+  DO UPDATE SET cantidad = inventario.existencias.cantidad + EXCLUDED.cantidad, actualizado_en = now();
+  ```
+- **Volver a la versión anterior** después de migrar exige recrear el
+  índice (si no, todas sus salidas por factura fallan). Solo se puede si
+  ninguna factura tiene dos salidas del mismo producto:
+
+  ```sql
+  SELECT referencia_id, producto_id, count(*) FROM inventario.movimientos
+  WHERE referencia_tipo = 'factura' AND tipo = 'salida'
+  GROUP BY 1, 2 HAVING count(*) > 1;   -- debe venir vacío
+
+  CREATE UNIQUE INDEX CONCURRENTLY movimientos_salida_factura_idx
+      ON inventario.movimientos (referencia_id, producto_id)
+      WHERE referencia_tipo = 'factura' AND tipo = 'salida';
+  ```
+
+  Al volver a desplegar la Fase 4 no se elimina de nuevo (la migración ya
+  está anotada): bórrelo a mano con `DROP INDEX CONCURRENTLY
+  inventario.movimientos_salida_factura_idx` antes de que una factura
+  saque el mismo producto dos veces.
 
 ### Modelo
 
 | Tabla | Qué guarda |
 |---|---|
-| `productos` | + `tipo` (`bien`/`servicio`), `tasa_itbis` (`18`/`16`/`0`/`exento`), `codigo_barras` (único), `categoria`, `stock_minimo`, `maneja_lotes`. `stock_actual` sigue siendo el **total** de todos los almacenes y `costo_promedio` el promedio ponderado global. |
+| `productos` | + `tipo` (`bien`/`servicio`), `tasa_itbis` (`18`/`16`/`0`/`exento`), `codigo_barras` (único; vacío se guarda como NULL), `categoria`, `stock_minimo`, `maneja_lotes`. `stock_actual` sigue siendo el **total** de todos los almacenes y `costo_promedio` el promedio ponderado global. |
 | `almacenes` | nombre (único sin importar mayúsculas), dirección, `es_principal` (exactamente uno), `permite_negativo`, `activo`. |
 | `existencias` | cantidad por producto × almacén. Siempre suma `stock_actual`. |
 | `lotes` | número (único por producto), `fecha_vencimiento`, `bloqueado`, notas. |
 | `existencias_lote` | cantidad por lote × almacén. Lo que la existencia del almacén tiene de más es mercancía "sin lote". |
-| `movimientos` | + `almacen_id`, `lote_id`, `referencia_linea` (NumeroLinea de la factura), `documento` (e-NCF, NCF, AJ-0001, TR-0001) y `secuencia` (orden dentro de una transacción). `referencia_tipo`: `compra`, `factura`, `ajuste`, `anulacion_ajuste`, `transferencia`, `lote`. |
+| `movimientos` | + `almacen_id`, `lote_id`, `referencia_linea` (NumeroLinea de la factura), `documento` (e-NCF, NCF, AJ-0001, TR-0001) y `secuencia` (orden real de aplicación: se asigna con el producto ya bloqueado). `creado_en` es `clock_timestamp()` (hora del INSERT, no del inicio de la transacción). `referencia_tipo`: `compra`, `factura`, `ajuste`, `anulacion_ajuste`, `transferencia`, `lote`. |
 | `compras` / `compra_items` | + `almacen_id` de la compra; `lote_numero` y `lote_vencimiento` por línea. |
 | `ajustes` / `ajuste_items` | correlativo `AJ-0001`, almacén, motivo, estado; líneas entrada/salida con costo (entradas) y lote. |
 | `transferencias` / `transferencia_items` | correlativo `TR-0001`, origen, destino; líneas con lote. |
+| `schema_version` | migraciones aplicadas (`11` = Fase 4). |
 
 Los correlativos usan secuencias: una operación rechazada consume número
 (puede haber saltos).
@@ -59,13 +131,21 @@ Los correlativos usan secuencias: una operación rechazada consume número
   ajustes de entrada, entrada manual de lote) lo recalculan; sin existencia
   previa positiva el nuevo costo es el de la entrada. Las salidas y las
   transferencias salen al costo promedio vigente, que queda grabado en el
-  movimiento.
+  movimiento. **Anular una entrada** (ajuste) la saca al costo con que
+  entró y deshace el promedio: `(existencia·promedio − cantidad·costo) /
+  (existencia − cantidad)`, o el costo de la entrada si no queda
+  existencia positiva (10 a 100 + 10 a 200 = 20 a 150; anular la segunda
+  deja 10 a 100).
 - **Concurrencia**: cada movimiento bloquea la fila del producto
   (`FOR NO KEY UPDATE`), así que dos salidas simultáneas no sobrevenden;
   las operaciones de varias líneas bloquean sus productos en orden de id
   (sin deadlocks).
 - **Existencia negativa**: transferencias y ajustes de salida la rechazan
-  (409 con `faltante`) salvo en un almacén con `permite_negativo`. La
+  (409 con `faltante`) salvo en un almacén con `permite_negativo`. Una
+  salida sin lote y sin FEFO (producto que no maneja lotes, o la anulación
+  de una entrada sin lote) se valida contra lo **"sin lote"** (existencia
+  del almacén − sus lotes), no contra el total: no puede tomar unidades de
+  un lote. La
   salida por factura **no** valida (el e-CF ya se envió a la DGII); la
   validación es `validar-disponibilidad`, antes del envío.
 - **Servicios**: no llevan existencia; compras y facturas los ignoran para
@@ -76,8 +156,16 @@ Los correlativos usan secuencias: una operación rechazada consume número
   `maneja_lotes` se toma por **FEFO** (primero el que vence antes, sin
   vencidos ni bloqueados) y el resto de lo "sin lote"; puede generar varios
   movimientos. Un lote explícito se puede usar aunque esté vencido o
-  bloqueado (ajuste por vencimiento). Registrar un lote activa
-  `maneja_lotes` del producto.
+  bloqueado (ajuste por vencimiento). Registrar un lote, o cualquier
+  entrada a un lote (compra con lote...), activa `maneja_lotes` del
+  producto; `PUT /productos/{id}` con `maneja_lotes: false` da 409 mientras
+  algún lote tenga existencia.
+- **Almacenes inactivos**: no reciben ni entregan mercancía (transferencias,
+  compras, ajustes, lotes: 409) y `validar-disponibilidad` reporta la venta
+  desde uno como faltante (`motivo: "almacen_inactivo"`). La salida por
+  factura sí sale de él (el e-CF ya se envió). Inactivar bloquea la fila del
+  almacén y las operaciones la bloquean FOR SHARE: una transferencia en
+  curso hacia el almacén termina antes y su existencia impide inactivarlo.
 
 ## Endpoints
 
@@ -100,14 +188,28 @@ Los correlativos usan secuencias: una operación rechazada consume número
 | `POST /ajustes/{id}/anular` | aplicado → anulado con los movimientos inversos (mismo almacén y lote). Falla (409) si la mercancía que entró ya salió. |
 | `GET /movimientos` | + `almacen_id`, `lote_id`, `referencia_tipo`, `referencia_id`, `desde`, `hasta`. |
 | `GET /kardex?producto_id` | `almacen_id`, `desde`, `hasta`, `metodo` (`promedio`/`peps`), `tipo`, `referencia_tipo`, `formato=csv`. Ver abajo. |
-| `GET /valuacion` | valor total, por almacén y por categoría; contadores `sin_existencia` / `bajo_minimo`. |
+| `GET /valuacion` | valor total, por almacén y por categoría; contadores `sin_existencia` / `bajo_minimo`. Ver "Valuación con existencia negativa". |
 | `POST /movimientos/validar-disponibilidad`, `POST /movimientos/salida-por-factura` | uso interno de facturas-api (ver abajo). |
 
 Errores: 404 no existe (también un almacén o lote referenciado en el
 cuerpo), 409 la operación no aplica (estado, almacén inactivo, duplicado,
-sin existencia — este último con `faltante: {producto_id, nombre,
-almacen_id, lote_id, solicitado, disponible}`), 422 datos inválidos o
-producto inexistente en el cuerpo.
+lote de otro producto, sin existencia — este último con `faltante:
+{producto_id, nombre, almacen_id, lote_id, solicitado, disponible}`), 422
+datos inválidos o producto inexistente en el cuerpo. Excepción:
+`POST /movimientos/validar-disponibilidad` responde **422** (no 404) si un
+almacén o lote del cuerpo no existe, y 409 si el lote es de otro producto.
+
+### Valuación con existencia negativa
+
+Igual que el IR-2, una existencia negativa no resta valor, pero se aplica
+en dos niveles distintos: `valor_total` y `por_categoria[].valor` usan el
+total del producto (`GREATEST(stock_actual, 0) × costo_promedio`), y
+`por_almacen[].valor` (también el `valor` de `GET /almacenes`, `GET
+/almacenes/{id}/existencias` y `GET /productos/{id}/existencias`) usa la
+existencia de cada almacén (`GREATEST(cantidad, 0) × costo_promedio`). Sin
+negativos coinciden; con un almacén en negativo la suma por almacén es
+**mayor** que `valor_total` (10 en Principal y −4 en Sucursal a 2: 20 + 0
+por almacén, 12 en total). `valor_total` es el que vale para el IR-2.
 
 ### Kardex
 
@@ -120,9 +222,12 @@ salida", "Transferencia enviada"...), `documento`, `cantidad` y
 cantidades `entradas`/`salidas` del período. `tipo`/`referencia_tipo` solo
 filtran filas; los saldos cuentan todo.
 
+- Orden: `secuencia` (el orden en que se aplicaron), no `creado_en`.
 - `promedio` usa el costo grabado en cada movimiento (las salidas al
-  promedio vigente). `peps` es solo una vista: las salidas consumen las
-  capas de entrada más antiguas.
+  promedio vigente). Una entrada con existencia previa cero o negativa
+  revalúa el saldo al costo de esa entrada (misma regla que el servicio),
+  así que `saldo_final` = `stock_actual × costo_promedio`. `peps` es solo
+  una vista: las salidas consumen las capas de entrada más antiguas.
 - Sin `almacen_id` no se muestran las transferencias (se anulan entre sí).
 - `formato=csv`: mismo contenido como archivo para Excel (UTF-8 con BOM,
   comas, punto decimal, fecha DD/MM/AAAA), con una fila de saldo inicial.
@@ -136,14 +241,18 @@ FEFO si el producto maneja lotes). facturas-api los guarda y los reenvía tal
 cual, junto con el e-NCF como `documento` del Kardex.
 
 - `validar-disponibilidad` suma lo pedido por producto × almacén y por lote;
-  reporta un lote vencido o bloqueado como faltante (`motivo`
-  `lote_vencido`/`lote_bloqueado`). Lo pedido con lote explícito no cuenta
-  para el FEFO de otra línea.
+  reporta un lote vencido o bloqueado, o un almacén inactivo, como faltante
+  (`motivo` `lote_vencido`/`lote_bloqueado`/`almacen_inactivo`). Lo pedido
+  con lote explícito no cuenta para el FEFO de otra línea. 422 si un
+  almacén o lote no existe, 409 si el lote es de otro producto.
 - `salida-por-factura` es **idempotente por factura**: un advisory lock por
   factura y, si ya hay salidas de esa factura, devuelve las existentes sin
   descontar (el índice único por factura × producto de 004 se eliminó: con
   almacén y lote por línea una factura puede sacar el mismo producto en
-  varios movimientos). Procesa primero las líneas con lote explícito.
+  varios movimientos). Procesa primero las líneas con lote explícito. Si
+  falla (inventario-api caído, o una réplica vieja durante un despliegue
+  solapado), facturas-api deja la factura con `inventario_sincronizado =
+  false`; reenviar la misma factura es seguro.
 
 El **vendedor** del prototipo de factura no es de inventario: queda para el
 módulo de ventas.

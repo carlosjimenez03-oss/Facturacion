@@ -101,6 +101,26 @@ def test_costo_promedio_con_stock_negativo_toma_el_costo_de_la_entrada():
     assert stock.costo_promedio_ponderado(Decimal("-5"), Decimal("10"), Decimal("10"), Decimal("12")) == Decimal("12")
 
 
+def test_costo_promedio_sin_entrada_deshace_el_promedio():
+    """10 a 100 + 10 a 200 = 20 a 150; anular la entrada de 10 a 200 deja
+    10 a 100 (no 10 a 150)."""
+    assert stock.costo_promedio_sin_entrada(Decimal("20"), Decimal("150"), Decimal("10"), Decimal("200")) == Decimal(
+        "100"
+    )
+
+
+def test_costo_promedio_sin_entrada_sin_existencia_restante_toma_el_costo_de_la_entrada():
+    for restante in ("10", "12"):  # queda 0 o negativo
+        assert stock.costo_promedio_sin_entrada(
+            Decimal("10"), Decimal("150"), Decimal(restante), Decimal("200")
+        ) == Decimal("200")
+
+
+@pytest.mark.parametrize("valor, esperado", [(None, None), ("", None), ("   ", None), (" 7461 ", "7461")])
+def test_normalizar_codigo_barras(valor, esperado):
+    assert repository.normalizar_codigo_barras(valor) == esperado
+
+
 def test_plan_fefo_reparte_en_orden_y_reporta_faltante():
     lotes = [
         {"lote_id": "A", "cantidad": Decimal("4")},
@@ -204,6 +224,16 @@ def test_kardex_movimientos_sin_costo_se_valuan_al_promedio():
     filas = kardex.calcular_kardex(movs)["filas"]
     assert filas[1]["costo_unitario"] == Decimal("5.0000")
     assert filas[2]["saldo_valor"] == Decimal("40.00")
+
+
+def test_kardex_entrada_con_existencia_negativa_toma_el_costo_de_la_entrada():
+    """Igual que stock.costo_promedio_ponderado: 5 a 100, venta forzada de
+    10 (queda -5), entrada de 10 a 120 -> 5 a 120 = 600 (no 700)."""
+    movs = [_mov(1, "entrada", "5", "100"), _mov(2, "salida", "10", "100", "factura"), _mov(3, "entrada", "10", "120")]
+    final = kardex.calcular_kardex(movs)["saldo_final"]
+    assert final == {"cantidad": Decimal("5"), "costo_promedio": Decimal("120.0000"), "valor": Decimal("600.00")}
+    costo = stock.costo_promedio_ponderado(Decimal("-5"), Decimal("100"), Decimal("10"), Decimal("120"))
+    assert final["valor"] == Decimal("5") * costo
 
 
 def test_kardex_csv_para_excel():
