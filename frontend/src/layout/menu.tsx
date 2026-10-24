@@ -111,10 +111,10 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
       { label: "IR-17", to: "/impuestos/precalculo/ir17" },
     ],
   },
-  { id: "reportes", label: "Reportes", icon: <IconReportes />, to: pendiente("reportes") },
-  { id: "tareas", label: "Mis tareas", icon: <IconTareas />, to: pendiente("tareas") },
+  { id: "reportes", label: "Reportes", icon: <IconReportes />, to: "/reportes" },
+  { id: "tareas", label: "Mis tareas", icon: <IconTareas />, to: "/tareas" },
   "separador",
-  { id: "sync", label: "Centro de sincronización", icon: <IconSync />, to: pendiente("sincronizacion") },
+  { id: "sync", label: "Centro de sincronización", icon: <IconSync />, to: "/sincronizacion" },
   { id: "config", label: "Configuración", icon: <IconConfig />, to: pendiente("configuracion") },
 ];
 

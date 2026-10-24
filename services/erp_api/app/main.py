@@ -29,7 +29,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from libs.ecf_common.db import cerrar_pool, crear_pool
 
-from . import bancos, compras, contabilidad, impuestos, repository
+from . import bancos, compras, contabilidad, impuestos, reportes, repository, sincronizacion, tareas
 from .config import ErpApiSettings, get_settings
 from .migraciones import aplicar_migraciones
 from .repository import (
@@ -113,6 +113,10 @@ app.include_router(impuestos.router)
 app.include_router(compras.router)
 app.include_router(bancos.router)
 app.include_router(contabilidad.router)
+# Fase 6 · Operación: Mis tareas, Centro de sincronización y Reportes.
+app.include_router(tareas.router)
+app.include_router(sincronizacion.router)
+app.include_router(reportes.router)
 
 
 def _pool():

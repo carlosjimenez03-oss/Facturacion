@@ -847,6 +847,97 @@ cuenta de activos al cierre del año) y el
 entorno de desarrollo (403): el contenido se tomó del resumen del buscador
 de esas páginas oficiales; conviene revisar el texto completo.
 
+## Operación (fase 6): Mis tareas, Centro de sincronización y Reportes
+
+Rutas en `app/tareas.py`, `app/sincronizacion.py` y `app/reportes.py`
+(repositorios `*_repository.py`, esquemas en `app/operacion_schemas.py`).
+Contrato con el frontend:
+[`frontend/src/lib/operacionApi.ts`](../frontend/src/lib/operacionApi.ts)
+(todas las peticiones pasan por su `request()` local).
+
+### Datos
+
+- Esquema propio **`operacion`** (`DDL_OPERACION` de `migraciones.py`; copia
+  en [`db/init/014_operacion.sql`](../db/init/014_operacion.sql)):
+  `tareas` (manuales), `tareas_automaticas` (completada / pospuesta de una
+  tarea automática, por su clave estable) y `facturas_papel`.
+- Todo lo demás se **calcula al leer**, con consultas de solo lectura sobre
+  las tablas de los otros módulos y los mismos criterios que sus pantallas:
+  `facturacion.facturas` y `facturacion.envios_dgii` (facturas-api y los
+  módulos DGII), `recepcion.ecf_recibidos`, `compras606.registros`,
+  `ventas.*`, `compras.*`, `impuestos.declaraciones_presentadas` e
+  `inventario.*` (de inventario-api: productos, lotes, existencias,
+  movimientos — se lee por SQL, nunca se escribe).
+
+### Mis tareas
+
+| Método y ruta | Qué hace |
+|---|---|
+| `GET /tareas?estado=&categoria=` | Manuales + automáticas con su `estado` (`pendiente`/`pospuesta`/`completada`), las vencidas y urgentes primero |
+| `GET /tareas/resumen` | Contadores para la campana de la barra superior: pendientes, vencidas, vencen hoy, alta, por categoría y las 5 más urgentes |
+| `POST /tareas` · `PUT /tareas/{id}` · `DELETE /tareas/{id}` | Tareas manuales (título, descripción, vence, prioridad); las automáticas no se editan ni se borran (422) |
+| `POST /tareas/{id}/completar` · `/reabrir` · `/posponer` (`{hasta}`) | Para ambas; `id` es el uuid o la clave de la automática (404 si su motivo ya no existe) |
+
+Tareas automáticas (clave → condición): `declaracion:<form>:<periodo>`
+(pendientes que vencen en ≤ 30 días o vencidas hace ≤ 180, de
+`listar_declaraciones`), `factura_rechazada|factura_error:<id>` (últimos 90
+días), `dgii_en_proceso:<huella>` ('enviado' hace > 1 h), `ecf_por_aprobar:<id>`,
+`cxc_vencida:<factura>`, `cxp_vencida|cxp_por_vencer:<registro606>` (≤ 7 días),
+`cotizacion_por_vencer:<id>:<vence>` (≤ 3 días), `lote_vencido|lote_por_vencer:<lote>:<fecha>`
+(con existencia, ≤ 30 días, criterio de `alertas_lotes`), `stock_bajo:<producto>`
+(criterio de `estado_stock`), `inventario_sin_sincronizar:<huella>` y
+`papel_sin_reemplazo:<id>`. Al listar se borra el estado guardado de las
+claves cuya condición desapareció (si vuelve a darse, la tarea reaparece
+pendiente); si una fuente falla (p. ej. falta el esquema de inventario), sus
+tareas no salen y su estado no se toca.
+
+### Centro de sincronización
+
+| Método y ruta | Qué hace |
+|---|---|
+| `GET /sincronizacion/resumen` | Estado por canal (envío DGII, resultado DGII, inventario, aprobación comercial, entrega del ACECF), contadores de 7 días y la **contingencia** calculada |
+| `GET /sincronizacion/pendientes?canal=` | Lo pendiente con su `accion`: `actualizar_estado` / `reenviar` (facturas-api), `reintentar_aprobacion` / `decidir_aprobacion` (`/compras/bandeja/{id}/aprobar|rechazar`), `reintentar_entrega` |
+| `GET /sincronizacion/historial?modulo=&resultado=&q=&desde=&hasta=` | Bitácora de `facturacion.envios_dgii` |
+| `GET /sincronizacion/envios-por-dia?dias=7` | Historial de envíos por día |
+| `POST /sincronizacion/entregas/{id}/reintentar` | Vuelve a entregar al proveedor el ACECF ya aceptado (mismas columnas y función que `decidir_aprobacion`) |
+| `GET/POST /sincronizacion/facturas-papel` · `PUT/DELETE /sincronizacion/facturas-papel/{id}` | Facturas emitidas en papel (NCF serie B, cliente, montos por tasa, ITBIS calculado si no se indica, forma de pago del 607, e-CF de reemplazo) |
+
+**Contingencia (calculada).** `contingencia.activa` cuando los últimos 3 o
+más envíos/consultas a la DGII auditados en `envios_dgii` (últimas 24 h)
+fallaron seguidos; `desde` es el primero de la racha y `pendientes` los e-CF
+en 'error' sin trackId. La tarea de fondo de facturas-api no guarda cuándo
+corre: `ultima_consulta_resultado` es la última consulta auditada y
+`proximo_intento` = esa + 120 s si hay e-CF 'enviado'. **Falta en
+facturas-api** (otro paso): firmar y encolar localmente en contingencia,
+enviar por lotes (`contingencia.lotes` sale vacía hasta entonces: hace falta
+una tabla de lotes con documentos/aceptados/rechazados y su estado), un
+estado propio para la factura "firmada en contingencia" (hoy cuentan las
+'error' sin trackId), reenvío automático al reconectar, guardar la última
+corrida del bucle y la leyenda de contingencia en la representación impresa.
+Las facturas en papel todavía no alimentan el 607 ni la contabilidad.
+
+### Reportes
+
+Todos con `desde`/`hasta` (ambos incluidos, ≤ 1100 días) salvo antigüedad e
+inventario valorizado (a hoy):
+
+| Ruta | Qué agrega |
+|---|---|
+| `GET /reportes/ventas?agrupar=mes\|dia\|cliente\|producto\|tipo_ecf&cliente_rnc=&tipo_ecf=` | e-CF de venta aceptados (E34 resta) con el desglose por tasa del IT-1 (`formatos.desglose_por_tasa`); por producto, las líneas |
+| `GET /reportes/itbis` | Por mes completo: ITBIS de ventas (como el IT-1), compras/ITBIS/costo/adelantado del 606 y retenido por mes de pago |
+| `GET /reportes/compras?agrupar=proveedor\|categoria\|mes&proveedor_rnc=&tipo_bienes_servicios=` | 606 por fecha del comprobante (notas de crédito restan) |
+| `GET /reportes/antiguedad-cxc?cliente_rnc=` · `/antiguedad-cxp?proveedor_rnc=` | Saldos de los CTE de cuentas por cobrar/pagar en tramos por vencer, 1-30, 31-60, 61-90, > 90 días, por contacto y por documento |
+| `GET /reportes/cobros-pagos` | Cobros y pagos no anulados por mes, por método y detalle |
+| `GET /reportes/inventario-valorizado?almacen_id=&categoria=` | Existencia × costo promedio (negativos valen 0) |
+| `GET /reportes/rotacion-inventario?categoria=` | Existencia inicial/final reconstruida del Kardex, entradas/salidas (sin transferencias), rotación = salidas / existencia promedio |
+| `GET /reportes/mas-vendidos?limite=&categoria=` | Salidas por factura del Kardex |
+| `GET /reportes/retenciones` | Efectuadas (606 por fecha de pago, por proveedor y por tipo) y las que retuvieron los clientes en e-CF aceptados |
+
+Pruebas: `tests/test_operacion.py` (rutas, repos simulados) y
+`tests/test_operacion_postgres.py` (Postgres real con
+`OPERACION_TEST_DATABASE_URL`, datos de `tests/operacion_semilla.py` y
+totales calculados a mano).
+
 ## Despliegue
 
 Servicio `erp-api` en `docker-compose.dokploy.yml` (puerto de host 8019,

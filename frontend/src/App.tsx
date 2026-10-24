@@ -38,6 +38,9 @@ import { AsientoForm } from "./pages/contabilidad/AsientoForm";
 import { ContabilidadPage } from "./pages/contabilidad/Contabilidad";
 import { Inicio } from "./pages/Inicio";
 import { Proximamente } from "./pages/Proximamente";
+import { ReportesPage } from "./pages/reportes/Reportes";
+import { SincronizacionPage } from "./pages/sincronizacion/Sincronizacion";
+import { TareasPage } from "./pages/tareas/Tareas";
 
 /** /facturas/nueva?cotizacion=…, ?copiar=…, ?tipo=… comparten ruta: la clave
  * reinicia el formulario cuando solo cambia la consulta (p. ej. del menú "+"). */
@@ -112,6 +115,11 @@ export default function App() {
           element={<Formato606RegistroForm />}
         />
         <Route path="/formato-606/registros/:id/editar" element={<Formato606RegistroForm />} />
+
+        <Route path="/tareas" element={<TareasPage />} />
+        <Route path="/sincronizacion" element={<SincronizacionPage />} />
+        <Route path="/reportes" element={<ReportesPage />} />
+        <Route path="/reportes/:reporte" element={<ReportesPage />} />
 
         <Route path="/modulo/:slug" element={<Proximamente />} />
         <Route path="*" element={<Proximamente />} />

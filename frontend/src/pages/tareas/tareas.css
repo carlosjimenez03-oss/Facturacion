@@ -1,0 +1,30 @@
+/* Mis tareas (Tareas.dc.html); el sistema de diseño está en index.css. */
+.ta-content{max-width:1000px}
+.ta-res{gap:8px}
+.ta-nueva{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+.ta-nueva .ta-nt{flex:3 1 280px}
+.ta-nueva .ta-nf{flex:1 1 150px}
+.ta-nueva .ta-np{flex:0 1 130px}
+.ta-barra{display:flex;align-items:center;justify-content:space-between;gap:8px 12px;flex-wrap:wrap;padding:0 12px;border-bottom:1px solid var(--bd)}
+.ta-barra .tabs{border-bottom:0;padding:0;overflow-x:auto;flex:1 1 auto;min-width:0;width:auto}
+.ta-n{height:20px;font-size:11px}
+.ta-barra .ta-cat{width:auto;flex:0 0 auto;min-width:170px;margin:8px 0}
+.ta-fila{display:flex;align-items:center;gap:14px;padding:14px 20px;border-bottom:1px solid #F0F1F3}
+.ta-fila:last-of-type{border-bottom:0}
+.ta-check{width:20px;height:20px;accent-color:#0F766E;flex:none;cursor:pointer}
+.ta-txt{flex:1;min-width:0}
+.ta-t{font-weight:500;color:#111827}
+.ta-fila.hecha .ta-t{color:#6B7280;text-decoration:line-through}
+.ta-fila.vencida .ta-t{color:#991B1B}
+.ta-d{margin-top:2px;color:#4B5563}
+.ta-tags{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+.ta-acc{display:flex;align-items:center;gap:2px;flex:none}
+.ta-pie{margin:0;padding:12px 20px;border-top:1px solid #EEF0F2}
+.ta-modal-t{margin:0;font-weight:600;color:#111827}
+@media (max-width:640px){
+  .ta-fila{flex-wrap:wrap;gap:8px 12px;padding:12px 16px}
+  .ta-txt{flex:1 1 calc(100% - 40px)}
+  .ta-tags{justify-content:flex-start;margin-left:34px}
+  .ta-acc{margin-left:auto}
+  .ta-barra .ta-cat{width:100%;flex:1 1 100%}
+}

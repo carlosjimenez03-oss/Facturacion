@@ -43,10 +43,15 @@ def test_la_semilla_del_catalogo_solo_corre_con_el_catalogo_vacio():
     assert "IF NOT EXISTS (SELECT 1 FROM contabilidad.cuentas) THEN" in migraciones.DDL_CONTABILIDAD
 
 
+def test_014_operacion_tiene_el_mismo_ddl_que_migraciones():
+    archivo = (REPO_ROOT / "db" / "init" / "014_operacion.sql").read_text(encoding="utf-8")
+    assert migraciones.DDL_OPERACION.strip() in archivo
+
+
 def test_ddl_es_idempotente():
     for ddl in (
         migraciones.DDL_VENTAS, migraciones.DDL_IMPUESTOS, migraciones.DDL_FUNCIONES, migraciones.DDL_COMPRAS,
-        migraciones.DDL_CONTABILIDAD, migraciones.DDL_BANCOS,
+        migraciones.DDL_CONTABILIDAD, migraciones.DDL_BANCOS, migraciones.DDL_OPERACION,
     ):
         for linea in ddl.splitlines():
             if linea.startswith("CREATE "):
@@ -106,6 +111,7 @@ async def test_aplicar_migraciones_toma_el_lock_antes_del_ddl():
     assert conn.execute_calls[5][0] == migraciones.DDL_COMPRAS
     assert conn.execute_calls[6][0] == migraciones.DDL_CONTABILIDAD
     assert conn.execute_calls[7][0] == migraciones.DDL_BANCOS
+    assert conn.execute_calls[8][0] == migraciones.DDL_OPERACION
 
 
 class _ConexionOcupada(_FakeConnection):
