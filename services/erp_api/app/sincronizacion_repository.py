@@ -12,6 +12,11 @@ sincronización con terceros, calculado de los datos (solo lectura):
   que la misma tarea de fondo reintenta durante `DIAS_BUCLE_INVENTARIO` días.
 - Aprobaciones comerciales (ACECF) enviando / fallidas y su entrega al
   proveedor: `recepcion.ecf_recibidos`.
+- Modo contingencia: el estado real que guarda facturas_api
+  (`facturacion.contingencia`, las facturas en 'contingencia' y los lotes de
+  `facturacion.lotes_contingencia`, ver services/facturas_api/app/
+  contingencia.py). Si esas tablas todavía no existen (facturas_api sin
+  actualizar) se calcula como antes, de la racha de fallos de la auditoría.
 
 Los reintentos usan los endpoints que ya existen (facturas-api
 `/facturas/{id}/actualizar-estado` y `/enviar`, erp-api
@@ -103,11 +108,109 @@ _RESULTADO_EVENTO = """
 
 # --- Contingencia ---------------------------------------------------------
 
+# Plazo de la DGII para enviar los e-CF emitidos en contingencia por falta de
+# conectividad (facturas_api: contingencia_horas_limite). Lotes que se
+# muestran: los abiertos, los que esperan resultados y los del último día.
+HORAS_LIMITE_CONTINGENCIA = 72
+_LOTES_VISIBLES = 10
+
+# Contadores de un lote de facturas_api, en vivo de sus facturas (mismo
+# criterio que facturas_api.contingencia_repository._CONTADORES_LOTE).
+_LOTES = """
+    SELECT l.id, l.documentos, l.estado, l.ultimo_error, l.creado_en, l.iniciado_en, l.completado_en,
+           COALESCE(c.enviados, 0) AS enviados, COALESCE(c.aceptados, 0) AS aceptados,
+           COALESCE(c.rechazados, 0) AS rechazados
+    FROM facturacion.lotes_contingencia l
+    LEFT JOIN LATERAL (
+        SELECT count(*) FILTER (WHERE f.estado <> 'contingencia') AS enviados,
+               count(*) FILTER (WHERE f.estado = 'aceptado') AS aceptados,
+               count(*) FILTER (WHERE f.estado IN ('rechazado', 'error')) AS rechazados
+        FROM facturacion.facturas f WHERE f.lote_id = l.id
+    ) c ON true
+"""
+
+
 async def _contingencia(conn: asyncpg.Connection) -> dict[str, Any]:
-    """Modo contingencia calculado de la auditoría: racha de fallos seguidos
-    en los últimos envíos/consultas a la DGII. facturas-api todavía no firma
-    y encola por lotes en contingencia: `lotes` sale vacía y los pendientes
-    son los e-CF cuyo envío falló sin trackId (se reenvían al reconectar)."""
+    """Modo contingencia: el estado real de facturas_api si sus tablas
+    existen; si no, el calculado de la auditoría (`_contingencia_calculada`)."""
+    hay_tablas = await conn.fetchval(
+        "SELECT to_regclass('facturacion.contingencia') IS NOT NULL"
+        " AND to_regclass('facturacion.lotes_contingencia') IS NOT NULL"
+    )
+    if not hay_tablas:
+        return await _contingencia_calculada(conn)
+    estado = await conn.fetchrow("SELECT * FROM facturacion.contingencia WHERE id = 1")
+    pendientes = await conn.fetchrow(
+        f"""
+        SELECT count(*) AS cantidad, COALESCE(sum({_TOTAL}), 0) AS monto,
+               min(COALESCE(f.firmado_en, f.contingencia_en, f.creado_en)) AS mas_antigua
+        FROM facturacion.facturas f
+        CROSS JOIN LATERAL (SELECT f.datos::jsonb AS d) x
+        WHERE f.estado = 'contingencia'
+        """
+    )
+    lotes = await conn.fetch(
+        f"""
+        {_LOTES}
+        WHERE l.estado <> 'completado' OR l.completado_en >= now() - interval '1 day'
+           OR COALESCE(c.aceptados, 0) + COALESCE(c.rechazados, 0) < l.documentos
+        ORDER BY l.creado_en DESC, l.id DESC
+        LIMIT $1
+        """,
+        _LOTES_VISIBLES,
+    )
+    activa = bool(estado and estado["activa"])
+    inicio_papel = (estado["desde"] if activa else None) or _inicio_dia(hoy().replace(day=1))
+    papel = await conn.fetchval("SELECT count(*) FROM operacion.facturas_papel WHERE creado_en >= $1", inicio_papel)
+    ultimo_intento = estado["ultimo_intento"] if estado else None
+    proximo = None
+    if (activa or pendientes["cantidad"]) and ultimo_intento is not None:
+        proximo = ultimo_intento + timedelta(seconds=SEGUNDOS_BUCLE_FACTURAS)
+    mas_antigua = pendientes["mas_antigua"]
+    return {
+        "activa": activa,
+        "desde": estado["desde"] if activa else None,
+        "errores_consecutivos": estado["errores_consecutivos"] if estado else 0,
+        "ultimo_intento": ultimo_intento,
+        "ultimo_error": estado["ultimo_error"] if activa else None,
+        "proximo_intento": proximo,
+        "pendientes": pendientes["cantidad"],
+        "monto_pendiente": pendientes["monto"],
+        "facturas_papel": papel,
+        "lotes": [_lote(lote) for lote in lotes],
+        "fuente": "facturas_api",
+        "ultimo_exito": estado["ultimo_exito"] if estado else None,
+        "mas_antigua": mas_antigua,
+        "vence_en": mas_antigua + timedelta(hours=HORAS_LIMITE_CONTINGENCIA) if mas_antigua else None,
+        "horas_limite": HORAS_LIMITE_CONTINGENCIA,
+    }
+
+
+def _lote(fila: Any) -> dict[str, Any]:
+    """Lote de facturas_api -> contrato del frontend: 'completado' con
+    rechazos se muestra como 'con_rechazos'; `pendientes` = sin enviar."""
+    estado = fila["estado"]
+    if estado == "completado" and fila["rechazados"]:
+        estado = "con_rechazos"
+    return {
+        "id": fila["id"],
+        "documentos": fila["documentos"],
+        "enviados": fila["enviados"],
+        "aceptados": fila["aceptados"],
+        "rechazados": fila["rechazados"],
+        "pendientes": max(fila["documentos"] - fila["enviados"], 0),
+        "estado": estado,
+        "creado_en": fila["creado_en"],
+        "iniciado_en": fila["iniciado_en"],
+        "completado_en": fila["completado_en"],
+        "ultimo_error": fila["ultimo_error"],
+    }
+
+
+async def _contingencia_calculada(conn: asyncpg.Connection) -> dict[str, Any]:
+    """Respaldo para un facturas_api sin las tablas de contingencia: racha
+    de fallos seguidos en los últimos envíos/consultas a la DGII; sin lotes,
+    y los pendientes son los e-CF cuyo envío falló sin trackId."""
     eventos = await conn.fetch(
         """
         SELECT creado_en, error FROM facturacion.envios_dgii
@@ -155,6 +258,7 @@ async def _contingencia(conn: asyncpg.Connection) -> dict[str, Any]:
         "monto_pendiente": pendientes["monto"],
         "facturas_papel": papel,
         "lotes": [],
+        "fuente": "calculada",
     }
 
 
@@ -203,11 +307,12 @@ async def resumen(pool: asyncpg.Pool) -> dict[str, Any]:
                     WHERE f.estado = 'enviado' AND f.actualizado_en < now() - make_interval(days => $1)
                 ) AS fuera_de_bucle,
                 count(*) FILTER (WHERE f.estado = 'error') AS errores_envio,
+                count(*) FILTER (WHERE f.estado = 'contingencia') AS en_contingencia,
                 count(*) FILTER (WHERE {_INVENTARIO_PENDIENTE}) AS inventario_pendientes,
                 count(*) FILTER (WHERE {_INVENTARIO_PENDIENTE} AND f.inventario_error IS NOT NULL) AS inventario_errores
             FROM facturacion.facturas f
             CROSS JOIN LATERAL (SELECT f.datos::jsonb AS d) x
-            WHERE f.estado IN ('enviado', 'error', 'aceptado')
+            WHERE f.estado IN ('enviado', 'error', 'aceptado', 'contingencia')
             """,
             DIAS_BUCLE_RESULTADO,
         )
@@ -256,9 +361,11 @@ async def resumen(pool: asyncpg.Pool) -> dict[str, Any]:
 
     canales = [
         canal(
-            "dgii_envio", "Envío de e-CF a la DGII", "Comprobantes cuyo envío falló (sin respuesta de la DGII)",
-            0, f["errores_envio"], ultimos["recepcion"],
-            "Reintente el envío o consulte el estado si la DGII llegó a darle un trackId.",
+            "dgii_envio", "Envío de e-CF a la DGII",
+            "Emitidos en contingencia (se envían solos al reconectar) y envíos que fallaron",
+            f["en_contingencia"], f["errores_envio"], ultimos["recepcion"],
+            "Los emitidos en contingencia se envían por lotes en cuanto la DGII responde; los que fallaron, "
+            "reinténtelos o consulte el estado si la DGII llegó a darles un trackId.",
         ),
         canal(
             "dgii_resultado", "Resultado de la DGII", "e-CF enviados que esperan el resultado de su validación",
@@ -322,10 +429,11 @@ async def _pendientes_facturas(conn: asyncpg.Connection) -> list[dict[str, Any]]
         SELECT f.id, f.tipo_ecf, f.encf, f.estado, f.track_id, f.dgii_estado, f.error,
                f.dgii_respuesta::text AS respuesta, (f.xml_generado IS NOT NULL) AS tiene_xml,
                f.actualizado_en, {_CLIENTE} AS cliente, {_TOTAL} AS total,
-               f.actualizado_en >= now() - make_interval(days => $1) AS en_bucle
+               f.actualizado_en >= now() - make_interval(days => $1) AS en_bucle,
+               f.lote_id, COALESCE(f.firmado_en, f.contingencia_en) AS firmado_en
         FROM facturacion.facturas f
         CROSS JOIN LATERAL (SELECT f.datos::jsonb AS d) x
-        WHERE f.estado IN ('enviado', 'error')
+        WHERE f.estado IN ('enviado', 'error', 'contingencia')
         ORDER BY f.actualizado_en
         LIMIT $2
         """,
@@ -338,7 +446,15 @@ async def _pendientes_facturas(conn: asyncpg.Connection) -> list[dict[str, Any]]
             "documento": f["encf"], "tipo_ecf": f["tipo_ecf"], "contraparte": f["cliente"],
             "fecha": f["actualizado_en"], "monto": f["total"], "enlace": f"/facturas/{f['id']}",
         }
-        if f["estado"] == "enviado":
+        if f["estado"] == "contingencia":
+            items.append(_item(
+                "dgii_envio", f["id"], **(comun | {"fecha": f["firmado_en"] or f["actualizado_en"]}),
+                estado="pendiente",
+                detalle="Emitida en contingencia" + (f" · lote {f['lote_id']}" if f["lote_id"] else "")
+                + " · se envía sola al restablecerse la conexión",
+                automatico=True,
+            ))
+        elif f["estado"] == "enviado":
             items.append(_item(
                 "dgii_resultado", f["id"], **comun,
                 estado="en_curso" if f["en_bucle"] else "error",

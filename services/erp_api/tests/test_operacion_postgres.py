@@ -203,8 +203,10 @@ async def test_resumen_y_pendientes_de_sincronizacion(pool):
     assert resumen["estado"] == "error" and resumen["errores_total"] == 5
     assert (resumen["eventos_7d"], resumen["errores_7d"], resumen["rechazos_7d"]) == (7, 1, 1)
     c = resumen["contingencia"]
-    assert not c["activa"] and c["errores_consecutivos"] == 1
-    assert (c["pendientes"], c["monto_pendiente"], c["facturas_papel"]) == (1, D("2950.00"), 1)
+    # Estado real de facturas-api (017_contingencia.sql): sin contingencia ni
+    # facturas en 'contingencia' (el 'error' sin trackId de F8 es un rechazo).
+    assert c["fuente"] == "facturas_api" and not c["activa"] and c["errores_consecutivos"] == 0
+    assert (c["pendientes"], c["monto_pendiente"], c["facturas_papel"], c["lotes"]) == (0, D("0"), 1, [])
 
     pendientes = await sr.listar_pendientes(pool)
     por_id = {i["id"]: i for i in pendientes}
@@ -220,7 +222,13 @@ async def test_resumen_y_pendientes_de_sincronizacion(pool):
     assert {i["canal"] for i in await sr.listar_pendientes(pool, canal="inventario")} == {"inventario"}
 
 
-async def test_contingencia_por_fallos_seguidos(pool):
+async def test_contingencia_calculada_si_facturas_api_no_tiene_sus_tablas(pool):
+    """Respaldo: sin facturacion.contingencia (facturas-api sin actualizar),
+    la contingencia se calcula de la racha de fallos de la auditoría."""
+    await pool.execute("DROP TABLE facturacion.contingencia, facturacion.lotes_contingencia")
+    c = (await sr.resumen(pool))["contingencia"]
+    assert c["fuente"] == "calculada" and not c["activa"] and c["errores_consecutivos"] == 1
+    assert (c["pendientes"], c["monto_pendiente"], c["facturas_papel"]) == (1, D("2950.00"), 1)
     for minutos in (20, 5):
         await pool.execute(
             "INSERT INTO facturacion.envios_dgii (modulo, ambiente, rnc_emisor, encf, error, creado_en)"
@@ -239,6 +247,63 @@ async def test_contingencia_por_fallos_seguidos(pool):
         " VALUES ('recepcion', 'test', '131897542', 'E310000000005', 't')"
     )
     assert not (await sr.resumen(pool))["contingencia"]["activa"]
+
+
+async def test_contingencia_real_de_facturas_api_con_lotes(pool):
+    """El estado y los lotes que escribe facturas-api: activa, las facturas
+    en 'contingencia' como pendientes (canal dgii_envio, automáticas) y el
+    progreso por lotes con contadores en vivo de sus facturas."""
+    await pool.execute(
+        "UPDATE facturacion.contingencia SET activa = true, desde = now() - interval '2 hours',"
+        " errores_consecutivos = 4, ultimo_intento = now(), ultimo_error = 'No se pudo contactar recepcion'"
+    )
+    await pool.execute(
+        "INSERT INTO facturacion.lotes_contingencia (id, documentos, estado, iniciado_en)"
+        " VALUES ('A-0001', 2, 'interrumpido', now())"
+    )
+    f_enviada, f_pendiente = uuid.uuid4(), uuid.uuid4()
+    for fid, estado, track in ((f_enviada, "aceptado", "trk-1"), (f_pendiente, "contingencia", None)):
+        await pool.execute(
+            """
+            INSERT INTO facturacion.facturas
+                (id, tipo_ecf, ambiente, rnc_emisor, encf, estado, datos, track_id, lote_id, firmado_en,
+                 emitida_en_contingencia, contingencia_en)
+            VALUES ($1, 31, 'test', '131897542', $2, $3, $4, $5, 'A-0001', now() - interval '1 hour', true,
+                    now() - interval '1 hour')
+            """,
+            fid, f"E3100000009{str(fid.int)[:2]}", estado,
+            '{"Encabezado": {"Totales": {"MontoTotal": "1180.00"},'
+            ' "Comprador": {"RazonSocialComprador": "Cliente C"}}}',
+            track,
+        )
+    resumen = await sr.resumen(pool)
+    c = resumen["contingencia"]
+    assert c["fuente"] == "facturas_api" and c["activa"] and c["errores_consecutivos"] == 4
+    assert c["ultimo_error"] == "No se pudo contactar recepcion"
+    assert (c["pendientes"], c["monto_pendiente"]) == (1, D("1180.00"))
+    assert c["vence_en"] - c["mas_antigua"] == timedelta(hours=72)
+    assert c["proximo_intento"] is not None
+    assert c["lotes"] == [{
+        "id": "A-0001", "documentos": 2, "enviados": 1, "aceptados": 1, "rechazados": 0, "pendientes": 1,
+        "estado": "interrumpido", "creado_en": c["lotes"][0]["creado_en"],
+        "iniciado_en": c["lotes"][0]["iniciado_en"], "completado_en": None, "ultimo_error": None,
+    }]
+    assert resumen["estado"] == "error"
+    canales = {k["canal"]: k for k in resumen["canales"]}
+    assert canales["dgii_envio"]["pendientes"] == 1
+    item = next(i for i in await sr.listar_pendientes(pool) if i["referencia_id"] == str(f_pendiente))
+    assert (item["canal"], item["estado"], item["automatico"], item["accion"]) == ("dgii_envio", "pendiente", True, None)
+    assert "lote A-0001" in item["detalle"]
+
+    # Lote completado con un rechazo -> 'con_rechazos'; sale de la lista al día siguiente.
+    await pool.execute("UPDATE facturacion.facturas SET estado = 'rechazado', track_id = 'trk-2' WHERE id = $1", f_pendiente)
+    await pool.execute("UPDATE facturacion.lotes_contingencia SET estado = 'completado', completado_en = now()")
+    await pool.execute("UPDATE facturacion.contingencia SET activa = false, desde = NULL, errores_consecutivos = 0")
+    c = (await sr.resumen(pool))["contingencia"]
+    assert not c["activa"] and c["pendientes"] == 0 and c["proximo_intento"] is None
+    assert [(lote["estado"], lote["aceptados"], lote["rechazados"]) for lote in c["lotes"]] == [("con_rechazos", 1, 1)]
+    await pool.execute("UPDATE facturacion.lotes_contingencia SET completado_en = now() - interval '2 days'")
+    assert (await sr.resumen(pool))["contingencia"]["lotes"] == []
 
 
 async def test_historial_y_envios_por_dia(pool):
@@ -433,3 +498,70 @@ async def test_retenciones(pool):
 
     mes = await compras_repository.retenciones_del_mes(pool, "202610")
     assert mes["totales"]["isr_retenido"] + mes["totales"]["itbis_retenido"] == r["totales_efectuadas"]["total"]
+
+
+# --- Facturas en papel: 607 y contabilidad ---------------------------------------------------------
+
+async def test_facturas_papel_en_el_607_solo_si_emite_serie_b(pool):
+    """La factura en papel de la semilla (B0100004521, 23,500 + 4,230 de
+    ITBIS) va una a una en el 607 y en su TXT si la empresa emite serie B;
+    con EMISOR_100_ELECTRONICO queda fuera, con su advertencia."""
+    datos = await impuestos_repository.formato_607(pool, "202610", "131897542", emisor_100_electronico=False)
+    papel = [f for f in datos["filas"] if f["ncf"] == "B0100004521"]
+    assert len(papel) == 1
+    fila = papel[0]
+    assert (fila["rnc_cedula"], fila["tipo_id"], fila["fecha_comprobante"]) == ("131234567", 1, date(2026, 10, 23))
+    assert (fila["monto_facturado"], fila["itbis_facturado"], fila["efectivo"]) == (
+        D("23500.00"), D("4230.00"), D("27730.00"),
+    )
+    nombre, contenido = await impuestos_repository.archivo_607(
+        pool, "202610", "131897542", emisor_100_electronico=False
+    )
+    assert "607" in nombre and "202610" in nombre
+    lineas = contenido.decode("latin-1").splitlines()
+    assert len(lineas) == 2 and "B0100004521" in lineas[1]  # solo la serie B, no los e-CF
+
+    datos = await impuestos_repository.formato_607(pool, "202610", "131897542", emisor_100_electronico=True)
+    assert not [f for f in datos["filas"] if f["ncf"].startswith("B")]
+    assert any("factura(s) en papel" in a for a in datos["advertencias"])
+
+
+async def test_facturas_papel_generan_su_asiento_idempotente(pool):
+    from services.erp_api.app import contabilidad_repository as cr
+
+    octubre = (date(2026, 10, 1), date(2026, 10, 31))
+    await cr.generar_asientos(pool, *octubre)
+    asiento = await pool.fetchrow(
+        "SELECT id, total, concepto, referencia, estado FROM contabilidad.asientos"
+        " WHERE origen = 'factura_papel' AND estado <> 'anulado'"
+    )
+    assert asiento is not None and asiento["total"] == D("27730.00") and asiento["referencia"] == "B0100004521"
+    assert "contingencia" in asiento["concepto"]
+    lineas = await pool.fetch(
+        "SELECT cd.concepto, l.debito, l.credito FROM contabilidad.asiento_lineas l"
+        " JOIN contabilidad.cuentas_por_defecto cd ON cd.cuenta_id = l.cuenta_id WHERE l.asiento_id = $1",
+        asiento["id"],
+    )
+    por_concepto = {f["concepto"]: (f["debito"], f["credito"]) for f in lineas}
+    assert por_concepto["caja"] == (D("27730.00"), D("0"))
+    assert por_concepto["ventas_gravadas"] == (D("0"), D("23500.00"))
+    assert por_concepto["itbis_por_pagar"] == (D("0"), D("4230.00"))
+    # Idempotente: otra pasada no crea ni cambia nada de la factura en papel.
+    await cr.generar_asientos(pool, *octubre)
+    assert await pool.fetchval("SELECT count(*) FROM contabilidad.asientos WHERE origen = 'factura_papel'") == 1
+
+    # Con su e-CF de reemplazo aceptado, la venta la contabiliza el e-CF: el
+    # asiento de la factura en papel se anula y queda como no contabilizada.
+    await pool.execute(
+        """
+        INSERT INTO facturacion.facturas (tipo_ecf, ambiente, rnc_emisor, encf, estado, datos)
+        VALUES (31, 'test', '131897542', 'E310000000777', 'aceptado',
+                '{"Encabezado": {"Emisor": {"FechaEmision": "24-10-2026"}, "Totales": {"MontoTotal": "27730.00"}},
+                  "InformacionReferencia": {"NCFModificado": "B0100004521", "CodigoModificacion": "4"}}')
+        """
+    )
+    resultado = await cr.generar_asientos(pool, *octubre)
+    assert any(
+        d["origen"] == "factura_papel" and "E310000000777" in d["motivo"] for d in resultado["no_contabilizados"]
+    )
+    assert await pool.fetchval("SELECT estado FROM contabilidad.asientos WHERE id = $1", asiento["id"]) == "anulado"

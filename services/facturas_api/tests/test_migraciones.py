@@ -1,5 +1,6 @@
 """El DDL que facturas_api aplica al arrancar (Supabase) y
-db/init/013_configuracion.sql (Postgres local) deben ser el mismo."""
+db/init/013_configuracion.sql / 017_contingencia.sql (Postgres local) deben
+ser el mismo."""
 from pathlib import Path
 
 from services.facturas_api.app import migraciones
@@ -12,10 +13,27 @@ def test_013_tiene_el_mismo_ddl_que_migraciones():
     assert migraciones.DDL_FACTURAS.strip() in archivo
 
 
+def test_017_tiene_el_mismo_ddl_de_contingencia():
+    archivo = (REPO_ROOT / "db" / "init" / "017_contingencia.sql").read_text(encoding="utf-8")
+    assert migraciones.DDL_CONTINGENCIA.strip() in archivo
+
+
 def test_ddl_es_idempotente():
-    for linea in migraciones.DDL_FACTURAS.splitlines():
-        if linea.startswith(("CREATE ", "ALTER ")):
-            assert "IF NOT EXISTS" in linea, linea
+    for ddl in (migraciones.DDL_FACTURAS, migraciones.DDL_CONTINGENCIA):
+        for linea in ddl.splitlines():
+            if linea.strip().startswith(("CREATE ", "ALTER ", "ADD COLUMN")):
+                assert "IF NOT EXISTS" in linea or linea.strip().startswith("ALTER TABLE facturacion.facturas"), linea
+
+
+def test_contingencia_no_toma_locks_de_facturas_en_cada_arranque():
+    """Los ALTER TABLE / CREATE INDEX sobre facturacion.facturas van dentro
+    del bloque DO que consulta el catálogo antes."""
+    for linea in migraciones.DDL_CONTINGENCIA.splitlines():
+        if linea.startswith("--"):
+            continue
+        if "facturacion.facturas" in linea and ("ALTER TABLE" in linea or "CREATE INDEX" in linea):
+            assert linea.startswith("        "), linea
+    assert "column_name = 'ultimo_intento_envio'" in migraciones.DDL_CONTINGENCIA
 
 
 class _Tx:
@@ -56,8 +74,9 @@ class _Pool:
         return _Acq(self.conn)
 
 
-async def test_aplicar_migraciones_toma_el_lock_y_agrega_vendedor_id():
+async def test_aplicar_migraciones_toma_el_lock_y_agrega_vendedor_id_y_contingencia():
     conn = _Conn()
     await migraciones.aplicar_migraciones(_Pool(conn))
     assert "pg_advisory_xact_lock" in conn.llamadas[0]
     assert "vendedor_id" in conn.llamadas[1]
+    assert conn.llamadas[2] == migraciones.DDL_CONTINGENCIA

@@ -45,7 +45,19 @@ class DGIIAsyncClient:
 
 
 class DGIIServiceError(RuntimeError):
-    """Error al comunicarse con un servicio web de la DGII (HTTP no exitoso)."""
+    """Error al comunicarse con un servicio web de la DGII (HTTP no exitoso).
+
+    `status_code` es el HTTP que respondió la DGII (None si no se conoce):
+    un 5xx es una indisponibilidad del servicio (modo contingencia), un 4xx
+    un rechazo del comprobante o de la solicitud."""
+
+    def __init__(self, mensaje: str, status_code: int | None = None):
+        super().__init__(mensaje)
+        self.status_code = status_code
+
+    @property
+    def es_indisponibilidad(self) -> bool:
+        return self.status_code is not None and self.status_code >= 500
 
 
 def raise_for_dgii_status(response: httpx.Response, accion: str) -> None:
@@ -54,5 +66,6 @@ def raise_for_dgii_status(response: httpx.Response, accion: str) -> None:
         return
     raise DGIIServiceError(
         f"La DGII rechazó la solicitud para {accion} "
-        f"(HTTP {response.status_code}): {response.text}"
+        f"(HTTP {response.status_code}): {response.text}",
+        status_code=response.status_code,
     )

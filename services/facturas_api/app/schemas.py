@@ -69,11 +69,20 @@ class FacturaResumen(BaseModel):
     error: str | None = None
     inventario_sincronizado: bool = False
     inventario_error: str | None = None
+    # Firma del XML que se envía (y que lleva la representación impresa) y
+    # modo contingencia (ver app.contingencia): `emitida_en_contingencia` se
+    # conserva tras enviarse (la RI sigue llevando la leyenda).
+    firmado_en: datetime | None = None
+    emitida_en_contingencia: bool = False
+    contingencia_en: datetime | None = None
+    lote_id: str | None = None
     creado_en: datetime
     actualizado_en: datetime
 
 
 class FacturaDetalle(FacturaResumen):
+    intentos_envio: int = 0
+    ultimo_intento_envio: datetime | None = None
     datos: dict[str, Any]
     items_inventario: list[ItemInventario] | None = None
     vendedor_id: UUID | None = None
@@ -90,10 +99,59 @@ class GenerarXmlResponse(BaseModel):
 
 
 class EnviarResponse(BaseModel):
+    """`estado = 'contingencia'` (con `contingencia = true` y `mensaje`): la
+    DGII no respondió; el e-CF quedó firmado y se enviará solo."""
+
     id: UUID
     estado: str
     track_id: str | None = None
     error: str | None = None
+    contingencia: bool = False
+    mensaje: str | None = None
+    firmado_en: datetime | None = None
+
+
+class LoteContingencia(BaseModel):
+    """Lote de envío de lo pendiente de una contingencia (A-0001...)."""
+
+    id: str
+    documentos: int
+    enviados: int
+    aceptados: int
+    rechazados: int
+    pendientes: int
+    estado: str  # en_cola | enviando | interrumpido | completado
+    ultimo_error: str | None = None
+    creado_en: datetime
+    iniciado_en: datetime | None = None
+    completado_en: datetime | None = None
+    actualizado_en: datetime
+
+
+class EstadoContingencia(BaseModel):
+    activa: bool
+    desde: datetime | None = None
+    errores_consecutivos: int = 0
+    ultimo_intento: datetime | None = None
+    ultimo_error: str | None = None
+    ultimo_exito: datetime | None = None
+    pendientes: int = 0
+    monto_pendiente: Decimal = Decimal("0")
+    mas_antigua: datetime | None = None
+    # Plazo de la DGII para enviar lo pendiente (72 h): vence_en = la
+    # pendiente más antigua + horas_limite.
+    vence_en: datetime | None = None
+    horas_limite: int
+    lote_tamano: int
+    envio_en_curso: bool = False
+    lotes: list[LoteContingencia] = []
+
+
+class ReintentoContingencia(BaseModel):
+    disponible: bool
+    detalle: str | None = None
+    envio_iniciado: bool = False
+    estado: EstadoContingencia
 
 
 class CertificadoEstado(BaseModel):

@@ -895,26 +895,24 @@ tareas no salen y su estado no se toca.
 
 | Método y ruta | Qué hace |
 |---|---|
-| `GET /sincronizacion/resumen` | Estado por canal (envío DGII, resultado DGII, inventario, aprobación comercial, entrega del ACECF), contadores de 7 días y la **contingencia** calculada |
+| `GET /sincronizacion/resumen` | Estado por canal (envío DGII, resultado DGII, inventario, aprobación comercial, entrega del ACECF), contadores de 7 días y la **contingencia** (estado de facturas-api, o calculada) |
 | `GET /sincronizacion/pendientes?canal=` | Lo pendiente con su `accion`: `actualizar_estado` / `reenviar` (facturas-api), `reintentar_aprobacion` / `decidir_aprobacion` (`/compras/bandeja/{id}/aprobar|rechazar`), `reintentar_entrega` |
 | `GET /sincronizacion/historial?modulo=&resultado=&q=&desde=&hasta=` | Bitácora de `facturacion.envios_dgii` |
 | `GET /sincronizacion/envios-por-dia?dias=7` | Historial de envíos por día |
 | `POST /sincronizacion/entregas/{id}/reintentar` | Vuelve a entregar al proveedor el ACECF ya aceptado (mismas columnas y función que `decidir_aprobacion`) |
 | `GET/POST /sincronizacion/facturas-papel` · `PUT/DELETE /sincronizacion/facturas-papel/{id}` | Facturas emitidas en papel (NCF serie B, cliente, montos por tasa, ITBIS calculado si no se indica, forma de pago del 607, e-CF de reemplazo) |
 
-**Contingencia (calculada).** `contingencia.activa` cuando los últimos 3 o
+**Contingencia.** `contingencia` es el estado real que guarda facturas-api
+(`fuente = "facturas_api"`: `facturacion.contingencia`, las facturas en
+estado `contingencia` como `pendientes` y los lotes de
+`facturacion.lotes_contingencia` con sus contadores en vivo; `vence_en` = la
+pendiente más antigua + 72 h). Si facturas-api todavía no creó esas tablas se
+calcula como antes (`fuente = "calculada"`): activa cuando los últimos 3 o
 más envíos/consultas a la DGII auditados en `envios_dgii` (últimas 24 h)
-fallaron seguidos; `desde` es el primero de la racha y `pendientes` los e-CF
-en 'error' sin trackId. La tarea de fondo de facturas-api no guarda cuándo
-corre: `ultima_consulta_resultado` es la última consulta auditada y
-`proximo_intento` = esa + 120 s si hay e-CF 'enviado'. **Falta en
-facturas-api** (otro paso): firmar y encolar localmente en contingencia,
-enviar por lotes (`contingencia.lotes` sale vacía hasta entonces: hace falta
-una tabla de lotes con documentos/aceptados/rechazados y su estado), un
-estado propio para la factura "firmada en contingencia" (hoy cuentan las
-'error' sin trackId), reenvío automático al reconectar, guardar la última
-corrida del bucle y la leyenda de contingencia en la representación impresa.
-Las facturas en papel todavía no alimentan el 607 ni la contabilidad.
+fallaron seguidos, y `pendientes` son los e-CF en 'error' sin trackId. Las
+facturas en papel van al 607 (solo con `EMISOR_100_ELECTRONICO=false`) y a
+los asientos automáticos (origen `factura_papel`). Ver
+[docs/dgii/CONTINGENCIA.md](dgii/CONTINGENCIA.md).
 
 ### Reportes
 

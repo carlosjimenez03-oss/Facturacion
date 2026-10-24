@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../lib/api";
 import { CODIGOS_MODIFICACION, TIPOS_INGRESOS } from "../lib/catalogos";
+import { MENSAJE_CONTINGENCIA } from "../lib/estados";
 import { erpApi, ErpApiError } from "../lib/erpApi";
 import type { Cliente, Cotizacion } from "../lib/erpApi";
 import { configuracionApi, publicarEmpresa, type Secuencia, type Vendedor } from "../lib/configuracionApi";
@@ -707,8 +708,12 @@ export function FacturaForm() {
   }
 
   /** Estado de navegación hacia el detalle: lleva el aviso de la cotización si quedó alguno. */
-  function estadoAlSalir() {
+  function estadoAlSalir(contingencia?: string | null) {
     const detalle = avisoAlSalir.current;
+    if (contingencia) {
+      // Emitida en contingencia: el aviso del detalle explica que se enviará sola.
+      return { state: { aviso: { texto: "Emitida en contingencia", detalle: detalle ? `${contingencia} ${detalle}` : contingencia, tono: "aviso" } } };
+    }
     return detalle ? { state: { aviso: { texto: "Cotización sin marcar como facturada", detalle, tono: "aviso" } } } : undefined;
   }
 
@@ -749,14 +754,15 @@ export function FacturaForm() {
         return;
       }
       const envio = await api.enviar(fid);
-      // La cotización se marca facturada solo cuando la factura llegó a la DGII:
-      // un borrador se puede borrar y dejaría la cotización atada a nada.
-      if (envio.track_id) {
+      // La cotización se marca facturada solo cuando la factura quedó emitida
+      // (llegó a la DGII o quedó firmada en contingencia): un borrador se puede
+      // borrar y dejaría la cotización atada a nada.
+      if (envio.track_id || envio.contingencia) {
         const aviso = await marcarCotizacion(fid);
         avisoAlSalir.current = aviso;
       }
       recargar();
-      navigate(`/facturas/${fid}`, estadoAlSalir());
+      navigate(`/facturas/${fid}`, estadoAlSalir(envio.contingencia ? (envio.mensaje ?? MENSAJE_CONTINGENCIA) : null));
     } catch (err) {
       recargar();
       setError(err instanceof ApiError ? err.message : String(err));

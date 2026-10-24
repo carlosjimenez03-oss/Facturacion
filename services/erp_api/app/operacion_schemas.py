@@ -95,8 +95,10 @@ class CanalResumen(BaseModel):
 
 
 class LoteContingencia(BaseModel):
-    """Lote de envío de la contingencia. facturas-api todavía no envía por
-    lotes: la lista sale vacía hasta que lo haga (ver docs/ERP_API.md)."""
+    """Lote de envío de lo pendiente de una contingencia
+    (facturacion.lotes_contingencia de facturas-api, p. ej. A-0001).
+    `pendientes` = sin enviar todavía; 'con_rechazos' = completado con
+    rechazos de la DGII."""
 
     id: str
     documentos: int
@@ -105,12 +107,18 @@ class LoteContingencia(BaseModel):
     pendientes: int
     estado: Literal["en_cola", "enviando", "completado", "interrumpido", "con_rechazos"]
     creado_en: datetime | None = None
+    enviados: int = 0
+    iniciado_en: datetime | None = None
+    completado_en: datetime | None = None
+    ultimo_error: str | None = None
 
 
 class Contingencia(BaseModel):
-    """Modo contingencia calculado de los datos: la DGII no responde cuando
-    los últimos envíos/consultas auditados en facturacion.envios_dgii
-    fallaron seguidos (ver `sincronizacion_repository.contingencia`)."""
+    """Modo contingencia: el estado que guarda facturas-api
+    (facturacion.contingencia, `fuente = 'facturas_api'`) o, si sus tablas no
+    existen, el calculado de la auditoría (`fuente = 'calculada'`: los
+    últimos envíos/consultas en facturacion.envios_dgii fallaron seguidos).
+    Ver `sincronizacion_repository._contingencia`."""
 
     activa: bool
     desde: datetime | None = None
@@ -119,11 +127,18 @@ class Contingencia(BaseModel):
     ultimo_error: str | None = None
     # facturas-api reintenta solo cada `sincronizar_estado_cada_segundos` (120 s por defecto).
     proximo_intento: datetime | None = None
-    # e-CF que no llegaron a la DGII (estado 'error' sin trackId): se envían al reconectar.
+    # e-CF emitidos en contingencia (estado 'contingencia'; en la fuente
+    # calculada, 'error' sin trackId): se envían solos al reconectar.
     pendientes: int
     monto_pendiente: Monto
     facturas_papel: int  # registradas desde el inicio de la contingencia (o en el mes si no hay)
     lotes: list[LoteContingencia] = Field(default_factory=list)
+    fuente: Literal["facturas_api", "calculada"] = "calculada"
+    ultimo_exito: datetime | None = None
+    # Pendiente más antigua y su plazo de envío (72 horas, Decreto 587-24).
+    mas_antigua: datetime | None = None
+    vence_en: datetime | None = None
+    horas_limite: int = 72
 
 
 class EnviosDia(BaseModel):

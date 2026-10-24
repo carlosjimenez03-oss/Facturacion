@@ -17,6 +17,10 @@ mismo patrón de "aproximación conservadora" en `frontend/src/lib/tipoConfig.ts
   "Paginación" del Formato e-CF) -- son de obligatoriedad condicional
   (código 2, no 1), y su cálculo exacto requeriría un segundo paso de layout
   fuera del alcance razonable de esta primera versión.
+- e-CF emitido en contingencia (`emitida_en_contingencia`, ver
+  app.contingencia): lleva, recuadrada bajo el encabezado, la leyenda que
+  exige el Instructivo de Contingencia de la DGII. El código de seguridad y
+  el QR salen del mismo `xml_firmado` que se envía a la DGII al reconectar.
 - "Unidad de Medida" se traduce a palabras solo para el subconjunto de
   códigos ya cubierto en `frontend/src/lib/catalogos.ts` (UNIDADES_MEDIDA);
   fuera de ese subconjunto se imprime el código tal cual.
@@ -84,6 +88,14 @@ UNIDADES_MEDIDA_LABEL: dict[str, str] = {
 }
 
 _LINEA_AZUL = colors.HexColor("#4a6b8a")
+
+# Leyenda del Instructivo de Contingencia de Facturación Electrónica de la
+# DGII para la RI de un e-CF emitido en contingencia por falta de
+# conectividad (mismo texto que app.contingencia.LEYENDA_CONTINGENCIA).
+LEYENDA_CONTINGENCIA = (
+    "e-CF emitido en modalidad de Contingencia, el cual podrá ser consultado para su validez fiscal, "
+    "a partir de las setenta y dos (72) horas."
+)
 
 
 class RepresentacionImpresaError(Exception):
@@ -261,6 +273,22 @@ def generar_pdf(factura: dict[str, Any], ambiente: DGIIEnvironment) -> bytes:
     story.append(Spacer(1, 0.3 * cm))
     story.append(_linea_horizontal())
     story.append(Spacer(1, 0.3 * cm))
+
+    if factura.get("emitida_en_contingencia"):
+        leyenda = Table(
+            [[Paragraph(f"<b>{LEYENDA_CONTINGENCIA}</b>", estilos["normal"])]],
+            colWidths=[17 * cm],
+            style=TableStyle(
+                [
+                    ("BOX", (0, 0), (-1, -1), 1, colors.HexColor("#C2410C")),
+                    ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FFF7ED")),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ]
+            ),
+        )
+        story.append(leyenda)
+        story.append(Spacer(1, 0.3 * cm))
 
     # --- Cliente ---
     if comprador.get("RazonSocialComprador") or comprador.get("RNCComprador"):

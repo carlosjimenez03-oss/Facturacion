@@ -37,7 +37,7 @@ from typing import Any
 import asyncpg
 
 from . import contabilidad_calculos as cc
-from . import impuestos_repository, precalculos
+from . import formatos, impuestos_repository, precalculos
 from .impuestos_repository import ConflictoImpuestosError
 from .compras_repository import _ES_NOTA_CREDITO, _TOTAL_CXP, _exigir_no_presentada, _fecha_606
 from .contabilidad_calculos import AsientoPropuesto, NoContabilizableError
@@ -390,7 +390,7 @@ async def actualizar_cuentas_por_defecto(pool: asyncpg.Pool, valores: dict[str, 
 _ETIQUETA_ORIGEN = {
     "manual": "Manual", "venta": "Factura", "nota_credito": "Nota de crédito", "nota_debito": "Nota de débito",
     "cobro": "Cobro", "compra": "Compra", "pago": "Pago a proveedor", "movimiento": "Banco",
-    "transferencia": "Transferencia", "depreciacion": "Depreciación",
+    "transferencia": "Transferencia", "depreciacion": "Depreciación", "factura_papel": "Factura en papel",
 }
 
 _SELECT_ASIENTOS = """
@@ -934,11 +934,67 @@ async def _fuente_proporcionalidad(conn, ctx, desde, hasta, ids=None) -> list[Pr
     return resultado
 
 
+async def _fuente_facturas_papel(conn, ctx, desde, hasta, ids=None) -> list[Propuesta]:
+    """Facturas en papel (serie B) de la contingencia, como una venta
+    (`cc.asiento_venta` con la forma de e-CF de formatos.factura_papel_como_ecf;
+    a crédito si la forma de pago es 4). Si ya hay un e-CF de reemplazo
+    aceptado (`encf_reemplazo`, o un e-CF que la referencia con el código
+    de modificación 4), la venta la contabiliza ese e-CF: la factura en
+    papel queda sin asiento (y si lo tenía, se anula) para no duplicarla."""
+    filas = await conn.fetch(
+        f"""
+        SELECT p.*, r.encf AS reemplazo_aceptado
+        FROM operacion.facturas_papel p
+        LEFT JOIN LATERAL (
+            SELECT f.encf FROM facturacion.facturas f
+            WHERE f.estado = 'aceptado'
+              AND (upper(f.encf) = upper(p.encf_reemplazo)
+                   OR (upper(f.datos::jsonb #>> '{{InformacionReferencia,NCFModificado}}') = upper(p.ncf)
+                       AND f.datos::jsonb #>> '{{InformacionReferencia,CodigoModificacion}}' = '4'))
+            LIMIT 1
+        ) r ON true
+        WHERE {_filtro('p.id', 'p.fecha', ids)}
+        """,
+        desde, hasta, ids,
+    )
+    resultado = []
+    for f in filas:
+        clave = ("factura_papel", str(f["id"]))
+        factura = formatos.factura_papel_como_ecf(dict(f))
+        descripcion = f"Factura en papel {f['ncf']} · {f['cliente_nombre'] or 'Consumidor final'}"
+        if factura is None:
+            resultado.append((clave, _no_contabilizable(
+                "factura_papel", str(f["id"]), f["fecha"], f["ncf"], descripcion, f["total"],
+                "El NCF no es de venta (B11/B13/B17): regístrelo con un asiento manual",
+            )))
+            continue
+        if f["reemplazo_aceptado"]:
+            resultado.append((clave, _no_contabilizable(
+                "factura_papel", str(f["id"]), f["fecha"], f["ncf"], descripcion, f["total"],
+                f"La contabiliza su e-CF de reemplazo {f['reemplazo_aceptado']} (aceptado por la DGII)",
+            )))
+            continue
+        try:
+            propuesta = cc.asiento_venta(
+                factura_id=str(f["id"]), tipo_ecf=factura["tipo_ecf"], encf=f["ncf"], fecha=f["fecha"],
+                datos=factura["datos"], a_credito=f["forma_pago"] == 4,
+            )
+        except NoContabilizableError as exc:
+            resultado.append((clave, _no_contabilizable(
+                "factura_papel", str(f["id"]), f["fecha"], f["ncf"], descripcion, f["total"], str(exc),
+            )))
+            continue
+        propuesta.origen = "factura_papel"
+        propuesta.concepto = f"{descripcion} (contingencia)"
+        resultado.append((clave, propuesta))
+    return resultado
+
+
 _FUENTES = {
     "venta": _fuente_ventas, "nota_credito": _fuente_ventas, "nota_debito": _fuente_ventas,
     "cobro": _fuente_cobros, "compra": _fuente_compras, "pago": _fuente_pagos,
     "movimiento": _fuente_movimientos, "transferencia": _fuente_transferencias,
-    "proporcionalidad": _fuente_proporcionalidad,
+    "proporcionalidad": _fuente_proporcionalidad, "factura_papel": _fuente_facturas_papel,
 }
 
 

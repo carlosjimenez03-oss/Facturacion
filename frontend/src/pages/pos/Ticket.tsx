@@ -4,6 +4,7 @@
 // la representación impresa; si aún no existe, el ticket lo dice.
 import { Fragment } from "react";
 import { desglose } from "../../lib/buildDatos";
+import { LEYENDA_CONTINGENCIA } from "../../lib/estados";
 import { formatoMonto, formatoRnc } from "../../lib/marca";
 import type { DatosEmisor } from "../../lib/preferencias";
 import type { PagoPos, Timbre } from "../../lib/solucionesApi";
@@ -25,6 +26,8 @@ export interface DatosTicket {
   estadoDgii: string;
   caja: string;
   cajero: string | null;
+  /** Emitido en contingencia (la DGII no respondió): el ticket lleva la leyenda de la DGII. */
+  contingencia?: boolean;
 }
 
 export function Ticket({ t, timbre }: { t: DatosTicket; timbre: Timbre | null }) {
@@ -103,6 +106,7 @@ export function Ticket({ t, timbre }: { t: DatosTicket; timbre: Timbre | null })
           <span className="tk-mut">Código de seguridad y QR: consúltelos en la representación impresa del e-CF.</span>
         )}
         <span>Estado DGII: {t.estadoDgii}</span>
+        {t.contingencia && <b className="tk-leyenda">{LEYENDA_CONTINGENCIA}</b>}
         <span className="tk-mut">¡Gracias por su compra!</span>
       </div>
     </div>

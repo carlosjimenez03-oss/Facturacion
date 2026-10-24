@@ -374,6 +374,63 @@ def fila_607(factura: dict[str, Any]) -> dict[str, Any]:
     return fila
 
 
+# Tipo de comprobante del NCF serie B (posiciones 2-3) -> el tipo de e-CF
+# equivalente, para tratar una factura en papel como un e-CF de venta en el
+# 607 y en los asientos. B11/B13/B17 (compras, gastos menores, pagos al
+# exterior) no son ventas.
+TIPO_ECF_POR_NCF = {"01": 31, "02": 32, "03": 33, "04": 34, "14": 44, "15": 45, "16": 46}
+
+
+def tipo_ncf(ncf: str) -> str:
+    """Tipo de comprobante de un NCF de 11 (B0100000001) o 19 posiciones."""
+    return ncf[1:3] if len(ncf) == 11 else ncf[9:11]
+
+
+def factura_papel_como_ecf(papel: dict[str, Any]) -> dict[str, Any] | None:
+    """Una factura en papel (operacion.facturas_papel) con la forma de un
+    e-CF de venta (`id`, `tipo_ecf`, `encf`, `datos`) para `fila_607`,
+    `desglose_por_tasa` y los asientos: totales por tasa, forma de pago (la
+    del 607: 1 efectivo ... 4 crédito ... 7 otras) y comprador. None si su
+    NCF no es de venta."""
+    tipo = TIPO_ECF_POR_NCF.get(tipo_ncf(papel["ncf"]))
+    if tipo is None:
+        return None
+
+    def monto(clave: str) -> str:
+        return f"{a_decimal(papel.get(clave)):.2f}"
+
+    itbis = a_decimal(papel.get("itbis_18")) + a_decimal(papel.get("itbis_16"))
+    forma = int(papel.get("forma_pago") or 1)
+    comprador = {}
+    if papel.get("cliente_rnc"):
+        comprador["RNCComprador"] = papel["cliente_rnc"]
+    if papel.get("cliente_nombre"):
+        comprador["RazonSocialComprador"] = papel["cliente_nombre"]
+    datos = {
+        "Encabezado": {
+            "IdDoc": {
+                "TipoeCF": str(tipo),
+                "TipoIngresos": "01",
+                "TipoPago": "2" if forma == 4 else "1",
+                "TablaFormasPago": {"FormaDePago": [{"FormaPago": str(forma), "MontoPago": monto("total")}]},
+            },
+            "Emisor": {"FechaEmision": papel["fecha"].strftime("%d-%m-%Y")},
+            "Comprador": comprador,
+            "Totales": {
+                "MontoGravadoI1": monto("gravado_18"),
+                "MontoGravadoI2": monto("gravado_16"),
+                "MontoGravadoI3": monto("gravado_0"),
+                "MontoExento": monto("exento"),
+                "TotalITBIS1": monto("itbis_18"),
+                "TotalITBIS2": monto("itbis_16"),
+                "TotalITBIS": f"{itbis:.2f}",
+                "MontoTotal": monto("total"),
+            },
+        },
+    }
+    return {"id": str(papel["id"]), "tipo_ecf": tipo, "encf": papel["ncf"], "datos": datos}
+
+
 def es_consumo_resumido(factura: dict[str, Any]) -> bool:
     """Factura de consumo (E32) menor de RD$250,000.00 (MontoTotal): no se
     reporta una a una sino en el resumen de facturas de consumo. Se compara

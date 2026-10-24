@@ -303,5 +303,15 @@ async def test_caja_venta_mixta_y_arqueo(pool):
     assert await repo.sesion_abierta(pool, "Caja principal") is None
     historial = await repo.listar_sesiones(pool)
     assert historial[0]["cantidad_ventas"] == 2 and historial[0]["diferencias"]["efectivo"] == D("-80.00")
+
+
+async def test_caja_registra_una_venta_emitida_en_contingencia(pool):
+    """Sin conexión con la DGII la venta del POS sigue: el e-CF quedó firmado
+    en 'contingencia' (sin trackId todavía) y se registra en la caja."""
+    sesion = await repo.abrir_sesion(pool, caja="Caja 2", fondo_inicial=D("0"), cajero=None, almacen_id=None)
+    sid = uuid.UUID(sesion["id"])
+    f = await factura(pool, "E320000000040", rnc=None, total="590.00", estado="contingencia", track=False)
+    venta = await repo.registrar_venta(pool, sid, factura_id=f, pagos=[{"metodo": "efectivo", "monto": D("600")}])
+    assert (venta["encf"], venta["total"], venta["cambio"]) == ("E320000000040", D("590.00"), D("10.00"))
     # Se puede abrir una nueva sesión después del cierre.
     await repo.abrir_sesion(pool, caja="Caja principal", fondo_inicial=D("0"), cajero=None, almacen_id=None)

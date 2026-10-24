@@ -119,7 +119,7 @@ export interface CanalResumen {
   detalle: string | null;
 }
 
-/** Lote de envío en contingencia. facturas-api todavía no envía por lotes: llega vacío. */
+/** Lote de envío de lo pendiente de una contingencia (facturas-api: A-0001, A-0002…). `pendientes` = sin enviar. */
 export interface LoteContingencia {
   id: string;
   documentos: number;
@@ -128,9 +128,16 @@ export interface LoteContingencia {
   pendientes: number;
   estado: "en_cola" | "enviando" | "completado" | "interrumpido" | "con_rechazos";
   creado_en: string | null;
+  enviados?: number;
+  iniciado_en?: string | null;
+  completado_en?: string | null;
+  ultimo_error?: string | null;
 }
 
-/** Modo contingencia calculado: fallos seguidos en los últimos envíos/consultas a la DGII. */
+/**
+ * Modo contingencia: el estado real de facturas-api (`fuente: "facturas_api"`) o, si sus tablas no existen,
+ * el calculado de la auditoría (fallos seguidos en los últimos envíos/consultas a la DGII).
+ */
 export interface Contingencia {
   activa: boolean;
   desde: string | null;
@@ -138,11 +145,17 @@ export interface Contingencia {
   ultimo_intento: string | null;
   ultimo_error: string | null;
   proximo_intento: string | null;
-  /** e-CF que no llegaron a la DGII (estado 'error' sin trackId). */
+  /** e-CF emitidos en contingencia (estado 'contingencia'; en la fuente calculada, 'error' sin trackId). */
   pendientes: number;
   monto_pendiente: string;
   facturas_papel: number;
   lotes: LoteContingencia[];
+  fuente?: "facturas_api" | "calculada";
+  ultimo_exito?: string | null;
+  /** Pendiente más antigua y su plazo de envío a la DGII (72 horas). */
+  mas_antigua?: string | null;
+  vence_en?: string | null;
+  horas_limite?: number;
 }
 
 export interface ResumenSincronizacion {

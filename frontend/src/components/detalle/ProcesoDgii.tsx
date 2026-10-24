@@ -22,15 +22,37 @@ function pasos(f: FacturaDetalle): Paso[] {
     f.xml_generado
       ? { titulo: "XML generado", detalle: `Validado contra el XSD oficial del e-CF ${f.tipo_ecf}`, clase: "ok" }
       : { titulo: "XML generado", detalle: "Se genera y valida al emitir", clase: "pend" },
-    enviada
-      ? { titulo: "Firmada", detalle: "Firma digital XAdES con el certificado del emisor", clase: "ok" }
+    enviada || f.estado === "contingencia"
+      ? {
+          titulo: "Firmada",
+          hora: f.firmado_en ? fechaHora(f.firmado_en) : undefined,
+          detalle: "Firma digital con el certificado del emisor: es el XML de la representación impresa y el que recibe la DGII",
+          clase: "ok",
+        }
       : f.xml_firmado
         ? { titulo: "Firmada (vista previa)", detalle: "La firma definitiva se aplica al enviar", clase: "ok" }
         : { titulo: "Firmada", detalle: "Se firma digitalmente al enviar", clase: "pend" },
   ];
 
+  if (f.emitida_en_contingencia) {
+    lista.push({
+      titulo: "Emitida en contingencia",
+      hora: f.contingencia_en ? fechaHora(f.contingencia_en) : undefined,
+      detalle:
+        "La DGII no respondió: se entregó con la leyenda de contingencia" + (f.lote_id ? ` · lote de envío ${f.lote_id}` : ""),
+      clase: f.estado === "contingencia" ? "esp" : "ok",
+    });
+  }
   if (enviada) {
     lista.push({ titulo: "Enviada a la DGII", detalle: `Track ID ${f.track_id}`, clase: "ok" });
+  } else if (f.estado === "contingencia") {
+    lista.push({
+      titulo: "Enviada a la DGII",
+      detalle: "Se envía sola en cuanto la DGII responda (plazo de la DGII: 72 horas)",
+      clase: "pend",
+    });
+    lista.push({ titulo: "Respuesta de la DGII", clase: "pend" });
+    return lista;
   } else if (f.estado === "error") {
     const motivo = mensajesDgii(f)[0]?.valor;
     lista.push({ titulo: "Envío fallido", hora: fechaHora(f.actualizado_en), detalle: motivo, clase: "mal" });
