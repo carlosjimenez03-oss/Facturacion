@@ -90,6 +90,8 @@ export interface FacturaDetalle extends FacturaResumen {
   dgii_respuesta: Record<string, unknown> | null;
   /** Vendedor (Configuración → Vendedores); fuera de `datos`. */
   vendedor_id?: string | null;
+  /** UUID del cliente con que se creó (POS sin conexión): repetir la creación con él devuelve esta factura. */
+  clave_idempotencia?: string | null;
 }
 
 export interface GenerarXmlResponse {
@@ -186,6 +188,7 @@ export type ReferenciaMovimiento =
   | "factura"
   | "ajuste"
   | "anulacion_ajuste"
+  | "reverso_factura"
   | "transferencia"
   | "lote";
 

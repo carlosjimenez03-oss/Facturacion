@@ -1143,6 +1143,48 @@ async def generar_asientos(pool: asyncpg.Pool, desde: date, hasta: date) -> dict
     return resultado
 
 
+async def contabilizar_documento(pool: asyncpg.Pool, origen: str, origen_id: str) -> str | None:
+    """El asiento automático de UN documento, ya (lo usa el pago con tarjeta
+    en línea para su cobro): el mismo armado y la misma huella que
+    `generar_asientos`, que después lo verá «sin cambios». No toca nada más
+    (ni otros documentos del día). Devuelve el número del asiento, o None si
+    el documento no se puede contabilizar todavía (falta una cuenta por
+    defecto, factura sin aceptar...) o ya tenía uno: queda para
+    `generar_asientos`."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock(hashtext('contabilidad.generar'))")
+            existe = await conn.fetchval(
+                "SELECT 1 FROM contabilidad.asientos WHERE origen = $1 AND origen_id = $2 AND estado <> 'anulado'",
+                origen, origen_id,
+            )
+            if existe:
+                return None
+            ctx = await _contexto(conn)
+            propuestas = await _FUENTES[origen](conn, ctx, date.min, date.max, [origen_id])
+            if not propuestas or isinstance(propuestas[0][1], dict):
+                return None
+            propuesta = propuestas[0][1]
+            try:
+                lineas = ctx.resolver(propuesta)
+            except NoContabilizableError:
+                return None
+            huella = cc.huella(lineas, propuesta.fecha, propuesta.concepto, propuesta.referencia)
+            fila = await conn.fetchrow(
+                """
+                INSERT INTO contabilidad.asientos
+                    (fecha, concepto, referencia, estado, origen, origen_id, huella, total, contabilizado_en)
+                VALUES ($1, $2, $3, 'contabilizado', $4, $5, $6, $7, now())
+                RETURNING id, numero
+                """,
+                propuesta.fecha, propuesta.concepto, propuesta.referencia, propuesta.origen, propuesta.origen_id,
+                huella, cc.totales(lineas)[0],
+            )
+            await _insertar_lineas(conn, fila["id"], lineas)
+    _CONTEOS_PENDIENTES.clear()
+    return numero_asiento(fila["numero"])
+
+
 async def pendientes_de_contabilizar(pool: asyncpg.Pool, desde: date, hasta: date) -> dict[str, Any]:
     """Lo que haría `generar_asientos` sin hacerlo (`pendientes`) y los
     documentos que no se pueden contabilizar con su motivo."""

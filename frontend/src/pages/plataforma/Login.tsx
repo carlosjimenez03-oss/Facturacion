@@ -4,6 +4,8 @@ import { AvisoProteccion } from "../../layout/AvisoProteccion";
 import { Logo } from "../../layout/icons";
 import { MARCA } from "../../lib/marca";
 import { AUTH_CONFIGURADA, AuthError, cambiarContrasena, capturarSesionDeUrl, iniciarSesion, recuperarContrasena } from "../../lib/sesion";
+import { leerCola } from "../pos/posAlmacen";
+import { sinSincronizar } from "../pos/posOffline";
 import { useSesion } from "./useSesion";
 import "./plataforma.css";
 
@@ -27,6 +29,15 @@ export function Login() {
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aviso, setAviso] = useState<string | null>(null);
+  const [ventasPos, setVentasPos] = useState(0);
+
+  // Ventas del POS cobradas sin conexión que no se pudieron sincronizar
+  // porque venció la sesión: siguen guardadas en este navegador.
+  useEffect(() => {
+    leerCola()
+      .then((cola) => setVentasPos(sinSincronizar(cola).length))
+      .catch(() => undefined);
+  }, []);
 
   // Enlace del correo de recuperación/invitación (#access_token=…&type=recovery).
   useEffect(() => {
@@ -94,6 +105,14 @@ export function Login() {
         {aviso && (
           <div className="al al-s" role="status">
             <span>{aviso}</span>
+          </div>
+        )}
+        {ventasPos > 0 && modo === "entrar" && (
+          <div className="al al-w" role="status" data-ventas-pos-pendientes>
+            <span>
+              Hay {ventasPos} venta(s) del POS cobradas sin conexión guardadas en este equipo. No se perdieron: se emitirán sus e-CF en
+              cuanto inicie sesión y vuelva al POS.
+            </span>
           </div>
         )}
 

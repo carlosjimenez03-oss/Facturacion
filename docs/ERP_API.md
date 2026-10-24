@@ -63,7 +63,7 @@ Las rutas están en `app/impuestos.py`, las consultas en
 ### Datos
 
 - **Solo lee** `facturacion.facturas` (e-CF de venta 31, 32, 33, 34, 44, 45 y
-  46 en estado `aceptado`, por `FechaEmision`), `facturacion.envios_dgii`
+  46 en estado `aceptado`, por `FechaEmision`, solo del ambiente DGII activo: ver docs/AMBIENTES.md), `facturacion.envios_dgii`
   (anulaciones de `anulacion_encf`), `compras606.registros` (606) e
   `inventario.productos` (Kardex). Nunca los modifica (los pagos a
   proveedores de Compras sí escriben el 606, ver "Compras").
@@ -235,6 +235,18 @@ y 05-2019), igual que el 606 (`docs/dgii/FORMATO_606.md`):
    - **Ventas:** las E34 restan y las E33 suman. El 0 % cuenta como
      exportación y el exento como exentas. En E44, lo exento se trata como
      exento por destino, que no reduce la proporcionalidad.
+   - **Facturas en papel (serie B):** las de `operacion.facturas_papel`
+     del período (por `fecha`) entran en las ventas y el ITBIS facturado
+     **siempre**, también con `EMISOR_100_ELECTRONICO=true`: el IT-1
+     declara todas las ventas (a diferencia del 607). Salen además en las
+     líneas de detalle **5.1** ("De ellos: facturas en papel") y **8.1**
+     ("De él: ITBIS de facturas en papel"), `tipo = "detalle"`, que no
+     suman. Una factura en papel cuyo e-CF de reemplazo ya fue **aceptado**
+     (`encf_reemplazo`, o un e-CF con `NCFModificado` = su NCF y código de
+     modificación 4, el mismo criterio que la contabilidad) no se cuenta: la
+     venta la declara el e-CF en el período de su `FechaEmision`, y el
+     pre-cálculo lo advierte. El coeficiente de proporcionalidad (y el
+     asiento mensual de Contabilidad) usa las mismas ventas.
    - **ITBIS adelantado:** `itbis_facturado − itbis_costo` del 606 del
      período; las notas de crédito B04/E34 del 606 restan.
    - **Proporcionalidad:** solo se aplica con ventas exentas, y solo a
@@ -946,7 +958,8 @@ Rutas en `app/configuracion.py` (prefijo `/configuracion`) y
 |---|---|
 | `GET/PUT /configuracion/empresa` | Datos de la empresa (una fila). El RNC es `EMISOR_RNC` si está configurado |
 | `GET/POST /configuracion/certificado` | Estado del `.p12` con que se firma; carga validada de uno nuevo (ver AUTH.md) |
-| `GET /configuracion/secuencias`, `GET/PUT/DELETE /configuracion/secuencias/{tipo}` | Rango e-NCF por tipo (31…47): siguiente e-NCF = mayor entre `desde`, `proximo` y el último usado en `facturacion.facturas` + 1; usados, disponibles, consumo y avisos (vencida, agotada, por vencer ≤ 30 días, por agotarse ≤ 10 o ≥ 90 %) |
+| `GET /configuracion/secuencias`, `GET/PUT/DELETE /configuracion/secuencias/{tipo}` | Rango e-NCF por tipo (31…47) **y ambiente DGII** (`?ambiente=test\|qa\|production`; por defecto el activo): siguiente e-NCF = mayor entre `desde`, `proximo` y el último usado en `facturacion.facturas` del mismo ambiente + 1; usados, disponibles, consumo y avisos (vencida, agotada, por vencer ≤ 30 días, por agotarse ≤ 10 o ≥ 90 %) |
+| `GET /configuracion/ambiente`, `PUT /configuracion/ambiente` | Ambiente DGII activo (TesteCF/CerteCF/eCF) y su cambio: `{ambiente, confirmacion}`. Solo administradores (403); 409 con facturas en contingencia o lotes abiertos; a producción, 422 sin `confirmacion` y 409 sin certificado vigente del RNC. Devuelve origen (`configuracion`/`variables`), quién y cuándo, bloqueos, certificado, secuencias y facturas por ambiente y los últimos cambios (auditoría). Ver docs/AMBIENTES.md |
 | `GET/POST /configuracion/vendedores`, `PUT/DELETE /configuracion/vendedores/{id}` | Vendedores (la factura guarda `facturacion.facturas.vendedor_id`, columna de facturas_api). No se borra uno con facturas: se desactiva |
 | `GET/POST /configuracion/usuarios`, `POST /configuracion/usuarios/{id}/desactivar\|activar` | Usuarios de Supabase Auth por la API admin de GoTrue (`SUPABASE_SERVICE_ROLE_KEY`) |
 | `GET/PUT /configuracion/inventario` | Método de valuación (preferencia; el costo sigue siendo promedio ponderado) |
@@ -996,6 +1009,28 @@ reglas puras en `app/soluciones_calculos.py`; esquema `soluciones`
 - **POS**: sesiones de caja y ventas; cada venta es un E32 (o E31 con RNC)
   emitido por facturas-api con el emisor, el siguiente e-NCF y el vencimiento
   de la secuencia de Configuración.
+
+## Pagos con tarjeta en línea (fase 7)
+
+Rutas en `app/pagos.py` (repositorio `app/pagos_repository.py`, pasarelas y
+firma en `app/pagos_proveedores.py`); tablas `soluciones.pagos_en_linea` y
+`soluciones.pagos_en_linea_eventos` (`DDL_PAGOS` = `db/init/019_pagos_en_linea.sql`).
+Contrato: `frontend/src/lib/pagosApi.ts`. Detalle, campos de Azul y fuentes:
+[`PAGOS.md`](PAGOS.md).
+
+| Método y ruta | Qué hace |
+|---|---|
+| `GET/PUT /configuracion/pagos-en-linea` | Configuración → Pagos en línea (guardar: solo administradores, 403). El AuthKey nunca se devuelve |
+| `GET /pagos-en-linea?factura_id=&estado=` · `GET /pagos-en-linea/{id}/eventos` | Intentos de pago con su estado, AuthorizationCode, RRN, cobro e incidencia (Cobros) |
+| `POST /portal/publico/{token}/pagos` | **Público**: crea el intento y devuelve el formulario firmado para la página del banco |
+| `GET\|POST /portal/publico/pagos/{ref}/retorno/{aprobado\|declinado\|cancelado}` | **Público**: retorno del banco; valida la firma, registra el cobro una sola vez y redirige a `/p/pago/{ref}` |
+| `GET /portal/publico/pagos/{ref}` | **Público**: estado del intento para la página del resultado |
+| `POST /portal/publico/pagos/{ref}/simulado` | **Público**: página de pago del proveedor simulado (nunca en producción) |
+
+`GET /portal/publico/{token}` trae además `pago_en_linea` (null si no se
+ofrece). El cobro de un pago aprobado se registra con
+`repository.registrar_cobro_en` (mismas validaciones y candado que
+`POST /cobros`) y su asiento con `contabilidad_repository.contabilizar_documento`.
 
 ## Despliegue
 

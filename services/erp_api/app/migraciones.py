@@ -11,7 +11,7 @@ es idempotente (`IF NOT EXISTS` / `CREATE OR REPLACE`), así que correrlo en
 cada arranque es seguro. `db/init/007_ventas.sql`, `008_impuestos.sql`,
 `009_fecha_dgii_segura.sql`, `010_compras.sql`, `012_bancos_contabilidad.sql`,
 `013_configuracion.sql`, `014_operacion.sql`, `015_nomina.sql`,
-`016_soluciones.sql` y `017_contingencia.sql` contienen
+`016_soluciones.sql`, `017_contingencia.sql` y `019_pagos_en_linea.sql` contienen
 exactamente el mismo DDL para el Postgres local de desarrollo (lo verifica
 tests/test_migraciones.py).
 
@@ -31,7 +31,9 @@ from collections.abc import Awaitable, Callable
 import asyncpg
 
 from .contabilidad_calculos import ddl_semilla_catalogo
-from .migraciones_configuracion import DDL_CONFIGURACION
+from libs.ecf_common.ambiente import AMBIENTES
+
+from .migraciones_configuracion import DDL_AMBIENTE, DDL_CONFIGURACION
 
 logger = logging.getLogger(__name__)
 
@@ -1075,7 +1077,74 @@ $$;
 """
 
 
-async def _migrar(conn: asyncpg.Connection) -> None:
+# Pagos con tarjeta en línea (fase 7): intentos de pago del portal de
+# clientes y su bitácora (ver pagos_repository.py y docs/PAGOS.md). Requiere
+# `soluciones.portal_enlaces` (DDL_SOLUCIONES) y `ventas.cobros`. Mismo DDL en
+# db/init/019_pagos_en_linea.sql.
+DDL_PAGOS = """
+-- Pagos con tarjeta en línea desde el portal de clientes (fase 7, ver
+-- docs/PAGOS.md). Cada intento es una fila: el portal la crea al pulsar
+-- «Pagar con tarjeta» (estado 'pendiente', vence en `expira_en`) y el
+-- retorno firmado de la pasarela la cierra (aprobado / declinado /
+-- cancelado). Un aprobado registra UN cobro (`cobro_id`, índice único): las
+-- respuestas repetidas no cobran dos veces. `orden` es el OrderNumber que
+-- ve la pasarela; `referencia` (aleatoria, 32 bytes) identifica el intento
+-- en las URL de retorno sin exponer el token del portal. Nunca se guardan
+-- datos de la tarjeta.
+CREATE TABLE IF NOT EXISTS soluciones.pagos_en_linea (
+    id                   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    referencia           text NOT NULL UNIQUE,
+    orden                text NOT NULL UNIQUE,
+    proveedor            text NOT NULL CHECK (proveedor IN ('azul', 'simulado')),
+    ambiente             text NOT NULL CHECK (ambiente IN ('pruebas', 'produccion')),
+    enlace_id            uuid REFERENCES soluciones.portal_enlaces (id) ON DELETE SET NULL,
+    factura_id           uuid NOT NULL,  -- facturacion.facturas.id (sin FK, solo lectura)
+    encf                 text,
+    cliente_rnc          text,
+    cliente_nombre       text,
+    monto                numeric(14, 2) NOT NULL CHECK (monto > 0),
+    itbis                numeric(14, 2) NOT NULL DEFAULT 0 CHECK (itbis >= 0),
+    estado               text NOT NULL DEFAULT 'pendiente'
+                         CHECK (estado IN ('pendiente', 'aprobado', 'declinado', 'cancelado', 'expirado')),
+    expira_en            timestamptz NOT NULL,
+    codigo_autorizacion  text,
+    rrn                  text,
+    orden_proveedor      text,
+    iso_code             text,
+    respuesta            text,
+    error_descripcion    text,
+    fecha_proveedor      text,
+    cobro_id             uuid REFERENCES ventas.cobros (id),
+    incidencia           text,
+    respondido_en        timestamptz,
+    creado_en            timestamptz NOT NULL DEFAULT now(),
+    actualizado_en       timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS pagos_en_linea_factura_idx ON soluciones.pagos_en_linea (factura_id);
+CREATE INDEX IF NOT EXISTS pagos_en_linea_creado_idx ON soluciones.pagos_en_linea (creado_en DESC);
+CREATE INDEX IF NOT EXISTS pagos_en_linea_enlace_idx ON soluciones.pagos_en_linea (enlace_id, creado_en);
+CREATE UNIQUE INDEX IF NOT EXISTS pagos_en_linea_cobro_idx
+    ON soluciones.pagos_en_linea (cobro_id) WHERE cobro_id IS NOT NULL;
+
+-- Bitácora de cada intento: creación, retornos (válidos o no: firma
+-- inválida, monto que no coincide, respuesta repetida), cobro registrado o
+-- fallido. `detalle` guarda los parámetros de la respuesta SIN el número
+-- de tarjeta enmascarado ni los datos de bóveda (DataVault).
+CREATE TABLE IF NOT EXISTS soluciones.pagos_en_linea_eventos (
+    id         bigserial PRIMARY KEY,
+    pago_id    uuid REFERENCES soluciones.pagos_en_linea (id) ON DELETE CASCADE,
+    tipo       text NOT NULL,
+    detalle    jsonb NOT NULL DEFAULT '{}'::jsonb,
+    ip         text,
+    creado_en  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS pagos_en_linea_eventos_pago_idx ON soluciones.pagos_en_linea_eventos (pago_id, creado_en);
+"""
+
+
+async def _migrar(conn: asyncpg.Connection, ambiente_defecto: str = "test") -> None:
     async with conn.transaction():
         await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
         await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
@@ -1090,6 +1159,10 @@ async def _migrar(conn: asyncpg.Connection) -> None:
         await conn.execute(DDL_NOMINA)
         await conn.execute(DDL_SOLUCIONES)
         await conn.execute(DDL_CONTINGENCIA)
+        await conn.execute(DDL_PAGOS)
+        # Ambiente de las secuencias que ya existían (ver DDL_AMBIENTE).
+        await conn.execute("SELECT set_config('kontara.ambiente_defecto', $1, true)", ambiente_defecto)
+        await conn.execute(DDL_AMBIENTE)
 
 
 async def aplicar_migraciones(
@@ -1097,6 +1170,7 @@ async def aplicar_migraciones(
     *,
     reintentos: int = _REINTENTOS,
     dormir: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ambiente_defecto: str | None = None,
 ) -> None:
     """Crea (si no existen) los esquemas `ventas`, `impuestos`, `compras`,
     `recepcion`, `contabilidad`, `bancos`, `configuracion`, `operacion`,
@@ -1104,11 +1178,15 @@ async def aplicar_migraciones(
     funciones auxiliares de las consultas, y siembra el catálogo de cuentas
     sugerido si está vacío. Con `lock_timeout`: si una tabla está ocupada
     (o hay un deadlock) suelta todo y reintenta con espera creciente."""
+    if ambiente_defecto is None:
+        from .config import get_settings
+
+        ambiente_defecto = get_settings().app_env
     espera = _ESPERA_INICIAL_SEGUNDOS
     for intento in range(1, reintentos + 1):
         try:
             async with pool.acquire() as conn:
-                await _migrar(conn)
+                await _migrar(conn, ambiente_defecto if ambiente_defecto in AMBIENTES else "test")
             break
         except (asyncpg.LockNotAvailableError, asyncpg.DeadlockDetectedError) as exc:
             if intento == reintentos:

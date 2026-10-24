@@ -12,12 +12,13 @@ de la DGII se guardan los rangos anulados y la fecha de la anulación
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
-from libs.ecf_common.auth.token_provider import TokenProvider
+from libs.ecf_common.ambiente import AmbienteDGII, AmbienteInvalidoError, TokenProviderPorAmbiente
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
+from libs.ecf_common.environments import dgii_environment_for
 from libs.ecf_common.http_client import DGIIServiceError
 
 from .config import AnulacionSettings, get_settings
@@ -47,36 +48,50 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_token_provider = TokenProvider(
-    ambiente=settings.dgii_environment,
+_token_provider = TokenProviderPorAmbiente(
     certificado_path=settings.certificado_path,
     certificado_password=settings.certificado_password,
 )
+# Ambiente DGII activo (Configuración → Ambiente DGII, con caché corta; sin
+# fila guardada, APP_ENV) o el que pida quien llama (`ambiente`, p. ej. el de
+# la factura). Ver libs/ecf_common/ambiente.py.
+_ambiente = AmbienteDGII(settings.app_env)
+
+
+async def _ambiente_de(pedido: str | None) -> str:
+    try:
+        return await _ambiente.resolver(app.state.db_pool, pedido)
+    except AmbienteInvalidoError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/health")
-def health(settings: AnulacionSettings = Depends(get_settings)) -> dict:
+async def health() -> dict:
+    ambiente = await _ambiente_de(None)
     return {
         "status": "ok",
-        "app_env": settings.app_env,
-        "dgii_environment": settings.dgii_environment.value,
+        "app_env": ambiente,
+        "dgii_environment": dgii_environment_for(ambiente).value,
     }
 
 
 @app.post("/anulacion", response_model=AnulacionRangoResponse)
 async def anular_rango(
     xml: UploadFile = File(..., description="XML ANECF (rangos a anular), sin firmar"),
+    ambiente: str | None = Form(None, description="Ambiente (test|qa|production); por defecto el activo"),
     settings: AnulacionSettings = Depends(get_settings),
 ) -> AnulacionRangoResponse:
+    ambiente = await _ambiente_de(ambiente)
+    dgii = dgii_environment_for(ambiente)
     try:
         credencial = cargar_certificado_p12(settings.certificado_path, settings.certificado_password)
         xml_bytes = await xml.read()
         xml_firmado = firmar_xml(xml_bytes, credencial)
 
-        token = await _token_provider.obtener_token()
+        token = await _token_provider.obtener_token(ambiente=dgii)
         nombre_archivo = f"{settings.emisor_rnc}-anulacion.xml"
 
-        cliente = AnulacionDGIIClient(settings.dgii_environment)
+        cliente = AnulacionDGIIClient(dgii)
         respuesta = await cliente.anular_rango(xml_firmado, nombre_archivo, token.token)
 
         # La DGII ya aplicó la anulación: una sorpresa al leer el detalle del
@@ -90,7 +105,7 @@ async def anular_rango(
         await registrar_envio(
             app.state.db_pool,
             modulo="anulacion_encf",
-            ambiente=settings.app_env,
+            ambiente=ambiente,
             rnc_emisor=settings.emisor_rnc,
             codigo=respuesta.codigo,
             respuesta=respuesta.model_dump() | detalle,
@@ -101,7 +116,7 @@ async def anular_rango(
         await registrar_envio(
             app.state.db_pool,
             modulo="anulacion_encf",
-            ambiente=settings.app_env,
+            ambiente=ambiente,
             rnc_emisor=settings.emisor_rnc,
             error=str(exc),
         )

@@ -707,6 +707,11 @@ async def reporte_mas_vendidos(
             JOIN inventario.productos p ON p.id = m.producto_id
             WHERE m.tipo = 'salida' AND m.referencia_tipo = 'factura'
               AND m.creado_en >= $1 AND m.creado_en < $2 {filtro}
+              -- Una factura rechazada por la DGII (reverso de su salida) no es venta.
+              AND NOT EXISTS (
+                  SELECT 1 FROM inventario.movimientos r
+                  WHERE r.referencia_tipo = 'reverso_factura' AND r.referencia_id = m.referencia_id
+              )
             GROUP BY p.id
             ORDER BY cantidad DESC, p.nombre
             LIMIT $3

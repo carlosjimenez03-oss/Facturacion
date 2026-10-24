@@ -5,8 +5,14 @@
 // E32 (consumo) -- o un E31 si se indica RNC/cédula -- por el mismo flujo de
 // facturas-api que Nueva factura (crear -> generar-xml -> enviar), con los
 // helpers de buildDatos.ts, y queda registrada en la sesión de caja de
-// erp-api. Requiere conexión: la venta sin internet (contingencia) no está
-// disponible.
+// erp-api. Si la DGII no responde, facturas-api la emite en contingencia.
+//
+// Sin conexión con el servidor (internet caído en la tienda) el POS sigue
+// vendiendo con la caja abierta y el catálogo guardado en el navegador: la
+// venta se guarda en IndexedDB con su clave de idempotencia, se entrega un
+// ticket provisional (sin e-NCF: lo asigna el servidor) y al reconectar se
+// sincroniza en orden por el mismo flujo (ver posOffline.ts,
+// usePosSinConexion.ts y docs/dgii/CONTINGENCIA.md, "POS sin conexión").
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { IconPos } from "../../layout/icons";
@@ -15,6 +21,7 @@ import { configuracionApi, publicarEmpresa } from "../../lib/configuracionApi";
 import type { Secuencia } from "../../lib/configuracionApi";
 import { construirDatos, construirItemsInventario, desglose, siguienteEncf } from "../../lib/buildDatos";
 import { erpApi } from "../../lib/erpApi";
+import type { Cliente } from "../../lib/erpApi";
 import { inventarioApi } from "../../lib/inventarioApi";
 import { formatoMonto, MARCA } from "../../lib/marca";
 import { guardarEmisor, guardarVencimientoSecuencia, leerEmisor, leerVencimientoSecuencia } from "../../lib/preferencias";
@@ -26,10 +33,23 @@ import type { Almacen, Producto } from "../../lib/types";
 import { AvisoError, IconoBuscar, Modal } from "../ingresos/IngresosShell";
 import { useAviso } from "../ingresos/useAviso";
 import { fechaLegible, mensajeError } from "../ingresos/ingresosUtil";
+import { actualizarCatalogo, leerCatalogo } from "./posAlmacen";
+import type { CatalogoPos } from "./posAlmacen";
+import {
+  esErrorDeRed,
+  nuevaClave,
+  nuevaVentaOffline,
+  referenciaVenta,
+  resumenPendiente,
+  sinSincronizar,
+  stockConPendientes,
+} from "./posOffline";
+import type { ResultadoSincronizacion, VentaOffline } from "./posOffline";
 import { formularioVenta, itemsCarrito, tipoParaCliente, TOPE_CONSUMO_SIN_IDENTIFICAR, validarPagos } from "./posUtil";
 import type { LineaCarrito } from "./posUtil";
 import { Ticket } from "./Ticket";
 import type { DatosTicket } from "./Ticket";
+import { usePosSinConexion } from "./usePosSinConexion";
 import "./pos.css";
 
 type ModoPago = MetodoPos | "mixto";
@@ -49,6 +69,30 @@ const ESTADO_DGII: Record<string, string> = {
 };
 
 const n2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+
+const SIN_CONEXION = "Sin conexión con el servidor.";
+
+/** Ticket de una venta hecha sin conexión: provisional hasta sincronizarse, luego con su e-NCF. */
+function ticketDeVentaOffline(v: VentaOffline): DatosTicket {
+  const sincronizada = v.estado === "sincronizada" && Boolean(v.encf);
+  return {
+    facturaId: v.facturaId ?? "",
+    tipoEcf: v.tipoEcf,
+    encf: sincronizada ? (v.encf as string) : "",
+    fecha: new Date(v.creadaEn),
+    emisor: v.emisor,
+    cliente: v.cliente,
+    items: v.items,
+    pagos: v.pagos,
+    recibido: v.recibido,
+    cambio: v.cambio,
+    estadoDgii: ESTADO_DGII[v.estadoDgii] ?? v.estadoDgii,
+    caja: v.caja,
+    cajero: v.cajero,
+    contingencia: v.contingencia,
+    provisional: sincronizada ? undefined : { referencia: referenciaVenta(v.clave) },
+  };
+}
 
 /** Venta a medio emitir (falló un paso): se reintenta sin crear otro e-CF. */
 interface VentaPendiente {
@@ -159,6 +203,25 @@ export function PosPage() {
   const [cierre, setCierre] = useState<SesionCaja | null>(null);
   const [toast, mostrarToast] = useAviso();
   const buscador = useRef<HTMLInputElement>(null);
+  /** Clave de idempotencia de la venta que se está cobrando (una por cobro, también en línea). */
+  const claveVenta = useRef<string>("");
+  const [clientesConRnc, setClientesConRnc] = useState<{ rnc: string; nombre: string }[]>([]);
+  const recargarTodo = useRef<() => void>(() => undefined);
+  const alSincronizar = useRef<(r: ResultadoSincronizacion) => void>(() => undefined);
+  const conexion = usePosSinConexion({
+    alReconectar: () => recargarTodo.current(),
+    alSincronizar: (r) => alSincronizar.current(r),
+  });
+  const { marcarSinConexion } = conexion;
+
+  /** Sin red: lo último que el POS guardó en este navegador. */
+  const catalogoGuardado = useCallback(async (): Promise<CatalogoPos | null> => {
+    try {
+      return await leerCatalogo();
+    } catch {
+      return null;
+    }
+  }, []);
 
   const cargar = useCallback(async () => {
     setCargando(true);
@@ -168,17 +231,44 @@ export function PosPage() {
       setHistorial(hist);
       setVerPromo(!abierta && hist.length === 0);
       setErrorCarga(null);
+      void actualizarCatalogo({ sesion: abierta }).catch(() => undefined);
     } catch (err) {
-      setErrorCarga(mensajeError(err));
+      const sinRed = esErrorDeRed(err);
+      const guardado = sinRed ? await catalogoGuardado() : null;
+      if (sinRed) marcarSinConexion();
+      if (guardado?.sesion) {
+        // Sin conexión con la caja que estaba abierta: se sigue vendiendo.
+        const abierta = guardado.sesion;
+        setSesion((s) => s ?? abierta);
+        setVerPromo(false);
+        setErrorCarga(null);
+      } else {
+        setErrorCarga(
+          sinRed
+            ? `${SIN_CONEXION} Para vender sin conexión, la caja debe haberse abierto en este equipo mientras había conexión.`
+            : mensajeError(err),
+        );
+      }
     } finally {
       setCargando(false);
     }
-    inventarioApi.listarAlmacenes({ activo: true }).then(setAlmacenes, () => undefined);
-  }, []);
+    inventarioApi.listarAlmacenes({ activo: true }).then(
+      (l) => {
+        setAlmacenes(l);
+        void actualizarCatalogo({ almacenes: l }).catch(() => undefined);
+      },
+      () => void catalogoGuardado().then((c) => c && setAlmacenes((a) => (a.length ? a : c.almacenes))),
+    );
+  }, [catalogoGuardado, marcarSinConexion]);
 
   useEffect(() => {
     void cargar();
   }, [cargar]);
+
+  // La caja abierta (y sus totales) para poder seguir vendiendo sin conexión.
+  useEffect(() => {
+    if (sesion) void actualizarCatalogo({ sesion }).catch(() => undefined);
+  }, [sesion]);
 
   // Emisor y vencimiento de la secuencia E31 desde Configuración (igual que
   // Nueva factura); si erp-api no responde, lo recordado en este navegador.
@@ -195,11 +285,21 @@ export function PosPage() {
       .secuencias()
       .then((l) => {
         setSecuencias(l);
+        void actualizarCatalogo({ secuencias: l }).catch(() => undefined);
         const e31 = l.find((x) => x.tipo_ecf === 31 && x.configurada);
         if (e31?.fecha_vencimiento) setVence((v) => ({ ...v, "31": e31.fecha_vencimiento ?? v["31"] }));
       })
-      .catch(() => undefined);
-  }, []);
+      .catch(() => void catalogoGuardado().then((c) => c && setSecuencias((s) => (s.length ? s : c.secuencias))));
+    // Clientes con RNC/cédula (solo RNC y nombre) para «Verificar» sin conexión.
+    erpApi
+      .listarClientes({ activo: true })
+      .then((l: Cliente[]) => {
+        const clientes = l.filter((c) => c.rnc).map((c) => ({ rnc: c.rnc as string, nombre: c.nombre }));
+        setClientesConRnc(clientes);
+        void actualizarCatalogo({ clientes }).catch(() => undefined);
+      })
+      .catch(() => void catalogoGuardado().then((c) => c && setClientesConRnc(c.clientes)));
+  }, [catalogoGuardado]);
 
   const almacenCaja = sesion?.almacen_id || almacenes.find((a) => a.es_principal)?.id || "";
 
@@ -213,20 +313,34 @@ export function PosPage() {
         if (pagina.length < 200) break;
       }
       setProductos(todos);
+      void actualizarCatalogo({ productos: todos }).catch(() => undefined);
     } catch (err) {
-      setErrorCarga(mensajeError(err));
+      const guardado = esErrorDeRed(err) ? await catalogoGuardado() : null;
+      if (guardado && guardado.productos.length > 0) {
+        marcarSinConexion();
+        setProductos((p) => (p.length ? p : guardado.productos));
+      } else setErrorCarga(mensajeError(err));
     }
-  }, []);
+  }, [catalogoGuardado, marcarSinConexion]);
 
-  const cargarStock = useCallback(async (almacenId: string) => {
-    if (!almacenId) return;
-    try {
-      const ex = await inventarioApi.existenciasAlmacen(almacenId, { incluir_cero: true });
-      setStock(Object.fromEntries(ex.map((e) => [e.producto_id, Number(e.cantidad)])));
-    } catch {
-      setStock({});
-    }
-  }, []);
+  const cargarStock = useCallback(
+    async (almacenId: string) => {
+      if (!almacenId) return;
+      try {
+        const ex = await inventarioApi.existenciasAlmacen(almacenId, { incluir_cero: true });
+        const cantidades = Object.fromEntries(ex.map((e) => [e.producto_id, Number(e.cantidad)]));
+        setStock(cantidades);
+        void actualizarCatalogo({ almacenId, stock: cantidades }).catch(() => undefined);
+      } catch (err) {
+        // Sin red: la existencia guardada (si es de este almacén); si no, se conserva la que había.
+        const sinRed = esErrorDeRed(err);
+        const guardado = sinRed ? await catalogoGuardado() : null;
+        if (guardado?.almacenId === almacenId) setStock(guardado.stock);
+        else if (!sinRed) setStock({});
+      }
+    },
+    [catalogoGuardado],
+  );
 
   useEffect(() => {
     if (!sesion) return;
@@ -237,6 +351,32 @@ export function PosPage() {
     if (sesion) void cargarStock(almacenCaja);
   }, [sesion?.id, almacenCaja, cargarStock]);
 
+  // Al reconectar: caja, catálogo, existencia y secuencias frescos.
+  recargarTodo.current = () => {
+    void cargar();
+    void cargarProductos();
+    void cargarStock(almacenCaja);
+    configuracionApi.secuencias().then(setSecuencias, () => undefined);
+  };
+
+  // Tras sincronizar: totales de la caja y existencia del servidor.
+  alSincronizar.current = (r) => {
+    if (r.sincronizadas.length > 0) {
+      mostrarToast(`${r.sincronizadas.length} venta(s) sin conexión sincronizada(s)`, {
+        detalle: r.sincronizadas.map((v) => v.encf).join(", "),
+      });
+      if (sesion) void solucionesApi.obtenerSesion(sesion.id).then(setSesion, () => undefined);
+      void cargarStock(almacenCaja);
+    }
+    if (r.conError.length > 0)
+      mostrarToast(`${r.conError.length} venta(s) sin conexión no se pudieron emitir`, { detalle: r.conError[0].error ?? "", error: true });
+  };
+
+  const pendientesCaja = useMemo(() => (sesion ? resumenPendiente(conexion.cola, sesion.id) : null), [conexion.cola, sesion]);
+  const porSincronizarCaja = sesion ? sinSincronizar(conexion.cola, sesion.id).length : 0;
+  const porSincronizar = sinSincronizar(conexion.cola).length;
+  const stockVisible = useMemo(() => stockConPendientes(stock, conexion.cola, almacenCaja), [stock, conexion.cola, almacenCaja]);
+
   const categorias = useMemo(() => [...new Set(productos.map((p) => p.categoria).filter(Boolean) as string[])].sort(), [productos]);
   const visibles = useMemo(() => {
     const t = q.trim().toLowerCase();
@@ -245,7 +385,7 @@ export function PosPage() {
     );
   }, [productos, q, categoria]);
 
-  const disponible = (p: Producto) => (p.tipo === "servicio" ? Infinity : (stock[p.id] ?? 0));
+  const disponible = (p: Producto) => (p.tipo === "servicio" ? Infinity : (stockVisible[p.id] ?? 0));
   const enCarrito = (id: string) => carrito.find((l) => l.producto.id === id)?.cantidad ?? 0;
 
   function agregar(p: Producto, cantidad = 1) {
@@ -285,12 +425,22 @@ export function PosPage() {
   async function verificarCliente() {
     const rnc = cliente.rnc.replace(/\D/g, "");
     if (!rnc) return;
+    // Sin conexión: los clientes guardados en este equipo.
+    const guardado = clientesConRnc.find((c) => c.rnc === rnc);
+    const sinGuardar = () => mostrarToast("Sin conexión: RNC/cédula no guardado en este equipo", { detalle: "Escriba la razón social del cliente." });
+    if (!conexion.enLinea) {
+      if (guardado) setCliente({ rnc, nombre: guardado.nombre });
+      else sinGuardar();
+      return;
+    }
     setVerificando(true);
     try {
       const c = await erpApi.clientePorRnc(rnc);
       setCliente({ rnc, nombre: c.nombre });
-    } catch {
-      mostrarToast("RNC/cédula sin registrar en Contactos", { detalle: "Escriba la razón social del cliente." });
+    } catch (err) {
+      if (guardado) setCliente({ rnc, nombre: guardado.nombre });
+      else if (esErrorDeRed(err)) sinGuardar();
+      else mostrarToast("RNC/cédula sin registrar en Contactos", { detalle: "Escriba la razón social del cliente." });
     } finally {
       setVerificando(false);
     }
@@ -331,6 +481,7 @@ export function PosPage() {
       mostrarToast("No se puede cobrar todavía", { detalle: p, error: true });
       return;
     }
+    claveVenta.current = nuevaClave();
     setModo("efectivo");
     setMontos({ efectivo: total.toFixed(2), tarjeta: "", transferencia: "" });
     setReferencia("");
@@ -358,10 +509,71 @@ export function PosPage() {
     void cargarStock(almacenCaja);
   }
 
+  /**
+   * Guarda la venta en la cola del navegador (sin conexión con el servidor)
+   * con la clave de idempotencia del cobro y entrega el ticket provisional.
+   * También cuando la red se cae a mitad de una venta en línea: si la
+   * factura ya se había creado, la sincronización la recupera por la misma
+   * clave en vez de crear otra.
+   */
+  async function venderSinConexion() {
+    if (!sesion) return;
+    if (!conexion.almacenamiento) {
+      setErrorVenta(`${SIN_CONEXION} Este navegador no permite guardar ventas sin conexión: reintente cuando vuelva la conexión.`);
+      return;
+    }
+    setProcesando("Guardando la venta sin conexión…");
+    try {
+      const form = formularioVenta({
+        tipoEcf,
+        encf: "",
+        vencimientoSecuencia: vence[tipoEcf],
+        emisor,
+        cliente,
+        lineas: carrito,
+        pagos,
+        cambio: resultadoPagos.cambio,
+        almacenId: almacenCaja,
+      });
+      const venta = nuevaVentaOffline({
+        clave: claveVenta.current || nuevaClave(),
+        creadaEn: new Date().toISOString(),
+        sesionId: sesion.id,
+        caja: sesion.caja,
+        cajero: sesion.cajero,
+        tipoEcf,
+        datos: construirDatos(form, configParaTipo(tipoEcf)),
+        itemsInventario: construirItemsInventario(form.items, almacenCaja),
+        items: form.items,
+        emisor,
+        cliente: { rnc: form.compradorRnc, nombre: form.razonSocialComprador },
+        pagos,
+        recibido: resultadoPagos.recibido,
+        cambio: resultadoPagos.cambio,
+        total,
+      });
+      await conexion.encolar(venta);
+      guardarEmisor(emisor);
+      setTicket({ datos: ticketDeVentaOffline(venta), timbre: null });
+      setPendiente(null);
+      setCarrito([]);
+      setCliente({ rnc: "", nombre: "" });
+      setCobrando(false);
+    } catch (err) {
+      setErrorVenta(`No se pudo guardar la venta sin conexión: ${mensajeError(err)}`);
+    } finally {
+      setProcesando("");
+    }
+  }
+
   async function emitir() {
     if (!sesion || resultadoPagos.error) return;
     setErrorVenta(null);
     setErroresXml([]);
+    if (!conexion.enLinea && conexion.almacenamiento) {
+      await venderSinConexion();
+      return;
+    }
     let actual = pendiente;
     try {
       if (!actual) {
@@ -394,6 +606,7 @@ export function PosPage() {
           asignar_encf: Boolean(secuencia),
           datos,
           items_inventario: construirItemsInventario(form.items, almacenCaja),
+          clave_idempotencia: claveVenta.current || null,
         });
         const encf = creada.encf ?? encfLocal;
         actual = {
@@ -448,10 +661,49 @@ export function PosPage() {
       guardarEmisor(emisor);
       await terminarVenta(actual.ticket);
     } catch (err) {
+      if (esErrorDeRed(err) && conexion.almacenamiento) {
+        // Se cayó la conexión con el servidor: la venta sigue sin conexión.
+        marcarSinConexion();
+        setProcesando("");
+        await venderSinConexion();
+        return;
+      }
       setErrorVenta(mensajeError(err));
     } finally {
       setProcesando("");
     }
+  }
+
+  /** Ticket de una venta sin conexión: provisional, o con el e-NCF real (y su QR) ya sincronizada. */
+  async function verTicketOffline(v: VentaOffline) {
+    let timbre: Timbre | null = null;
+    if (v.estado === "sincronizada" && v.facturaId && conexion.enLinea) {
+      try {
+        await api.firmar(v.facturaId);
+        timbre = await solucionesApi.timbre(v.facturaId);
+      } catch {
+        timbre = null;
+      }
+    }
+    setTicket({ datos: ticketDeVentaOffline(v), timbre });
+  }
+
+  function pedirCierre() {
+    if (!sesion) return;
+    if (porSincronizarCaja > 0) {
+      mostrarToast("No se puede cerrar la caja todavía", {
+        detalle: `Hay ${porSincronizarCaja} venta(s) sin conexión por sincronizar: sincronícelas antes del cierre para que el arqueo cuadre.`,
+        error: true,
+      });
+      return;
+    }
+    if (!conexion.enLinea) {
+      mostrarToast("No se puede cerrar la caja sin conexión", { detalle: "El cierre se registra en el servidor: espere a que vuelva la conexión.", error: true });
+      return;
+    }
+    setContado({ efectivo: "", tarjeta: "", transferencia: "" });
+    setNotasCierre("");
+    setCerrar(true);
   }
 
   async function cancelarPendiente() {
@@ -489,6 +741,11 @@ export function PosPage() {
 
   async function cerrarCaja() {
     if (!sesion) return;
+    if (porSincronizarCaja > 0) {
+      setCerrar(false);
+      pedirCierre();
+      return;
+    }
     setCerrando(true);
     try {
       const s = await solucionesApi.cerrarSesion(sesion.id, {
@@ -503,6 +760,8 @@ export function PosPage() {
       setCerrar(false);
       setSesion(null);
       setCarrito([]);
+      void actualizarCatalogo({ sesion: null }).catch(() => undefined);
+      void conexion.limpiarSincronizadas(sesion.id).catch(() => undefined);
       setHistorial(await solucionesApi.listarSesiones(10).catch(() => historial));
     } catch (err) {
       mostrarToast("No se pudo cerrar la caja", { detalle: mensajeError(err), error: true });
@@ -617,7 +876,10 @@ export function PosPage() {
                     {abriendo ? "Abriendo…" : "Abrir caja"}
                   </button>
                 </div>
-                <span className="hint">El POS necesita conexión a internet: la venta sin conexión (contingencia) todavía no está disponible.</span>
+                <span className="hint">
+                  Con la caja abierta, el POS sigue vendiendo aunque se caiga la conexión con el servidor: las ventas se guardan en este equipo y
+                  sus e-CF se emiten al reconectar. Abrir y cerrar la caja requieren conexión.
+                </span>
               </div>
             </section>
             {historial.length > 0 && (
@@ -673,29 +935,65 @@ export function PosPage() {
       <div className="ph">
         <div>
           <h1>{MARCA} POS</h1>
-          <p>
+          <p data-caja-totales>
             {sesion.caja} · abierta {new Date(sesion.abierta_en).toLocaleTimeString("es-DO", { hour: "2-digit", minute: "2-digit" })}
-            {sesion.cajero ? ` por ${sesion.cajero}` : ""} · {sesion.cantidad_ventas} venta(s) · RD$ {formatoMonto(sesion.total_ventas)}
+            {sesion.cajero ? ` por ${sesion.cajero}` : ""} · {sesion.cantidad_ventas + (pendientesCaja?.cantidad ?? 0)} venta(s) · RD${" "}
+            {formatoMonto(Number(sesion.total_ventas) + (pendientesCaja?.total ?? 0))}
+            {pendientesCaja && pendientesCaja.cantidad > 0 ? ` (incluye ${pendientesCaja.cantidad} sin conexión)` : ""}
           </p>
         </div>
         <div className="row">
+          <span className={conexion.enLinea ? "pos-conexion on" : "pos-conexion off"} role="status" data-conexion={conexion.enLinea ? "en-linea" : "sin-conexion"}>
+            {conexion.enLinea ? "En línea" : "Sin conexión"}
+          </span>
+          {porSincronizar > 0 && (
+            <span className="chip" data-pendientes={porSincronizar}>
+              {porSincronizar} por sincronizar
+            </span>
+          )}
+          {(porSincronizar > 0 || !conexion.enLinea) && (
+            <button
+              type="button"
+              className="btn btn-o btn-sm"
+              onClick={() => void conexion.sincronizar()}
+              disabled={conexion.sincronizando || porSincronizar === 0}
+            >
+              {conexion.sincronizando ? "Sincronizando…" : "Sincronizar ahora"}
+            </button>
+          )}
           <button type="button" className="btn btn-o btn-sm" onClick={() => setConfig(true)}>
             Configurar caja
           </button>
           <button
             type="button"
             className="btn btn-o btn-sm"
-            onClick={() => {
-              setContado({ efectivo: "", tarjeta: "", transferencia: "" });
-              setNotasCierre("");
-              setCerrar(true);
-            }}
+            onClick={pedirCierre}
+            title={porSincronizarCaja > 0 ? "Sincronice las ventas sin conexión antes de cerrar la caja" : undefined}
           >
             Cerrar caja
           </button>
         </div>
       </div>
       {errorCarga && <AvisoError mensaje={errorCarga} />}
+      {!conexion.enLinea && (
+        <div className="al al-o" role="status">
+          <span>
+            <b>Sin conexión con el servidor.</b> Puede seguir vendiendo con los precios y la existencia guardados en este equipo: cada venta
+            queda guardada y entrega un ticket provisional; su e-CF se emitirá al reconectar.
+            {!conexion.almacenamiento && " Este navegador no permite guardar ventas: no podrá vender hasta que vuelva la conexión."}
+          </span>
+        </div>
+      )}
+      {conexion.sinSesion && porSincronizar > 0 && (
+        <div className="al al-w" role="alert">
+          <span>
+            <b>Su sesión venció.</b> Inicie sesión de nuevo para sincronizar: las {porSincronizar} venta(s) siguen guardadas en este equipo.
+          </span>
+          <button type="button" className="btn btn-o btn-sm" onClick={() => navigate("/login", { state: { desde: "/pos" } })}>
+            Iniciar sesión
+          </button>
+        </div>
+      )}
 
       <div className="pos-grid">
         <section className="card pos-prod">
@@ -829,6 +1127,69 @@ export function PosPage() {
         </section>
       </div>
 
+      {conexion.cola.length > 0 && (
+        <section className="card" aria-label="Ventas sin conexión" data-cola-offline>
+          <div className="card-h">
+            <h2>Ventas sin conexión</h2>
+            <span className="hint">
+              Se emiten en orden al reconectar. Las sincronizadas quedan aquí para reimprimir el ticket con su e-NCF hasta cerrar la caja.
+            </span>
+          </div>
+          <div className="tw">
+            <table className="tbl" style={{ minWidth: 640 }}>
+              <thead>
+                <tr>
+                  <th>Hora</th>
+                  <th>Referencia</th>
+                  <th className="num">Total (RD$)</th>
+                  <th>Estado</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {conexion.cola.map((v) => (
+                  <tr key={v.clave} data-venta-offline={v.estado}>
+                    <td>{new Date(v.creadaEn).toLocaleTimeString("es-DO", { hour: "2-digit", minute: "2-digit" })}</td>
+                    <td className="mono">{v.encf ?? referenciaVenta(v.clave)}</td>
+                    <td className="num">{formatoMonto(v.total)}</td>
+                    <td>
+                      {v.estado === "sincronizada" ? (
+                        <span className="bd b-acep">{v.contingencia ? "Emitida en contingencia" : "Emitida"}</span>
+                      ) : v.estado === "error" ? (
+                        <>
+                          <span className="bd b-rech">Error</span>
+                          <span className="row-motivo">{v.error}</span>
+                          {v.erroresXml.length > 0 && <span className="row-motivo">{v.erroresXml.join(" · ")}</span>}
+                        </>
+                      ) : (
+                        <span className="bd b-env">{conexion.sincronizando ? "Sincronizando…" : "Pendiente"}</span>
+                      )}
+                    </td>
+                    <td className="num">
+                      <div className="row" style={{ justifyContent: "flex-end" }}>
+                        {v.estado === "error" && (
+                          <button
+                            type="button"
+                            className="btn btn-o btn-sm"
+                            onClick={() => void conexion.sincronizar()}
+                            disabled={conexion.sincronizando || !conexion.enLinea}
+                          >
+                            Reintentar
+                          </button>
+                        )}
+                        <button type="button" className="btn btn-g btn-sm" onClick={() => void verTicketOffline(v)}>
+                          {v.estado === "sincronizada" ? "Ticket con e-NCF" : "Ticket provisional"}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       {cobrando && (
         <Modal
           titulo={`Cobrar RD$ ${formatoMonto(total)}`}
@@ -852,7 +1213,7 @@ export function PosPage() {
                   Cancelar
                 </button>
                 <button type="button" className="btn btn-p" onClick={emitir} disabled={!!procesando || !!resultadoPagos.error}>
-                  {procesando || "Cobrar y emitir e-CF"}
+                  {procesando || (conexion.enLinea ? "Cobrar y emitir e-CF" : "Cobrar sin conexión")}
                 </button>
               </>
             )
@@ -938,6 +1299,9 @@ export function PosPage() {
               </span>
             </div>
           )}
+          {!pendiente && !conexion.enLinea && (
+            <span className="hint">Sin conexión: la venta se guarda en este equipo y su e-CF se emite al reconectar (ticket provisional).</span>
+          )}
           {errorVenta && <AvisoError mensaje={errorVenta} />}
           {erroresXml.length > 0 && (
             <ul className="row-motivo" style={{ maxWidth: "none", margin: 0, paddingLeft: 18 }}>
@@ -951,7 +1315,7 @@ export function PosPage() {
 
       {ticket && (
         <Modal
-          titulo={`Venta ${ticket.datos.encf} emitida`}
+          titulo={ticket.datos.provisional ? "Venta guardada sin conexión" : `Venta ${ticket.datos.encf} emitida`}
           onCerrar={() => setTicket(null)}
           ancho={420}
           pie={
@@ -976,6 +1340,14 @@ export function PosPage() {
             <div className="al al-s">
               <span>
                 <b>Cambio: RD$ {formatoMonto(ticket.datos.cambio)}</b>
+              </span>
+            </div>
+          )}
+          {ticket.datos.provisional && (
+            <div className="al al-o" role="status">
+              <span>
+                <b>Venta guardada sin conexión.</b> Entregue el ticket provisional: el e-CF se emitirá automáticamente al reconectar y podrá
+                reimprimir el ticket con su e-NCF desde «Ventas sin conexión».
               </span>
             </div>
           )}

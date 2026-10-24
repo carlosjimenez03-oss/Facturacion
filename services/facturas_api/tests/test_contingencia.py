@@ -724,3 +724,38 @@ def test_leyenda_es_la_del_instructivo_de_la_dgii():
         "e-CF emitido en modalidad de Contingencia, el cual podrá ser consultado para su validez fiscal, "
         "a partir de las setenta y dos (72) horas."
     )
+
+
+# --- Fase 7: ambiente de la factura ---------------------------------------------------------
+
+@respx.mock
+def test_no_se_envia_una_factura_de_otro_ambiente(client, estado, factura_bd, monkeypatch):
+    """Creada en pruebas y el activo ya es producción: su e-NCF es de la
+    secuencia de pruebas, no se envía."""
+    from services.facturas_api.app import ambiente
+
+    async def produccion(pool):
+        return "production"
+
+    monkeypatch.setattr(ambiente.ACTIVO, "actual", produccion)
+    ruta = respx.post(f"{RECEPCION}/ecf")
+    r = client.post(f"/facturas/{factura_bd['id']}/enviar")
+    assert r.status_code == 409 and "Pruebas (TesteCF)" in r.json()["detail"]
+    assert not ruta.called
+    # El QR de la RI y la consulta usan el ambiente de la factura, no el activo.
+    assert ambiente.dgii_de_factura(factura_bd, main.settings) == DGIIEnvironment.TESTECF
+    assert ambiente.dgii_de_factura({**factura_bd, "ambiente": "production"}, main.settings) == DGIIEnvironment.ECF
+
+
+def test_lista_filtra_por_ambiente(client, monkeypatch):
+    pedidos = []
+
+    async def listar(pool, **kw):
+        pedidos.append(kw["ambiente"])
+        return []
+
+    monkeypatch.setattr(repository, "listar_facturas", listar)
+    assert client.get("/facturas", params={"ambiente": "eCF"}).status_code == 200
+    assert client.get("/facturas").status_code == 200
+    assert client.get("/facturas", params={"ambiente": "otro"}).status_code == 422
+    assert pedidos == ["production", None]

@@ -799,3 +799,57 @@ async def test_valuacion_por_almacen_con_existencia_negativa(pool):
     por_almacen = {a["nombre"]: a["valor"] for a in valuacion["por_almacen"]}
     assert por_almacen == {"Principal": D("20.00"), "Neg": D("0.00")}
     assert valuacion["valor_total"] == D("12.00")  # (10 − 4) × 2
+
+
+async def test_reverso_por_factura_rechazada_idempotente(pool):
+    """Fase 7: la DGII rechazó la factura; su mercancía vuelve a su almacén y
+    lote al costo con que salió, una sola vez aunque se reintente a la vez, y
+    la salida por factura no vuelve a descontar después."""
+    pid, lotes = await _producto_con_lotes(pool)
+    simple = await _producto(pool, sku="SIMPLE", stock_inicial=D("10"), costo=D("50"))
+    items = [
+        {"numero_linea": "1", "producto_id": pid, "cantidad": D("6")},  # FEFO: 4 de L-A + 2 de L-B
+        {"numero_linea": "2", "producto_id": uuid.UUID(simple["id"]), "cantidad": D("3")},
+    ]
+    factura_id = str(uuid.uuid4())
+    antes_lotes = {
+        lote["numero"]: lote["cantidad"]
+        for lote in await lotes_repository.listar_lotes(pool, dias_alerta=30, producto_id=pid)
+    }
+    antes = await _existencias(pool, str(pid))
+    salidas = await repository.registrar_salida_por_factura(pool, factura_id, items, documento="E310000000099")
+    assert len(salidas) == 3
+
+    # Sin salidas registradas (otra factura): no mueve nada.
+    assert await repository.registrar_reverso_por_factura(pool, str(uuid.uuid4())) == []
+
+    resultados = await asyncio.gather(
+        *[repository.registrar_reverso_por_factura(pool, factura_id) for _ in range(3)]
+    )
+    assert all(len(r) == 3 for r in resultados)
+    assert len({tuple(sorted(m["id"] for m in r)) for r in resultados}) == 1
+    assert await _existencias(pool, str(pid)) == antes
+    assert await _existencias(pool, simple["id"]) == {"Principal": D("10")}
+    despues_lotes = {
+        lote["numero"]: lote["cantidad"]
+        for lote in await lotes_repository.listar_lotes(pool, dias_alerta=30, producto_id=pid)
+    }
+    assert despues_lotes == antes_lotes
+    reversos = await repository.listar_movimientos(pool, referencia_tipo="reverso_factura", referencia_id=factura_id)
+    por_linea = {(m["referencia_linea"], m["lote_id"]): m for m in reversos}
+    for salida in salidas:
+        entrada = por_linea[(salida["referencia_linea"], salida["lote_id"])]
+        assert entrada["tipo"] == "entrada" and entrada["cantidad"] == salida["cantidad"]
+        assert entrada["costo_unitario"] == salida["costo_unitario"]  # al costo con que salió
+        assert entrada["documento"] == "E310000000099"
+    # El costo promedio no cambia (entra al mismo costo).
+    producto = await repository.obtener_producto(pool, uuid.UUID(simple["id"]))
+    assert producto["costo_promedio"] == D("50")
+
+    # Un reintento tardío de la salida no vuelve a descontar.
+    await repository.registrar_salida_por_factura(pool, factura_id, items)
+    assert await _existencias(pool, simple["id"]) == {"Principal": D("10")}
+
+    # Kardex: "Reverso de venta".
+    filas = (await kardex.obtener_kardex(pool, producto_id=uuid.UUID(simple["id"])))["filas"]
+    assert [f["concepto"] for f in filas][-2:] == ["Venta", "Reverso de venta (e-CF rechazado)"]

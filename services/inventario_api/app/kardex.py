@@ -66,6 +66,8 @@ def concepto(mov: dict[str, Any]) -> str:
         return "Compra"
     if referencia == "factura":
         return "Venta" if not entrada else "Devolución de venta"
+    if referencia == "reverso_factura":
+        return "Reverso de venta (e-CF rechazado)"
     if referencia == "transferencia":
         return "Transferencia recibida" if entrada else "Transferencia enviada"
     if referencia == "anulacion_ajuste":

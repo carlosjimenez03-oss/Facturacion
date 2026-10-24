@@ -136,6 +136,36 @@ def test_crear_factura_e_ncf_no_disponible_409(client, monkeypatch):
     assert recibido["asignar_encf"] is True and recibido["encf"] is None
 
 
+def test_crear_factura_con_clave_de_idempotencia_repetida_devuelve_la_existente_200(client, monkeypatch):
+    existente = _factura(estado="enviado", track_id="t-1")
+    clave = str(uuid.uuid4())
+    recibido = {}
+
+    async def fake_crear(pool, **kwargs):
+        recibido.update(kwargs)
+        raise secuencias_encf.FacturaYaCreadaError(existente)
+
+    monkeypatch.setattr(secuencias_encf, "crear_factura", fake_crear)
+    r = client.post("/facturas", json={"tipo_ecf": 32, "asignar_encf": True, "datos": {}, "clave_idempotencia": clave})
+    assert r.status_code == 200
+    assert r.json()["id"] == existente["id"] and r.json()["estado"] == "enviado"
+    assert str(recibido["clave_idempotencia"]) == clave
+
+
+def test_crear_factura_clave_de_idempotencia_invalida_422(client):
+    r = client.post("/facturas", json={"tipo_ecf": 32, "datos": {}, "clave_idempotencia": "no-es-uuid"})
+    assert r.status_code == 422
+
+
+def test_crear_factura_clave_reusada_409(client, monkeypatch):
+    async def fake_crear(pool, **kwargs):
+        raise secuencias_encf.ClaveIdempotenciaReusadaError("La clave ya es de otra factura")
+
+    monkeypatch.setattr(secuencias_encf, "crear_factura", fake_crear)
+    r = client.post("/facturas", json={"tipo_ecf": 31, "datos": {}, "clave_idempotencia": str(uuid.uuid4())})
+    assert r.status_code == 409
+
+
 def test_obtener_factura_404(client, monkeypatch):
     async def fake_obtener(pool, fid):
         raise repository.FacturaNoEncontradaError(str(fid))

@@ -94,6 +94,14 @@ Navegador ── https://front.acentosdeco.lat ── Cloudflare Tunnel ── 1
   acceso del cliente). `/p/` y el portal público responden con
   `Referrer-Policy: no-referrer` (el token va en la URL). El enlace queda
   fijado al RNC/cédula que tenía el cliente al crearlo.
+- Pagos con tarjeta en línea (fase 7, [`PAGOS.md`](PAGOS.md)): el inicio del
+  pago (`/portal/publico/<token>/pagos`), el retorno del banco
+  (`/portal/publico/pagos/<ref>/retorno/...`) y el estado del pago están bajo
+  la misma ruta pública: no hay excepciones nuevas en nginx ni en
+  `ERP_REQUIRE_AUTH`. Iniciar pagos tiene límite por IP en nginx (zona
+  `kontara_pagos`) y por enlace en erp-api. Configuración → Pagos en línea y
+  el listado de pagos piden sesión; guardar la configuración, además, ser
+  administrador.
 
 ## Pasos en Dokploy y Supabase (en este orden)
 

@@ -20,7 +20,9 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
 
-from . import gotrue_admin
+from libs.ecf_common.environments import dgii_environment_for
+
+from . import gotrue_admin, pagos
 from . import soluciones_calculos as calc
 from . import soluciones_repository as repo
 from . import soluciones_tareas
@@ -245,7 +247,7 @@ _ENLACE_NO_VALIDO = "Enlace no válido, vencido o revocado"
 
 async def _portal(request: Request, token: str, *, registrar_acceso: bool) -> dict:
     try:
-        return await repo.portal_publico(
+        datos = await repo.portal_publico(
             _pool(request),
             token,
             empresa_configurada=get_settings().emisor_razon_social,
@@ -253,6 +255,8 @@ async def _portal(request: Request, token: str, *, registrar_acceso: bool) -> di
         )
     except NoEncontradoError as exc:
         raise HTTPException(status_code=404, detail=_ENLACE_NO_VALIDO) from exc
+    # Pago con tarjeta en línea (fase 7, pagos.py): solo si está activo y el enlace ofrece tarjeta.
+    return datos | {"pago_en_linea": await pagos.pago_en_linea_del_portal(_pool(request), datos["metodos_pago"])}
 
 
 @router.get("/portal/publico/{token}", response_model=PortalPublico)
@@ -406,6 +410,7 @@ async def timbre(request: Request, factura_id: str):
         rnc_emisor=factura["rnc_emisor"],
         encf=factura["encf"],
         datos=factura["datos"],
-        ambiente=get_settings().dgii_environment,
+        # El QR apunta al ambiente donde se emitió la factura.
+        ambiente=dgii_environment_for(factura.get("ambiente") or get_settings().app_env),
     )
 

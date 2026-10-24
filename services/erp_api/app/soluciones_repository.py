@@ -881,7 +881,12 @@ async def registrar_venta(
     """Registra en la caja un e-CF YA emitido: enviado a la DGII (con
     trackId) o emitido en contingencia (firmado, se envía solo al
     reconectar; ver facturas_api app.contingencia). El total es el del e-CF
-    guardado, no el que diga el cliente HTTP."""
+    guardado, no el que diga el cliente HTTP.
+
+    Idempotente para la misma sesión: si la factura ya está registrada en
+    ESTA caja (el POS sin conexión reintenta la sincronización tras un corte
+    justo después de registrarla) devuelve esa venta, aunque la caja ya se
+    haya cerrado; en otra caja, 409."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             sesion = await conn.fetchrow(
@@ -889,6 +894,11 @@ async def registrar_venta(
             )
             if sesion is None:
                 raise NoEncontradoError("Sesión de caja no encontrada")
+            ya = await conn.fetchrow("SELECT * FROM soluciones.pos_ventas WHERE factura_id = $1", factura_id)
+            if ya is not None:
+                if ya["sesion_id"] != sesion_id:
+                    raise ConflictoSolucionesError("Esta factura ya está registrada en otra caja")
+                return _fila_venta(ya)
             if sesion["estado"] != "abierta":
                 raise ConflictoSolucionesError("La sesión de caja ya está cerrada")
             factura = await conn.fetchrow(
@@ -965,7 +975,8 @@ async def cerrar_sesion(
 async def factura_para_timbre(pool: asyncpg.Pool, factura_id: uuid.UUID) -> dict[str, Any]:
     async with pool.acquire() as conn:
         fila = await conn.fetchrow(
-            "SELECT id, rnc_emisor, encf, tipo_ecf, xml_firmado, datos::jsonb AS d FROM facturacion.facturas WHERE id = $1",
+            "SELECT id, rnc_emisor, encf, tipo_ecf, ambiente, xml_firmado, datos::jsonb AS d "
+            "FROM facturacion.facturas WHERE id = $1",
             factura_id,
         )
     if fila is None:
@@ -975,6 +986,7 @@ async def factura_para_timbre(pool: asyncpg.Pool, factura_id: uuid.UUID) -> dict
     return {
         "rnc_emisor": fila["rnc_emisor"],
         "encf": fila["encf"],
+        "ambiente": fila["ambiente"],
         "xml_firmado": fila["xml_firmado"],
         "datos": datos,
     }

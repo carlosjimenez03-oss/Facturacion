@@ -15,7 +15,7 @@ def client() -> TestClient:
 
 
 class FakeTokenProvider:
-    async def obtener_token(self, forzar_renovacion: bool = False) -> TokenResponse:
+    async def obtener_token(self, forzar_renovacion: bool = False, **_) -> TokenResponse:
         return TokenResponse(token="tok-123", expira="2099-01-01T00:00:00Z", expedido="2026-01-01T00:00:00Z")
 
 
