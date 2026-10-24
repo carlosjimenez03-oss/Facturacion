@@ -179,7 +179,11 @@ def certificado(settings: FacturasApiSettings = Depends(get_settings)):
 
 
 @app.post("/facturas", response_model=FacturaDetalle, status_code=201)
-async def crear_factura(payload: FacturaCrear, settings: FacturasApiSettings = Depends(get_settings)):
+async def crear_factura(
+    payload: FacturaCrear, response: Response, settings: FacturasApiSettings = Depends(get_settings)
+):
+    """201 con la factura nueva; 200 con la ya creada si `clave_idempotencia`
+    se repite (reintento del POS al sincronizar ventas hechas sin conexión)."""
     if payload.tipo_ecf not in TIPOS_SOPORTADOS:
         raise HTTPException(
             status_code=422,
@@ -198,8 +202,12 @@ async def crear_factura(payload: FacturaCrear, settings: FacturasApiSettings = D
             datos=payload.datos,
             items_inventario=[item.model_dump() for item in payload.items_inventario or []] or None,
             vendedor_id=payload.vendedor_id,
+            clave_idempotencia=payload.clave_idempotencia,
         )
-    except secuencias_encf.EncfNoDisponibleError as exc:
+    except secuencias_encf.FacturaYaCreadaError as exc:
+        response.status_code = 200
+        return exc.factura
+    except (secuencias_encf.EncfNoDisponibleError, secuencias_encf.ClaveIdempotenciaReusadaError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return factura
 

@@ -47,6 +47,12 @@ class FacturaCrear(BaseModel):
     # Vendedor (configuracion.vendedores de erp_api). Igual que
     # items_inventario: metadata de la aplicación, fuera de `datos`.
     vendedor_id: UUID | None = None
+    # Clave de idempotencia (UUID del cliente, p. ej. la venta guardada por
+    # el POS sin conexión): repetir el POST con la misma clave devuelve la
+    # factura ya creada (200) en vez de crear otra (ver app/secuencias_encf.py).
+    clave_idempotencia: UUID | None = Field(
+        None, description="UUID del cliente: un reintento con la misma clave devuelve la factura ya creada"
+    )
 
 
 class FacturaActualizar(BaseModel):
@@ -86,6 +92,7 @@ class FacturaDetalle(FacturaResumen):
     datos: dict[str, Any]
     items_inventario: list[ItemInventario] | None = None
     vendedor_id: UUID | None = None
+    clave_idempotencia: UUID | None = None
     xml_generado: str | None = None
     xml_firmado: str | None = None
     dgii_respuesta: dict[str, Any] | None = None

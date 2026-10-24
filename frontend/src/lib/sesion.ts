@@ -346,6 +346,22 @@ export async function capturarSesionDeUrl(): Promise<boolean> {
   return true;
 }
 
+/**
+ * Antes de sincronizar las ventas que el POS guardó sin conexión: renueva el
+ * token si venció o está por vencer (pudo pasar horas sin red). "ok" = hay
+ * sesión vigente (o el inicio de sesión no está configurado); "sin_red" = no
+ * se pudo renovar por falta de conexión (se reintenta luego); "sin_sesion" =
+ * hay que iniciar sesión de nuevo. En los dos últimos casos el POS conserva
+ * las ventas pendientes en el navegador.
+ */
+export async function prepararSesion(): Promise<"ok" | "sin_red" | "sin_sesion"> {
+  if (!AUTH_CONFIGURADA) return "ok";
+  if (!sesion) return "sin_sesion";
+  if (sesion.expira - Date.now() >= MARGEN_MS) return "ok";
+  if (await renovarSesion()) return "ok";
+  return sesion ? "sin_red" : "sin_sesion";
+}
+
 // --- para los clientes de API ---
 
 async function tokenVigente(): Promise<string | null> {
