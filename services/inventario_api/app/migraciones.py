@@ -509,6 +509,9 @@ async def _migrar(conn: asyncpg.Connection) -> list[int]:
     aplicadas: list[int] = []
     async with conn.transaction():
         await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
+        # El lock compartido de la multiempresa PRIMERO, antes del LOCK
+        # TABLE: nunca se espera por él con las tablas de inventario tomadas.
+        await multiempresa_ddl.tomar_lock(conn)
         await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
         # Otra réplica pudo migrar mientras esperábamos el advisory lock.
         actual = await version_aplicada(conn)
@@ -525,7 +528,11 @@ async def _migrar(conn: asyncpg.Connection) -> list[int]:
             await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
             if migracion.multiempresa:
                 await multiempresa_ddl.aplicar(
-                    conn, migracion.ddl, emisor_rnc=settings.emisor_rnc, razon_social=settings.emisor_razon_social
+                    conn,
+                    migracion.ddl,
+                    emisor_rnc=settings.emisor_rnc,
+                    razon_social=settings.emisor_razon_social,
+                    admin_emails=settings.kontara_admin_emails,
                 )
             else:
                 await conn.execute(migracion.ddl)
@@ -604,6 +611,8 @@ async def aplicar_migraciones(
         # De todas las empresas (solo lee).
         with todas_las_empresas():
             await verificar_existencias(pool)
-    except asyncpg.PostgresError:
+    except Exception:
+        # Solo un reporte: nunca impide que el servicio arranque (p. ej. una
+        # base sin aislamiento entre empresas, o el pooler en modo transacción).
         logger.exception("No se pudo verificar la consistencia de existencias")
     return aplicadas

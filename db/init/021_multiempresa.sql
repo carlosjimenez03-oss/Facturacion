@@ -35,16 +35,22 @@ CREATE TABLE IF NOT EXISTS configuracion.empresas (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS empresas_rnc_idx ON configuracion.empresas (rnc) WHERE rnc IS NOT NULL;
 
--- Quién entra a cada empresa (usuario de Supabase Auth) y con qué rol. Un
--- usuario sin ninguna fila aquí (los de antes de la multiempresa) es
--- miembro de la empresa 1 con el rol de su marca global (kontara_admin).
+-- Quién entra a cada empresa (usuario de Supabase Auth), con qué rol y en
+-- qué estado: 'activo' entra; 'inactivo' lo desactivó un administrador de
+-- ESA empresa; 'invitado' (un usuario que ya era de otra empresa) entra
+-- cuando acepta en Mis empresas; 'retirado' lo quitaron. Las filas no se
+-- borran: un usuario sin NINGUNA fila es uno de antes de la multiempresa,
+-- miembro de la empresa 1 (se escribe su fila en su primer inicio de
+-- sesión, ver configuracion.multiempresa_legado).
 CREATE TABLE IF NOT EXISTS configuracion.empresa_usuarios (
     empresa_id   integer NOT NULL REFERENCES configuracion.empresas (id) ON DELETE CASCADE,
     usuario_id   text NOT NULL,
     correo       text,
     rol          text NOT NULL DEFAULT 'usuario' CHECK (rol IN ('admin', 'usuario')),
+    estado       text NOT NULL DEFAULT 'activo' CHECK (estado IN ('activo', 'inactivo', 'invitado', 'retirado')),
     agregado_por text,
     creado_en    timestamptz NOT NULL DEFAULT now(),
+    actualizado_en timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (empresa_id, usuario_id)
 );
 CREATE INDEX IF NOT EXISTS empresa_usuarios_usuario_idx ON configuracion.empresa_usuarios (usuario_id);
@@ -85,52 +91,108 @@ BEGIN
 END;
 $$;
 
+-- Usuarios de antes de la multiempresa (una sola vez, al crear el registro).
+-- Si la base es la de Supabase (esquema `auth` legible), cada usuario con
+-- acceso a Kontara queda ya como miembro de la empresa 1, admin si tenía
+-- kontara_admin o está en KONTARA_ADMIN_EMAILS (`kontara.admin_emails`) y,
+-- si no había ningún admin, todos admin (antes cualquiera administraba
+-- usuarios). Si no, se escriben en su primer inicio de sesión con
+-- `previos_admin` = sin admins configurados (todos admin, igual que antes).
+CREATE TABLE IF NOT EXISTS configuracion.multiempresa_legado (
+    id             smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    migrado_en     timestamptz NOT NULL DEFAULT now(),
+    desde_auth     boolean NOT NULL DEFAULT false,
+    previos_admin  boolean NOT NULL DEFAULT false
+);
+DO $$
+DECLARE
+    admins text[] := ARRAY(
+        SELECT lower(trim(x)) FROM unnest(string_to_array(COALESCE(current_setting('kontara.admin_emails', true), ''), ',')) x
+        WHERE trim(x) <> '');
+    desde_auth boolean := false;
+BEGIN
+    IF EXISTS (SELECT 1 FROM configuracion.multiempresa_legado) THEN
+        RETURN;
+    END IF;
+    IF to_regclass('auth.users') IS NOT NULL THEN
+        BEGIN
+            EXECUTE $q$
+                INSERT INTO configuracion.empresa_usuarios (empresa_id, usuario_id, correo, rol, agregado_por)
+                SELECT 1, u.id::text, u.email,
+                       CASE WHEN u.raw_app_meta_data ->> 'kontara_admin' = 'true' OR lower(u.email) = ANY ($1)
+                            THEN 'admin' ELSE 'usuario' END,
+                       'migración'
+                FROM auth.users u
+                WHERE u.raw_app_meta_data ->> 'kontara' = 'true' OR lower(u.email) = ANY ($1)
+                ON CONFLICT DO NOTHING
+            $q$ USING admins;
+            desde_auth := true;
+        EXCEPTION WHEN insufficient_privilege OR undefined_column OR undefined_table THEN
+            RAISE NOTICE 'No se pudo leer auth.users (%): los usuarios de antes se registran al iniciar sesión', SQLERRM;
+        END;
+        IF desde_auth AND NOT EXISTS (
+            SELECT 1 FROM configuracion.empresa_usuarios WHERE empresa_id = 1 AND rol = 'admin'
+        ) THEN
+            UPDATE configuracion.empresa_usuarios SET rol = 'admin' WHERE empresa_id = 1;
+        END IF;
+    END IF;
+    INSERT INTO configuracion.multiempresa_legado (id, desde_auth, previos_admin)
+    VALUES (1, desde_auth, NOT desde_auth AND cardinality(admins) = 0);
+END;
+$$;
+
 -- Empresa de la conexión: la variable de sesión `kontara.empresa_id` (la pone
--- cada servicio en cada conexión del pool). Vacía o sin poner = 1; '*' = NULL
--- (todas: ver configuracion.todas_las_empresas()). Solo se crea si falta:
--- las políticas dependen de ella.
+-- cada servicio en cada conexión del pool); vacía o sin poner = 1. Una
+-- expresión simple (se expande en la consulta): la política queda como
+-- `empresa_id = <valor>` y Postgres usa los índices (empresa_id, ...).
 DO $$
 BEGIN
-    IF to_regprocedure('configuracion.empresa_actual()') IS NULL THEN
-        CREATE FUNCTION configuracion.empresa_actual() RETURNS integer
+    -- (Sin '...'::regprocedure: plpgsql lo resolvería antes de que exista.)
+    IF COALESCE((SELECT position('v2' IN p.prosrc) FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                 WHERE n.nspname = 'configuracion' AND p.proname = 'empresa_actual' AND p.pronargs = 0), 0) = 0 THEN
+        CREATE OR REPLACE FUNCTION configuracion.empresa_actual() RETURNS integer
         LANGUAGE sql STABLE PARALLEL SAFE AS $f$
-            SELECT CASE current_setting('kontara.empresa_id', true)
-                       WHEN '*' THEN NULL
-                       WHEN '' THEN 1
-                       ELSE COALESCE(current_setting('kontara.empresa_id', true)::integer, 1)
-                   END
-        $f$;
-    END IF;
-    IF to_regprocedure('configuracion.todas_las_empresas()') IS NULL THEN
-        CREATE FUNCTION configuracion.todas_las_empresas() RETURNS boolean
-        LANGUAGE sql STABLE PARALLEL SAFE AS $f$
-            SELECT COALESCE(current_setting('kontara.empresa_id', true) = '*', false)
+            -- v2
+            SELECT COALESCE(NULLIF(current_setting('kontara.empresa_id', true), '')::integer, 1)
         $f$;
     END IF;
 END;
 $$;
 
--- Rol sin privilegios especiales con que trabajan las conexiones cuando el
+-- Roles sin privilegios especiales con que trabajan las conexiones cuando el
 -- usuario de la base es superusuario o tiene BYPASSRLS (que saltan las
--- políticas). Sin permiso para crearlo, se sigue sin él (ver
+-- políticas): kontara_app (una empresa) y kontara_todas (solo lectura de
+-- todas: el token de un enlace del portal, Planes). Postgres 16 le da a quien
+-- crea un rol con CREATEROLE solo ADMIN (sin SET): se pide SET explícito.
+-- Sin permiso para crearlos o usarlos, se sigue sin ellos (ver
 -- docs/MULTIEMPRESA.md: entonces solo se puede usar la empresa 1).
 DO $$
+DECLARE
+    r text;
+    pg16 boolean := current_setting('server_version_num')::integer >= 160000;
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'kontara_app') THEN
-        BEGIN
-            CREATE ROLE kontara_app NOLOGIN NOBYPASSRLS;
-        EXCEPTION WHEN insufficient_privilege OR duplicate_object OR unique_violation THEN
-            RAISE NOTICE 'No se pudo crear el rol kontara_app: %', SQLERRM;
-        END;
-    END IF;
-    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'kontara_app')
-       AND NOT pg_has_role(current_user, 'kontara_app', 'MEMBER') THEN
-        BEGIN
-            GRANT kontara_app TO CURRENT_USER;
-        EXCEPTION WHEN insufficient_privilege OR invalid_grant_operation THEN
-            RAISE NOTICE 'No se pudo dar el rol kontara_app a %: %', current_user, SQLERRM;
-        END;
-    END IF;
+    FOREACH r IN ARRAY ARRAY['kontara_app', 'kontara_todas'] LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+            BEGIN
+                EXECUTE format('CREATE ROLE %I NOLOGIN NOBYPASSRLS', r);
+            EXCEPTION WHEN insufficient_privilege OR duplicate_object OR unique_violation THEN
+                RAISE NOTICE 'No se pudo crear el rol %: %', r, SQLERRM;
+            END;
+        END IF;
+        IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r)
+           AND NOT (CASE WHEN pg16 THEN pg_has_role(current_user, r, 'SET')
+                         ELSE pg_has_role(current_user, r, 'MEMBER') END) THEN
+            BEGIN
+                IF pg16 THEN
+                    EXECUTE format('GRANT %I TO CURRENT_USER WITH INHERIT FALSE, SET TRUE', r);
+                ELSE
+                    EXECUTE format('GRANT %I TO CURRENT_USER', r);
+                END IF;
+            EXCEPTION WHEN insufficient_privilege OR invalid_grant_operation THEN
+                RAISE NOTICE 'No se pudo dar el rol % a %: %', r, current_user, SQLERRM;
+            END;
+        END IF;
+    END LOOP;
 END;
 $$;
 
@@ -184,18 +246,30 @@ BEGIN
     IF NOT (SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid = tabla) THEN
         EXECUTE format('ALTER TABLE %s ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY', tabla);
     END IF;
+    -- (Una versión previa de esta rama tenía `OR todas_las_empresas()`, que
+    -- impedía usar los índices: se rehace.)
+    IF EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = tabla AND polname = 'empresa_aislada'
+               AND pg_get_expr(polqual, polrelid) LIKE '%todas_las_empresas%') THEN
+        EXECUTE format('DROP POLICY empresa_aislada ON %s', tabla);
+    END IF;
     IF NOT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = tabla AND polname = 'empresa_aislada') THEN
         EXECUTE format(
             'CREATE POLICY empresa_aislada ON %s '
-            'USING (empresa_id = configuracion.empresa_actual() OR configuracion.todas_las_empresas()) '
-            'WITH CHECK (empresa_id = configuracion.empresa_actual() OR configuracion.todas_las_empresas())',
+            'USING (empresa_id = configuracion.empresa_actual()) '
+            'WITH CHECK (empresa_id = configuracion.empresa_actual())',
             tabla);
+    END IF;
+    -- Lectura de todas las empresas, solo para kontara_todas.
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'kontara_todas')
+       AND NOT EXISTS (SELECT 1 FROM pg_policy WHERE polrelid = tabla AND polname = 'empresa_todas') THEN
+        EXECUTE format('CREATE POLICY empresa_todas ON %s FOR SELECT TO kontara_todas USING (true)', tabla);
     END IF;
 END;
 $f$;
 
--- Permisos de kontara_app sobre las tablas y secuencias de unos esquemas
--- (solo los que falten). Sin el rol, no hace nada.
+-- Permisos de kontara_app (lectura y escritura) y kontara_todas (solo
+-- lectura) sobre las tablas y secuencias de unos esquemas (solo los que
+-- falten). Sin los roles, no hace nada.
 CREATE OR REPLACE FUNCTION configuracion.kontara_conceder(esquemas text[])
 RETURNS void LANGUAGE plpgsql AS $f$
 DECLARE
@@ -221,6 +295,18 @@ BEGIN
                    AND has_table_privilege('kontara_app', r.objeto::oid, 'DELETE')) THEN
             EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE %s TO kontara_app', r.objeto);
         END IF;
+    END LOOP;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'kontara_todas') THEN
+        RETURN;
+    END IF;
+    FOR r IN SELECT nspname FROM pg_namespace
+             WHERE nspname = ANY (esquemas) AND NOT has_schema_privilege('kontara_todas', oid, 'USAGE') LOOP
+        EXECUTE format('GRANT USAGE ON SCHEMA %I TO kontara_todas', r.nspname);
+    END LOOP;
+    FOR r IN SELECT c.oid::regclass AS objeto FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+             WHERE n.nspname = ANY (esquemas) AND c.relkind IN ('r', 'p', 'v')
+               AND NOT has_table_privilege('kontara_todas', c.oid, 'SELECT') LOOP
+        EXECUTE format('GRANT SELECT ON TABLE %s TO kontara_todas', r.objeto);
     END LOOP;
 END;
 $f$;

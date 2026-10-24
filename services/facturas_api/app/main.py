@@ -54,7 +54,13 @@ from libs.ecf_common.ambiente import AmbienteInvalidoError, validar_ambiente
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
-from libs.ecf_common.empresa import EMPRESA_PREDETERMINADA, empresa_actual, instalar_empresa, rnc_emisor
+from libs.ecf_common.empresa import (
+    EMPRESA_PREDETERMINADA,
+    diagnosticar,
+    empresa_actual,
+    instalar_empresa,
+    rnc_emisor,
+)
 from libs.ecf_common.environments import dgii_environment_for
 
 from . import (
@@ -132,6 +138,7 @@ async def lifespan(app: FastAPI):
         await aplicar_migraciones(pool)
     except Exception:
         logger.exception("No se pudieron aplicar las migraciones de facturacion.facturas")
+    await diagnosticar(pool)
     # Índice único (rnc_emisor, encf): solo si no hay duplicados (nunca falla).
     await secuencias_encf.asegurar_indice_encf_unico(pool)
 

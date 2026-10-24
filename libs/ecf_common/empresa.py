@@ -38,6 +38,7 @@ from http.cookies import CookieError, SimpleCookie
 from typing import Any
 from urllib.parse import urlsplit
 
+import asyncpg
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
@@ -131,48 +132,103 @@ def empresa_de_texto(valor: str | None) -> int | None:
 
 # --- conexiones (setup del pool de asyncpg) -------------------------------------------------------
 
-# Un solo viaje por `acquire`: fija la empresa y, si la sesión salta RLS
-# (superusuario o BYPASSRLS) y puede, cambia a kontara_app. `aislado` dice si
-# la conexión queda sujeta a las políticas. role 'none' = el usuario de la
-# conexión (RESET ALL de asyncpg no toca el rol: se fija siempre).
+# Un solo viaje por `acquire`: fija la empresa y el rol de la conexión.
+# - 'empresa': si la sesión salta RLS (superusuario o BYPASSRLS) y puede, SET
+#   ROLE kontara_app (sujeto a la política de una empresa);
+# - 'todas': SET ROLE kontara_todas (lee todas las empresas, no escribe);
+# - 'sistema' (migraciones): el usuario de la conexión.
+# `aislado` dice si en modo 'empresa' la conexión queda sujeta a las
+# políticas. Postgres 16 separa ser miembro de un rol de poder hacer SET
+# ROLE: se comprueba el privilegio SET (antes, la membresía). role 'none' =
+# el usuario de la conexión (RESET ALL de asyncpg no toca el rol: se fija
+# siempre).
 _SQL_PREPARAR = """
 WITH s AS (
     SELECT COALESCE((SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = session_user), false) AS salta,
-           COALESCE((SELECT pg_has_role(session_user, oid, 'MEMBER') FROM pg_roles WHERE rolname = 'kontara_app'),
-                    false) AS puede
+           current_setting('server_version_num')::integer >= 160000 AS pg16
+), r AS (
+    SELECT s.salta,
+           COALESCE((SELECT CASE WHEN s.pg16 THEN pg_has_role(session_user, oid, 'SET')
+                                 ELSE pg_has_role(session_user, oid, 'MEMBER') END
+                     FROM pg_roles WHERE rolname = 'kontara_app'), false) AS puede_app,
+           COALESCE((SELECT CASE WHEN s.pg16 THEN pg_has_role(session_user, oid, 'SET')
+                                 ELSE pg_has_role(session_user, oid, 'MEMBER') END
+                     FROM pg_roles WHERE rolname = 'kontara_todas'), false) AS puede_todas
+    FROM s
 )
 SELECT set_config('kontara.empresa_id', $1, false) AS empresa,
-       set_config('role', CASE WHEN $2 AND s.salta AND s.puede THEN 'kontara_app' ELSE 'none' END, false) AS rol,
-       (NOT s.salta OR s.puede) AS aislado
-FROM s
+       set_config('role', CASE WHEN $2 = 'empresa' AND r.salta AND r.puede_app THEN 'kontara_app'
+                               WHEN $2 = 'todas' AND r.puede_todas THEN 'kontara_todas'
+                               ELSE 'none' END, false) AS rol,
+       (NOT r.salta OR r.puede_app) AS aislado,
+       r.salta, r.puede_app, r.puede_todas
+FROM r
+"""
+
+# Sin cambiar de rol (si SET ROLE falló): solo la empresa y si la sesión salta RLS.
+_SQL_PREPARAR_SIN_ROL = """
+SELECT set_config('kontara.empresa_id', $1, false) AS empresa,
+       set_config('role', 'none', false) AS rol,
+       NOT COALESCE((SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = session_user), false) AS aislado
 """
 
 
+def _modo() -> str:
+    if _SISTEMA.get():
+        return "sistema"
+    return "todas" if _EMPRESA.get() == TODAS else "empresa"
+
+
 def _valor_guc(valor: int | str | None) -> str:
-    return "" if valor is None else str(valor)
+    return "" if valor is None or valor == TODAS else str(valor)
 
 
 def crear_preparador(database_url: str) -> Callable[[Any], Any]:
-    """El `setup` del pool. Con el pooler de Supabase en modo transacción
-    (puerto 6543) las variables de sesión no sobreviven entre sentencias:
-    solo se entregan conexiones para la empresa predeterminada."""
+    """El `setup` del pool.
+
+    - Con el pooler de Supabase en modo transacción (puerto 6543) las
+      variables de sesión y el SET ROLE no son de esta conexión: quedarían
+      en la conexión del servidor para el próximo cliente. Ahí no se fija
+      nada (la política ve la empresa 1) y se niega cualquier otra empresa.
+    - Si SET ROLE falla (p. ej. un rol sin el privilegio SET), se registra
+      una vez y el pool sigue sin cambiar de rol: modo "solo la empresa 1"
+      (docs/MULTIEMPRESA.md), nunca un error en cada conexión."""
     transaccion = urlsplit(database_url).port == 6543
+    estado: dict[str, Any] = {"transaccion": transaccion, "sin_rol": False, "aislado": None}
 
     async def preparar_conexion(conn) -> None:
         valor = _EMPRESA.get()
-        sistema = _SISTEMA.get()
-        otra = valor is not None and valor != EMPRESA_PREDETERMINADA
-        if transaccion and otra:
-            raise AislamientoNoDisponibleError(
-                "Varias empresas requieren la conexión a Postgres en modo sesión (pooler Supabase en el puerto 5432)"
-            )
-        fila = await conn.fetchrow(_SQL_PREPARAR, _valor_guc(valor), not sistema)
-        if otra and not sistema and not fila["aislado"]:
+        modo = _modo()
+        otra = valor is not None and valor != TODAS and valor != EMPRESA_PREDETERMINADA
+        if transaccion:
+            if otra:
+                raise AislamientoNoDisponibleError(
+                    "Varias empresas requieren la conexión a Postgres en modo sesión (pooler Supabase en el puerto 5432)"
+                )
+            estado["aislado"] = False
+            return
+        fila = None
+        if not estado["sin_rol"]:
+            try:
+                fila = await conn.fetchrow(_SQL_PREPARAR, _valor_guc(valor), modo)
+            except asyncpg.InsufficientPrivilegeError as exc:
+                estado["sin_rol"] = True
+                logger.error(
+                    "No se puede cambiar al rol kontara_app/kontara_todas (%s): se trabaja SOLO con la empresa 1 "
+                    "(ver docs/MULTIEMPRESA.md, 'Rol sin privilegios')",
+                    exc,
+                )
+        if fila is None:
+            fila = await conn.fetchrow(_SQL_PREPARAR_SIN_ROL, _valor_guc(valor))
+        aislado = bool(fila["aislado"])
+        estado["aislado"] = aislado
+        if otra and modo != "sistema" and not aislado:
             raise AislamientoNoDisponibleError(
                 "La base de datos no puede aislar las empresas (falta el rol kontara_app o la conexión salta RLS): "
                 "ver docs/MULTIEMPRESA.md"
             )
 
+    preparar_conexion.estado = estado  # type: ignore[attr-defined]
     return preparar_conexion
 
 
@@ -181,13 +237,59 @@ async def aislamiento_disponible(pool: Any) -> bool:
     segunda empresa solo tiene sentido si sí.)"""
     if pool is None:
         return False
+    estado = getattr(getattr(pool, "_setup", None), "estado", None)
+    if estado is not None and estado.get("transaccion"):
+        return False
     try:
-        async with pool.acquire() as conn:
-            fila = await conn.fetchrow(_SQL_PREPARAR, _valor_guc(_EMPRESA.get()), True)
-            return bool(fila["aislado"])
+        with en_empresa(None):
+            async with pool.acquire() as conn:
+                await conn.fetchval("SELECT 1")
     except Exception as exc:  # sin permisos sobre pg_roles, base caída...
         logger.warning("No se pudo comprobar el aislamiento entre empresas: %s", exc)
         return False
+    if estado is None:  # un pool sin nuestro setup (pruebas)
+        return False
+    return bool(estado.get("aislado"))
+
+
+async def diagnosticar(pool: Any) -> str:
+    """Al arrancar: en qué modo queda el aislamiento entre empresas, en el
+    log (una línea). Devuelve el código del modo."""
+    estado = getattr(getattr(pool, "_setup", None), "estado", None) or {}
+    if estado.get("transaccion"):
+        logger.warning(
+            "Multiempresa: pooler en modo transacción (puerto 6543): solo la empresa 1 (use el modo sesión, 5432)"
+        )
+        return "transaccion"
+    try:
+        with en_empresa(None):
+            async with pool.acquire() as conn:
+                fila = await conn.fetchrow(
+                    "SELECT COALESCE((SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = session_user), false)"
+                    " AS salta, (SELECT count(*) FROM configuracion.empresas) AS empresas"
+                    " WHERE to_regclass('configuracion.empresas') IS NOT NULL"
+                )
+    except Exception as exc:
+        logger.warning("Multiempresa: no se pudo diagnosticar el aislamiento: %s", exc)
+        return "desconocido"
+    empresas = fila["empresas"] if fila else 0
+    if not estado.get("aislado"):
+        nivel = logging.ERROR if empresas > 1 else logging.WARNING
+        logger.log(
+            nivel,
+            "Multiempresa: las conexiones NO quedan aisladas por empresa (sin el rol kontara_app o sin SET sobre él): "
+            "solo se atiende la empresa 1%s. Ver docs/MULTIEMPRESA.md",
+            f" — y la base ya tiene {empresas} empresas: sus datos podrían verse juntos" if empresas > 1 else "",
+        )
+        return "sin_aislamiento"
+    if fila and not fila["salta"]:
+        logger.warning(
+            "Multiempresa: el usuario de la base es el dueño de las tablas sin BYPASSRLS: las migraciones y tareas "
+            "de sistema solo ven las filas de la empresa 1 (correcto para las migraciones de hoy; ver docs/MULTIEMPRESA.md)"
+        )
+        return "dueno_sujeto_a_rls"
+    logger.info("Multiempresa: aislamiento por empresa activo (SET ROLE kontara_app)")
+    return "aislado"
 
 
 # --- registro de empresas y membresías (con caché corta) ----------------------------------------------
@@ -327,36 +429,54 @@ async def empresas_activas(pool: Any) -> list[int]:
     return [f["id"] for f in ids] or [EMPRESA_PREDETERMINADA]
 
 
-# Rol del usuario en la empresa. Un usuario sin ninguna membresía (los de
-# antes de la multiempresa) es miembro implícito de la predeterminada, con
-# el rol que le da su marca global (`kontara_admin` / KONTARA_ADMIN_EMAILS).
+# Rol del usuario en la empresa: su membresía ACTIVA. Un usuario sin
+# NINGUNA fila (las filas no se borran: es uno de antes de la multiempresa
+# que todavía no inició sesión) es miembro de la empresa 1, admin si tiene la
+# marca global (`kontara_admin` / KONTARA_ADMIN_EMAILS) o si la instalación
+# no tenía administradores (`multiempresa_legado.previos_admin`).
 _SQL_ROL = """
 SELECT eu.rol FROM configuracion.empresa_usuarios eu
 JOIN configuracion.empresas e ON e.id = eu.empresa_id
-WHERE eu.usuario_id = $1 AND eu.empresa_id = $2 AND e.estado = 'activa'
+WHERE eu.usuario_id = $1 AND eu.empresa_id = $2 AND eu.estado = 'activo' AND e.estado = 'activa'
 UNION ALL
-SELECT CASE WHEN $3 THEN 'admin' ELSE 'usuario' END
+SELECT CASE WHEN $3 OR COALESCE((SELECT previos_admin FROM configuracion.multiempresa_legado WHERE id = 1), false)
+            THEN 'admin' ELSE 'usuario' END
 WHERE $2 = 1 AND NOT EXISTS (SELECT 1 FROM configuracion.empresa_usuarios WHERE usuario_id = $1)
 LIMIT 1
 """
 
-# La que el usuario eligió por última vez (si sigue siendo miembro) o la de
-# menor id a la que pertenece.
+# La que el usuario eligió por última vez (si sigue siendo miembro activo de
+# una empresa activa) u otra de sus empresas activas; sin filas, la 1.
 _SQL_PREFERIDA = """
 SELECT empresa_id FROM (
     SELECT u.empresa_id, 0 AS orden FROM configuracion.usuario_empresa_actual u
     JOIN configuracion.empresa_usuarios eu ON eu.empresa_id = u.empresa_id AND eu.usuario_id = u.usuario_id
-    WHERE u.usuario_id = $1
+    JOIN configuracion.empresas e ON e.id = eu.empresa_id
+    WHERE u.usuario_id = $1 AND eu.estado = 'activo' AND e.estado = 'activa'
     UNION ALL
     SELECT eu.empresa_id, 1 FROM configuracion.empresa_usuarios eu
     JOIN configuracion.empresas e ON e.id = eu.empresa_id AND e.estado = 'activa'
-    WHERE eu.usuario_id = $1
+    WHERE eu.usuario_id = $1 AND eu.estado = 'activo'
 ) x ORDER BY orden, empresa_id LIMIT 1
 """
 
+# La fila del usuario de antes (sin filas) en la empresa 1, en su primer
+# inicio de sesión: desde ahí es un miembro más (desactivable, con su rol).
+SQL_LEGADO = """
+INSERT INTO configuracion.empresa_usuarios (empresa_id, usuario_id, correo, rol, agregado_por)
+SELECT 1, $1, $2,
+       CASE WHEN $3 OR COALESCE((SELECT previos_admin FROM configuracion.multiempresa_legado WHERE id = 1), false)
+            THEN 'admin' ELSE 'usuario' END,
+       'primer inicio de sesión'
+WHERE NOT EXISTS (SELECT 1 FROM configuracion.empresa_usuarios WHERE usuario_id = $1)
+ON CONFLICT DO NOTHING
+"""
+
+_LEGADOS: set[str] = set()
+
 
 async def rol_en_empresa(pool: Any, usuario_id: str, empresa_id: int, *, admin_global: bool = False) -> str | None:
-    """'admin' | 'usuario' | None (no es miembro)."""
+    """'admin' | 'usuario' | None (no es miembro activo)."""
     clave = (usuario_id, empresa_id, admin_global)
     hay, valor = _MEMBRESIAS.leer(clave)
     if hay:
@@ -368,6 +488,39 @@ async def rol_en_empresa(pool: Any, usuario_id: str, empresa_id: int, *, admin_g
             rol = await conn.fetchval(_SQL_ROL, usuario_id, empresa_id, admin_global)
     _MEMBRESIAS.guardar(clave, rol)
     return rol
+
+
+async def registrar_usuario_previo(pool: Any, usuario: Any) -> None:
+    """Escribe la membresía en la empresa 1 del usuario de antes que inicia
+    sesión por primera vez (una vez por proceso y usuario; best-effort)."""
+    if pool is None or usuario is None or usuario.id in _LEGADOS:
+        return
+    try:
+        async with pool.acquire() as conn:
+            if await _hay_registro(conn):
+                await conn.execute(SQL_LEGADO, usuario.id, usuario.correo, bool(usuario.admin_global or usuario.admin))
+        _LEGADOS.add(usuario.id)
+    except Exception as exc:
+        logger.warning("No se pudo registrar la membresía de %s: %s", usuario.correo, exc)
+
+
+async def es_admin_plataforma(pool: Any, usuario: Any) -> bool:
+    """Administrador de la INSTALACIÓN (no de una empresa): agregar empresas,
+    cambiar datos globales (tasas de nómina). La marca global
+    (`kontara_admin` / KONTARA_ADMIN_EMAILS) o, si la instalación no tenía
+    administradores configurados (`previos_admin`), un admin de la empresa 1.
+    Sin inicio de sesión configurado (usuario None): sí."""
+    if usuario is None or getattr(usuario, "admin_global", False):
+        return True
+    if pool is None:
+        return False
+    async with pool.acquire() as conn:
+        if await conn.fetchval("SELECT to_regclass('configuracion.multiempresa_legado')") is None:
+            return False
+        previos = await conn.fetchval("SELECT previos_admin FROM configuracion.multiempresa_legado WHERE id = 1")
+    if not previos:
+        return False
+    return await rol_en_empresa(pool, usuario.id, EMPRESA_PREDETERMINADA) == "admin"
 
 
 async def empresa_preferida(pool: Any, usuario_id: str) -> int:
@@ -491,7 +644,10 @@ def instalar_empresa(
                 empresa_id, usuario, error = await resolver_empresa(
                     pool,
                     usuario,
-                    empresa_pedida(request, cookie_permitida=cookie_permitida),
+                    # La cookie de las descargas solo con un usuario verificado
+                    # aquí (que se vuelve a validar como miembro): sin sesión en
+                    # el servicio, la empresa es la que puso nginx o ninguna.
+                    empresa_pedida(request, cookie_permitida=cookie_permitida if usuario is not None else None),
                     interna=es_llamada_interna(request, token_interno),
                 )
             except Exception:
@@ -506,3 +662,11 @@ def instalar_empresa(
                 await self.app(scope, receive, send)
 
     app.add_middleware(_EmpresaMiddleware)
+
+    # Una empresa que no sea la 1 con la base sin aislamiento (p. ej. el rol
+    # perdió el privilegio SET): 503 claro, nunca sus datos ni un 500.
+    async def _sin_aislamiento(_request: Request, exc: Exception) -> JSONResponse:
+        logger.error("Request negado: %s", exc)
+        return _respuesta(503, str(exc), "sin_aislamiento")
+
+    app.add_exception_handler(AislamientoNoDisponibleError, _sin_aislamiento)

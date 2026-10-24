@@ -118,3 +118,108 @@ def test_resolver_empresa_sin_sesion_confia_en_nginx():
     assert asyncio.run(resolver(None))[0] is None
     assert asyncio.run(resolver(3))[0] == 3
     assert asyncio.run(resolver(-1))[2].status_code == 422
+
+
+# --- setup de las conexiones sin Postgres -----------------------------------------------------
+
+class _ConnPreparar:
+    """Registra lo que corre el setup del pool; `sin_set` simula un rol sin
+    el privilegio SET (Postgres 16: CREATEROLE solo da ADMIN)."""
+
+    def __init__(self, *, sin_set: bool = False, salta: bool = True):
+        self.consultas: list[str] = []
+        self.sin_set = sin_set
+        self.salta = salta
+
+    async def fetchrow(self, query, *args):
+        import asyncpg
+
+        self.consultas.append(query)
+        if query == empresa._SQL_PREPARAR:
+            if self.sin_set:
+                raise asyncpg.InsufficientPrivilegeError('permission denied to set role "kontara_app"')
+            return {"aislado": True, "salta": self.salta, "puede_app": True, "puede_todas": True}
+        assert query == empresa._SQL_PREPARAR_SIN_ROL
+        return {"aislado": not self.salta}
+
+
+def test_sin_privilegio_set_queda_en_la_empresa_1_sin_errores():
+    """C1: SET ROLE negado no rompe cada acquire: se registra una vez y el
+    pool sigue con la empresa 1 (otra empresa falla cerrada)."""
+    preparar = empresa.crear_preparador("postgresql://u@h:5432/db")
+    conn = _ConnPreparar(sin_set=True)
+
+    async def correr():
+        await preparar(conn)  # empresa 1
+        with empresa.todas_las_empresas():
+            await preparar(conn)  # lecturas de todas (planes, tareas): permitidas
+        with empresa.en_empresa(2), pytest.raises(empresa.AislamientoNoDisponibleError):
+            await preparar(conn)
+        await preparar(conn)
+
+    asyncio.run(correr())
+    assert preparar.estado["sin_rol"] is True and preparar.estado["aislado"] is False
+    # Solo el primer intento probó SET ROLE; después, directo sin cambiar de rol.
+    assert conn.consultas.count(empresa._SQL_PREPARAR) == 1
+    assert conn.consultas[1:] == [empresa._SQL_PREPARAR_SIN_ROL] * 4
+
+
+def test_el_pooler_en_modo_transaccion_no_fija_nada_en_la_conexion():
+    """Puerto 6543: ni set_config ni SET ROLE (quedarían en la conexión del
+    servidor para el próximo cliente); la empresa 1 y las lecturas de todas
+    funcionan, otra empresa se niega."""
+    preparar = empresa.crear_preparador("postgresql://u@h:6543/db")
+    conn = _ConnPreparar()
+
+    async def correr():
+        await preparar(conn)
+        with empresa.en_empresa(1):
+            await preparar(conn)
+        with empresa.todas_las_empresas():
+            await preparar(conn)
+        with empresa.en_empresa(2), pytest.raises(empresa.AislamientoNoDisponibleError):
+            await preparar(conn)
+
+    asyncio.run(correr())
+    assert conn.consultas == []
+    assert preparar.estado["transaccion"] is True
+
+
+def test_diagnostico_del_pooler_en_modo_transaccion(caplog):
+    class _Pool:
+        _setup = empresa.crear_preparador("postgresql://u@h:6543/db")
+
+    with caplog.at_level("WARNING"):
+        assert asyncio.run(empresa.diagnosticar(_Pool())) == "transaccion"
+    assert "6543" in caplog.text
+    assert asyncio.run(empresa.aislamiento_disponible(_Pool())) is False
+
+
+def test_sin_sesion_la_cookie_no_elige_empresa():
+    """KONTARA_AUTH=off (o un servicio sin sesión): la cookie kontara_empresa
+    de las descargas no elige empresa (nadie la validó): la cabecera que pone
+    nginx o la predeterminada."""
+    import httpx
+    from fastapi import FastAPI
+
+    class _S:
+        kontara_token_interno = ""
+
+    app = FastAPI()
+    app.state.db_pool = None
+    empresa.instalar_empresa(app, _S)
+
+    @app.get("/facturas/{factura_id}/representacion-impresa")
+    async def descarga(factura_id: str):
+        return {"empresa": empresa.empresa_actual()}
+
+    ruta = "/facturas/0b6d2f0e-1c3a-4c1e-9a55-1f0f3c2d4e5f/representacion-impresa"
+
+    async def correr():
+        transporte = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transporte, base_url="http://k") as cliente:
+            con_cookie = await cliente.get(ruta, headers={"cookie": "kontara_empresa=2"})
+            con_cabecera = await cliente.get(ruta, headers={"X-Kontara-Empresa": "2"})
+        return con_cookie.json(), con_cabecera.json()
+
+    assert asyncio.run(correr()) == ({"empresa": 1}, {"empresa": 2})

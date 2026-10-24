@@ -1211,10 +1211,17 @@ SELECT configuracion.kontara_conceder(ARRAY['ventas', 'impuestos', 'compras', 'c
 
 
 async def _migrar(
-    conn: asyncpg.Connection, ambiente_defecto: str = "test", emisor_rnc: str = "", razon_social: str = ""
+    conn: asyncpg.Connection,
+    ambiente_defecto: str = "test",
+    emisor_rnc: str = "",
+    razon_social: str = "",
+    admin_emails: str = "",
 ) -> None:
     async with conn.transaction():
         await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
+        # El lock compartido de la multiempresa PRIMERO (antes de tocar
+        # tablas): los servicios que arrancan a la vez se turnan.
+        await multiempresa_ddl.tomar_lock(conn)
         await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
         await conn.execute(DDL_VENTAS)
         await conn.execute(DDL_IMPUESTOS)
@@ -1231,7 +1238,9 @@ async def _migrar(
         # Ambiente de las secuencias que ya existían (ver DDL_AMBIENTE).
         await conn.execute("SELECT set_config('kontara.ambiente_defecto', $1, true)", ambiente_defecto)
         await conn.execute(DDL_AMBIENTE)
-        await multiempresa_ddl.aplicar(conn, DDL_MULTIEMPRESA, emisor_rnc=emisor_rnc, razon_social=razon_social)
+        await multiempresa_ddl.aplicar(
+            conn, DDL_MULTIEMPRESA, emisor_rnc=emisor_rnc, razon_social=razon_social, admin_emails=admin_emails
+        )
 
 
 async def aplicar_migraciones(
@@ -1262,6 +1271,7 @@ async def aplicar_migraciones(
                         ambiente_defecto if ambiente_defecto in AMBIENTES else "test",
                         settings.emisor_rnc,
                         settings.emisor_razon_social,
+                        settings.kontara_admin_emails,
                     )
             break
         except (asyncpg.LockNotAvailableError, asyncpg.DeadlockDetectedError) as exc:

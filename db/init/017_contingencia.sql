@@ -80,7 +80,13 @@ CREATE TABLE IF NOT EXISTS facturacion.lotes_contingencia (
     completado_en  timestamptz,
     actualizado_en timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS lotes_contingencia_creado_idx ON facturacion.lotes_contingencia (creado_en DESC);
+DO $$
+BEGIN
+    IF to_regclass('facturacion.lotes_contingencia_creado_idx') IS NULL THEN
+        CREATE INDEX IF NOT EXISTS lotes_contingencia_creado_idx ON facturacion.lotes_contingencia (creado_en DESC);
+    END IF;
+END;
+$$;
 
 -- El rol web_anon (001_schema.sql) lee las tablas de facturacion vía PostgREST.
 GRANT SELECT ON facturacion.contingencia, facturacion.lotes_contingencia TO web_anon;

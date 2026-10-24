@@ -66,6 +66,8 @@ class _FakeConnection:
 
     def __init__(self, *, movimientos_existe: bool, version: int | None, fallas_lock: list[Exception] | None = None):
         self.execute_calls: list[str] = []
+        self.argumentos: list[tuple] = []
+        self.falla_fetch: Exception | None = None
         self._movimientos_existe = movimientos_existe
         self._version = version
         self._fallas_lock = list(fallas_lock or [])
@@ -75,6 +77,7 @@ class _FakeConnection:
         return _NullTransaction()
 
     async def execute(self, query, *args):
+        self.argumentos.append(args)
         if query.startswith("LOCK TABLE") and self._fallas_lock:
             self.execute_calls.append(query)
             raise self._fallas_lock.pop(0)
@@ -96,6 +99,8 @@ class _FakeConnection:
 
     async def fetch(self, query, *args):
         assert "inventario.existencias" in query  # verificar_existencias
+        if self.falla_fetch is not None:
+            raise self.falla_fetch
         return self.descuadres
 
 
@@ -138,15 +143,19 @@ async def test_base_vacia_aplica_004_y_fase4_tras_el_lock():
 
     assert aplicadas == [11, 21]
     assert conn.execute_calls[0] == "SET LOCAL lock_timeout = '5s'"
-    assert "pg_advisory_xact_lock" in conn.execute_calls[1]
-    assert conn.execute_calls[2] == migraciones.DDL_BASE
+    # El lock compartido de la multiempresa primero (antes del propio y del
+    # LOCK TABLE), como en los otros servicios.
+    assert conn.execute_calls[1] == "SELECT pg_advisory_xact_lock($1)"
+    assert conn.argumentos[1] == (multiempresa_ddl.LOCK_MULTIEMPRESA,)
+    assert "pg_advisory_xact_lock" in conn.execute_calls[2]
+    assert conn.execute_calls[3] == migraciones.DDL_BASE
     # Espera por tabla menor que deadlock_timeout, y 5 s de nuevo para el DDL.
-    assert conn.execute_calls[3] == "SET LOCAL lock_timeout = '800ms'"
-    assert conn.execute_calls[4].startswith("LOCK TABLE inventario.productos, inventario.movimientos")
-    assert conn.execute_calls[4].endswith("IN ACCESS EXCLUSIVE MODE")
-    assert conn.execute_calls[5] == "SET LOCAL lock_timeout = '5s'"
-    assert conn.execute_calls[6] == migraciones.DDL_FASE4
-    assert _sin_sql_de_control(conn.execute_calls[7:]) == _DDL_PENDIENTE[1:]
+    assert conn.execute_calls[4] == "SET LOCAL lock_timeout = '800ms'"
+    assert conn.execute_calls[5].startswith("LOCK TABLE inventario.productos, inventario.movimientos")
+    assert conn.execute_calls[5].endswith("IN ACCESS EXCLUSIVE MODE")
+    assert conn.execute_calls[6] == "SET LOCAL lock_timeout = '5s'"
+    assert conn.execute_calls[7] == migraciones.DDL_FASE4
+    assert _sin_sql_de_control(conn.execute_calls[8:]) == _DDL_PENDIENTE[1:]
 
 
 async def test_base_existente_no_vuelve_a_correr_004():
@@ -207,3 +216,16 @@ async def test_descuadre_de_existencias_solo_se_reporta(caplog):
 
     assert "A-1 (stock_actual 5, almacenes 3)" in caplog.text
     assert conn.execute_calls == []  # no se corrige nada
+
+
+async def test_sin_aislamiento_la_verificacion_de_existencias_no_tumba_el_arranque():
+    """Base sin aislamiento entre empresas (o pooler 6543): el reporte de
+    existencias de todas las empresas no puede impedir que el servicio
+    arranque (antes: AislamientoNoDisponibleError, un RuntimeError, sin
+    capturar, y inventario-api reiniciándose en bucle)."""
+    from libs.ecf_common.empresa import AislamientoNoDisponibleError
+
+    conn = _FakeConnection(movimientos_existe=True, version=migraciones.VERSION_ACTUAL)
+    conn.falla_fetch = AislamientoNoDisponibleError("sin aislamiento")
+
+    assert await migraciones.aplicar_migraciones(_FakePool(conn)) == []
