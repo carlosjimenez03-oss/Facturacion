@@ -112,7 +112,8 @@ _FECHA_EMISION = _fecha_dgii("{Encabezado,Emisor,FechaEmision}")
 # de compra/pago (41, 43, 47), donde el "comprador" es el proveedor.
 _TIPOS_CXC = "(31, 32, 33, 44, 45, 46)"
 
-# Cuentas por cobrar: facturas enviadas/aceptadas a crédito (TipoPago 2) con
+# Cuentas por cobrar: facturas enviadas/aceptadas (o emitidas en contingencia,
+# pendientes de envío a la DGII) a crédito (TipoPago 2) con
 # lo cobrado (cobros no anulados) y lo pendiente, que además descuenta las
 # notas de crédito enviadas/aceptadas que referencian la factura. Sin
 # parámetros: el estado (vencida/pendiente/cobrada) depende de "hoy" y se
@@ -121,7 +122,7 @@ _CTE_CXC = f"""
     cxc_base AS (
         SELECT f.id, f.encf, f.tipo_ecf, f.creado_en, f.datos::jsonb AS d
         FROM facturacion.facturas f
-        WHERE f.estado IN ('aceptado', 'enviado')
+        WHERE f.estado IN ('aceptado', 'enviado', 'contingencia')
           AND f.tipo_ecf IN {_TIPOS_CXC}
           AND f.datos::jsonb #>> '{{Encabezado,IdDoc,TipoPago}}' = '2'
     ),
@@ -131,7 +132,7 @@ _CTE_CXC = f"""
         FROM (
             SELECT f.datos::jsonb AS d
             FROM facturacion.facturas f
-            WHERE f.estado IN ('aceptado', 'enviado') AND f.tipo_ecf = 34
+            WHERE f.estado IN ('aceptado', 'enviado', 'contingencia') AND f.tipo_ecf = 34
         ) n
         GROUP BY 1
     ),

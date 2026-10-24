@@ -6,7 +6,7 @@ import { desglose, siguienteEncf } from "../lib/buildDatos";
 import { CODIGOS_MODIFICACION, FORMAS_PAGO, TIPOS_INGRESOS } from "../lib/catalogos";
 import { erpApi } from "../lib/erpApi";
 import type { Cliente } from "../lib/erpApi";
-import { ESTADO_BADGE, ESTADO_LABEL, TIPO_ECF_LABEL } from "../lib/estados";
+import { ESTADO_BADGE, ESTADO_LABEL, MENSAJE_CONTINGENCIA, TIPO_ECF_LABEL } from "../lib/estados";
 import { configuracionApi } from "../lib/configuracionApi";
 import { calcularMontoItem } from "../lib/format";
 import { formatoMonto, formatoRnc, nombreAmbiente } from "../lib/marca";
@@ -168,6 +168,7 @@ export function FacturaDetailPage() {
   const total = Number.isFinite(montoTotal) ? montoTotal : totales.total;
 
   const emitida = f.estado === "enviado" || f.estado === "aceptado";
+  const enContingencia = f.estado === "contingencia";
   const fallida = f.estado === "rechazado" || f.estado === "error";
   const sinEnviar = f.estado === "borrador" || f.estado === "generado" || f.estado === "firmado";
   const admiteNotas = emitida && TIPOS_CON_NOTAS.includes(f.tipo_ecf) && Boolean(f.encf);
@@ -196,7 +197,9 @@ export function FacturaDetailPage() {
       const envio = await api.enviar(f.id);
       // facturas-api consulta el resultado justo después de enviar: puede volver ya aceptada o rechazada.
       setAviso(
-        !envio.track_id
+        envio.contingencia
+          ? { texto: "Emitida en contingencia", detalle: envio.mensaje ?? MENSAJE_CONTINGENCIA, tono: "aviso" }
+          : !envio.track_id
           ? { texto: "La DGII no recibió el comprobante", detalle: envio.error ?? undefined, tono: "error" }
           : envio.estado === "aceptado"
             ? { texto: "Comprobante aceptado por la DGII", detalle: `Track ID ${envio.track_id}` }
@@ -344,7 +347,7 @@ export function FacturaDetailPage() {
                   </Link>
                 </>
               )}
-              {emitida && credito && (
+              {(emitida || enContingencia) && credito && (
                 <Link to={`/cobros?factura=${f.id}`} className="btn btn-p btn-sm">
                   Registrar cobro
                 </Link>
@@ -373,6 +376,30 @@ export function FacturaDetailPage() {
                 ))}
               </ul>
             )}
+          </span>
+        </div>
+      )}
+
+      {enContingencia && (
+        <div className="al al-o" role="status">
+          <IconAlerta />
+          <span style={{ flex: 1 }}>
+            <b>Emitida en contingencia: la DGII no respondió al enviarla.</b> El comprobante está firmado y puede entregarlo al cliente: su
+            representación impresa lleva la leyenda de contingencia que exige la DGII. Se enviará automáticamente en cuanto la DGII responda
+            {f.lote_id ? ` (lote ${f.lote_id})` : ""}; la DGII da 72 horas para enviarlo.
+            {f.error && <div className="hint">Último intento: {f.error}</div>}
+          </span>
+          <Link to="/sincronizacion" className="btn btn-o btn-sm">
+            Centro de sincronización
+          </Link>
+        </div>
+      )}
+
+      {f.emitida_en_contingencia && !enContingencia && (
+        <div className="al al-i" role="status">
+          <span>
+            Emitida en contingencia{f.contingencia_en ? ` el ${new Date(f.contingencia_en).toLocaleString("es-DO")}` : ""} y enviada a la DGII
+            {f.lote_id ? ` en el lote ${f.lote_id}` : ""} al restablecerse la conexión. Su representación impresa conserva la leyenda de contingencia.
           </span>
         </div>
       )}

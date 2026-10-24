@@ -278,7 +278,10 @@ def test_enviar_factura_consulta_resultado_inmediato(client, monkeypatch, result
     response = client.post(f"/facturas/{factura['id']}/enviar")
 
     assert response.status_code == 200
-    assert response.json() == {"id": factura["id"], "estado": "aceptado", "track_id": "track-abc", "error": None}
+    cuerpo = response.json()
+    assert {k: cuerpo[k] for k in ("id", "estado", "track_id", "error", "contingencia")} == {
+        "id": factura["id"], "estado": "aceptado", "track_id": "track-abc", "error": None, "contingencia": False,
+    }
 
 
 @respx.mock

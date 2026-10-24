@@ -3,11 +3,13 @@
 La tabla la crea `db/init/002_facturas.sql` (Postgres local) o la carga
 inicial a Supabase (docs/SUPABASE.md), donde nadie corre db/init después:
 por eso los cambios de esquema de esta tabla se aplican aquí, idempotentes,
-en el lifespan de main.py. `db/init/013_configuracion.sql` repite el mismo
-DDL para el Postgres local (lo verifica tests/test_migraciones.py).
+en el lifespan de main.py. `db/init/013_configuracion.sql` repite
+`DDL_FACTURAS` y `db/init/017_contingencia.sql` repite `DDL_CONTINGENCIA`
+para el Postgres local (lo verifica tests/test_migraciones.py).
 
-Para cambios futuros: agregar sentencias idempotentes al final de
-`DDL_FACTURAS` (`ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`).
+Para cambios futuros: agregar sentencias idempotentes al final del DDL que
+corresponda (`ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`) o un
+DDL nuevo con su propio db/init.
 """
 from __future__ import annotations
 
@@ -27,10 +29,85 @@ ALTER TABLE facturacion.facturas ADD COLUMN IF NOT EXISTS vendedor_id uuid;
 CREATE INDEX IF NOT EXISTS facturas_vendedor_idx ON facturacion.facturas (vendedor_id);
 """
 
+# Modo contingencia (ver app.contingencia y docs/dgii/CONTINGENCIA.md). El
+# estado nuevo de la factura, 'contingencia' (firmada y entregada al
+# comprador, pendiente de envío a la DGII), no necesita cambiar ninguna
+# restricción: `facturacion.facturas.estado` es text sin CHECK (ver
+# db/init/002_facturas.sql).
+DDL_CONTINGENCIA = """
+-- Cuándo se firmó el XML que se envía (y que lleva la representación
+-- impresa); si se emitió en contingencia (la leyenda de la RI no depende
+-- del estado: se conserva tras aceptarse), el lote de envío diferido y los
+-- intentos de envío. Se consulta el catálogo antes de cada ALTER TABLE /
+-- CREATE INDEX para no tomar locks de facturacion.facturas en cada arranque.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'facturacion' AND table_name = 'facturas' AND column_name = 'ultimo_intento_envio'
+    ) THEN
+        ALTER TABLE facturacion.facturas
+            ADD COLUMN IF NOT EXISTS firmado_en timestamptz,
+            ADD COLUMN IF NOT EXISTS emitida_en_contingencia boolean NOT NULL DEFAULT false,
+            ADD COLUMN IF NOT EXISTS contingencia_en timestamptz,
+            ADD COLUMN IF NOT EXISTS lote_id text,
+            ADD COLUMN IF NOT EXISTS intentos_envio integer NOT NULL DEFAULT 0,
+            ADD COLUMN IF NOT EXISTS ultimo_intento_envio timestamptz;
+    END IF;
+    IF to_regclass('facturacion.facturas_contingencia_idx') IS NULL THEN
+        CREATE INDEX IF NOT EXISTS facturas_contingencia_idx ON facturacion.facturas (firmado_en, creado_en)
+            WHERE estado = 'contingencia';
+    END IF;
+    IF to_regclass('facturacion.facturas_lote_idx') IS NULL THEN
+        CREATE INDEX IF NOT EXISTS facturas_lote_idx ON facturacion.facturas (lote_id) WHERE lote_id IS NOT NULL;
+    END IF;
+END;
+$$;
+
+-- Estado compartido del modo contingencia (una sola fila, id = 1): lo
+-- actualizan los envíos que fallan por conectividad, los que salen bien y
+-- las sondas de la tarea de fondo. `activa` hace que los envíos siguientes
+-- vayan directo a contingencia tras una sonda corta, sin esperar el timeout.
+CREATE TABLE IF NOT EXISTS facturacion.contingencia (
+    id                    smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    activa                boolean NOT NULL DEFAULT false,
+    desde                 timestamptz,
+    errores_consecutivos  integer NOT NULL DEFAULT 0,
+    ultimo_intento        timestamptz,
+    ultimo_error          text,
+    ultimo_exito          timestamptz,
+    actualizado_en        timestamptz NOT NULL DEFAULT now()
+);
+INSERT INTO facturacion.contingencia (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+-- Lotes de envío de las facturas en contingencia (A-0001, A-0002...), las
+-- más antiguas primero. `estado`: en_cola -> enviando -> completado, o
+-- interrumpido (se cayó la conexión a mitad: se retoma en la próxima
+-- vuelta). Los contadores los recalcula app.contingencia de las facturas
+-- del lote.
+CREATE SEQUENCE IF NOT EXISTS facturacion.lotes_contingencia_seq;
+CREATE TABLE IF NOT EXISTS facturacion.lotes_contingencia (
+    id             text PRIMARY KEY,
+    documentos     integer NOT NULL DEFAULT 0,
+    enviados       integer NOT NULL DEFAULT 0,
+    aceptados      integer NOT NULL DEFAULT 0,
+    rechazados     integer NOT NULL DEFAULT 0,
+    estado         text NOT NULL DEFAULT 'en_cola'
+                   CHECK (estado IN ('en_cola', 'enviando', 'interrumpido', 'completado')),
+    ultimo_error   text,
+    creado_en      timestamptz NOT NULL DEFAULT now(),
+    iniciado_en    timestamptz,
+    completado_en  timestamptz,
+    actualizado_en timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS lotes_contingencia_creado_idx ON facturacion.lotes_contingencia (creado_en DESC);
+"""
+
 
 async def aplicar_migraciones(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
             await conn.execute(DDL_FACTURAS)
-    logger.info("Columnas de 'facturacion.facturas' verificadas")
+            await conn.execute(DDL_CONTINGENCIA)
+    logger.info("Columnas de 'facturacion.facturas' y tablas de contingencia verificadas")

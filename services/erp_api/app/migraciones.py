@@ -10,8 +10,8 @@ DDL al arrancar (lifespan de main.py), justo después de crear el pool. Todo
 es idempotente (`IF NOT EXISTS` / `CREATE OR REPLACE`), así que correrlo en
 cada arranque es seguro. `db/init/007_ventas.sql`, `008_impuestos.sql`,
 `009_fecha_dgii_segura.sql`, `010_compras.sql`, `012_bancos_contabilidad.sql`,
-`013_configuracion.sql`, `014_operacion.sql`, `015_nomina.sql` y
-`016_soluciones.sql` contienen
+`013_configuracion.sql`, `014_operacion.sql`, `015_nomina.sql`,
+`016_soluciones.sql` y `017_contingencia.sql` contienen
 exactamente el mismo DDL para el Postgres local de desarrollo (lo verifica
 tests/test_migraciones.py).
 
@@ -1043,6 +1043,28 @@ CREATE TABLE IF NOT EXISTS soluciones.pos_ventas (
 CREATE INDEX IF NOT EXISTS pos_ventas_sesion_idx ON soluciones.pos_ventas (sesion_id);
 """
 
+# Modo contingencia: los asientos automáticos de las facturas en papel
+# (serie B) de `operacion.facturas_papel` (origen 'factura_papel', ver
+# contabilidad_repository._fuente_facturas_papel). Se consulta el catálogo
+# antes del ALTER TABLE para no tomar su lock en cada arranque. Mismo DDL en
+# db/init/017_contingencia.sql.
+DDL_CONTINGENCIA = """
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'contabilidad.asientos'::regclass AND conname = 'asientos_origen_check'
+          AND pg_get_constraintdef(oid) NOT LIKE '%factura_papel%'
+    ) THEN
+        ALTER TABLE contabilidad.asientos DROP CONSTRAINT asientos_origen_check;
+        ALTER TABLE contabilidad.asientos ADD CONSTRAINT asientos_origen_check
+            CHECK (origen IN ('manual', 'venta', 'nota_credito', 'nota_debito', 'cobro', 'compra', 'pago',
+                              'movimiento', 'transferencia', 'proporcionalidad', 'depreciacion',
+                              'factura_papel'));
+    END IF;
+END;
+$$;
+"""
 
 
 async def _migrar(conn: asyncpg.Connection) -> None:
@@ -1059,6 +1081,7 @@ async def _migrar(conn: asyncpg.Connection) -> None:
         await conn.execute(DDL_OPERACION)
         await conn.execute(DDL_NOMINA)
         await conn.execute(DDL_SOLUCIONES)
+        await conn.execute(DDL_CONTINGENCIA)
 
 
 async def aplicar_migraciones(

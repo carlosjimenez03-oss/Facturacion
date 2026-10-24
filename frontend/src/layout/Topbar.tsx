@@ -88,7 +88,7 @@ export function Topbar() {
 
   const resumenTareas = useOpcional<ResumenTareas>("/tareas/resumen", 120_000);
   const tareas = resumenTareas?.pendientes ?? null;
-  // Modo contingencia calculado por el Centro de sincronización (fallos seguidos con la DGII).
+  // Modo contingencia del Centro de sincronización (el estado que guarda facturas-api).
   const sincronizacion = useOpcional<ResumenSincronizacion>("/sincronizacion/resumen", 60_000);
   const contingencia = Boolean(sincronizacion?.contingencia.activa);
 
@@ -139,7 +139,7 @@ export function Topbar() {
   }
 
   const conexion = contingencia
-    ? { cls: "conn-cont", txt: "Modo contingencia", tip: "La DGII no responde: los e-CF se firman y quedan en cola para enviarse al restablecerse el servicio." }
+    ? { cls: "conn-cont", txt: "Modo contingencia", tip: "La DGII no responde: los e-CF se firman, se entregan con la leyenda de contingencia y se envían en lotes al restablecerse el servicio." }
     : enLinea
       ? { cls: "conn-on", txt: "En línea", tip: "La API de facturación responde." }
       : { cls: "conn-off", txt: "Sin conexión", tip: `Sin conexión con la API de facturación. ${error ?? ""}` };

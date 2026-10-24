@@ -5,12 +5,13 @@ import { ESTADO_BADGE, ESTADO_LABEL, ESTADOS_PENDIENTES, TIPO_ECF_LABEL } from "
 import type { FacturaResumen } from "../lib/types";
 import { motivoRechazo, useFacturas } from "../lib/useFacturas";
 
-type Filtro = "todas" | "aceptadas" | "pendientes" | "rechazadas";
+type Filtro = "todas" | "aceptadas" | "pendientes" | "contingencia" | "rechazadas";
 
 const FILTROS: { id: Filtro; label: string; test: (f: FacturaResumen) => boolean }[] = [
   { id: "todas", label: "Todas", test: () => true },
   { id: "aceptadas", label: "Aceptadas", test: (f) => f.estado === "aceptado" },
   { id: "pendientes", label: "En proceso", test: (f) => ESTADOS_PENDIENTES.includes(f.estado) },
+  { id: "contingencia", label: "En contingencia", test: (f) => f.estado === "contingencia" },
   { id: "rechazadas", label: "Rechazadas", test: (f) => f.estado === "rechazado" || f.estado === "error" },
 ];
 
@@ -23,7 +24,8 @@ export function FacturaList() {
   // Refrescar al entrar, por si se emitió o firmó algo en otra pantalla.
   useEffect(() => recargar(), []);
 
-  const rechazadas = facturas.filter(FILTROS[3].test);
+  const rechazadas = facturas.filter(FILTROS[4].test);
+  const enContingencia = facturas.filter(FILTROS[3].test).length;
   const filas = useMemo(() => {
     const texto = q.trim().toLowerCase();
     const f = FILTROS.find((x) => x.id === filtro)!;
@@ -65,6 +67,20 @@ export function FacturaList() {
             ))}
           </div>
         </section>
+      )}
+
+      {enContingencia > 0 && (
+        <div className="al al-o" role="status">
+          <span style={{ flex: 1 }}>
+            <b>
+              {enContingencia === 1 ? "1 factura emitida en contingencia" : `${enContingencia} facturas emitidas en contingencia`}
+            </b>{" "}
+            — firmadas y entregables al cliente con la leyenda de contingencia; se enviarán automáticamente a la DGII al restablecerse la conexión.
+          </span>
+          <Link to="/sincronizacion" className="btn btn-o btn-sm">
+            Centro de sincronización
+          </Link>
+        </div>
       )}
 
       <section className="card">
@@ -150,6 +166,7 @@ export function FacturaList() {
                     <td>
                       <span className={ESTADO_BADGE[f.estado]}>{ESTADO_LABEL[f.estado] ?? f.estado}</span>
                       {(f.estado === "rechazado" || f.estado === "error") && <div className="row-motivo">{motivoRechazo(f)}</div>}
+                      {f.estado === "contingencia" && <div className="hint">Se enviará sola al reconectar{f.lote_id ? ` · lote ${f.lote_id}` : ""}</div>}
                     </td>
                     <td className="mono mut" title={f.track_id ?? ""}>
                       {f.track_id ? `${f.track_id.slice(0, 8)}…${f.track_id.slice(-4)}` : "—"}

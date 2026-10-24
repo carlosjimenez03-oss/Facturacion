@@ -6,7 +6,7 @@ import respx
 from fastapi.testclient import TestClient
 from httpx import ConnectError, Response
 
-from services.facturas_api.app import main
+from services.facturas_api.app import envio, main
 from services.facturas_api.app import repository
 
 
@@ -512,7 +512,7 @@ def test_enviar_factura_tipo_41_registra_compra_606_con_rnc_comprador(client, mo
 
     monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
     monkeypatch.setattr(repository, "registrar_resultado_envio", fake_registrar)
-    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+    monkeypatch.setattr(envio, "registrar_compra_606", fake_registrar_compra_606)
 
     respx.post(f"{main.settings.recepcion_service_url}/ecf").mock(
         return_value=Response(200, json={"trackId": "track-abc"})
@@ -550,7 +550,7 @@ def test_enviar_factura_tipo_43_registra_compra_606_con_rnc_propio(client, monke
 
     monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
     monkeypatch.setattr(repository, "registrar_resultado_envio", fake_registrar)
-    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+    monkeypatch.setattr(envio, "registrar_compra_606", fake_registrar_compra_606)
 
     respx.post(f"{main.settings.recepcion_service_url}/ecf").mock(
         return_value=Response(200, json={"trackId": "track-abc"})
@@ -581,7 +581,7 @@ def test_enviar_factura_tipo_31_no_registra_compra_606(client, monkeypatch):
 
     monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
     monkeypatch.setattr(repository, "registrar_resultado_envio", fake_registrar)
-    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+    monkeypatch.setattr(envio, "registrar_compra_606", fake_registrar_compra_606)
 
     respx.post(f"{main.settings.recepcion_service_url}/ecf").mock(
         return_value=Response(200, json={"trackId": "track-abc"})
@@ -608,7 +608,7 @@ def test_enviar_factura_ok_no_falla_si_registrar_compra_606_falla(client, monkey
 
     monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
     monkeypatch.setattr(repository, "registrar_resultado_envio", fake_registrar)
-    monkeypatch.setattr(main, "registrar_compra_606", fake_registrar_compra_606)
+    monkeypatch.setattr(envio, "registrar_compra_606", fake_registrar_compra_606)
 
     respx.post(f"{main.settings.recepcion_service_url}/ecf").mock(
         return_value=Response(200, json={"trackId": "track-abc"})

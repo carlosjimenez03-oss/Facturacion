@@ -527,7 +527,7 @@ _SELECT_ULTIMA_COMPRA = f"""
         SELECT {_RNC_COMPRADOR} AS rnc, max(COALESCE({_FECHA_EMISION}, f.creado_en::date)) AS ultima
         FROM facturacion.facturas f
         CROSS JOIN LATERAL (SELECT f.datos::jsonb AS d) x
-        WHERE f.estado IN ('aceptado', 'enviado') AND f.tipo_ecf IN {_TIPOS_CXC}
+        WHERE f.estado IN ('aceptado', 'enviado', 'contingencia') AND f.tipo_ecf IN {_TIPOS_CXC}
         GROUP BY 1
     )
     SELECT c.id, c.nombre, c.telefono, c.correo, co.ultima, ($1::date - co.ultima) AS dias_sin_comprar
@@ -872,8 +872,10 @@ async def listar_sesiones(pool: asyncpg.Pool, *, limite: int = 30) -> list[dict[
 async def registrar_venta(
     pool: asyncpg.Pool, sesion_id: uuid.UUID, *, factura_id: uuid.UUID, pagos: list[dict[str, Any]]
 ) -> dict[str, Any]:
-    """Registra en la caja un e-CF YA enviado a la DGII (con trackId). El
-    total es el del e-CF guardado, no el que diga el cliente HTTP."""
+    """Registra en la caja un e-CF YA emitido: enviado a la DGII (con
+    trackId) o emitido en contingencia (firmado, se envía solo al
+    reconectar; ver facturas_api app.contingencia). El total es el del e-CF
+    guardado, no el que diga el cliente HTTP."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             sesion = await conn.fetchrow(
@@ -885,7 +887,7 @@ async def registrar_venta(
                 raise ConflictoSolucionesError("La sesión de caja ya está cerrada")
             factura = await conn.fetchrow(
                 f"""
-                SELECT f.id, f.encf, f.tipo_ecf, f.track_id, {_TOTAL} AS total,
+                SELECT f.id, f.encf, f.tipo_ecf, f.track_id, f.estado, {_TOTAL} AS total,
                        {_RNC_COMPRADOR} AS cliente_rnc, {_NOMBRE_COMPRADOR} AS cliente_nombre
                 FROM facturacion.facturas f
                 CROSS JOIN LATERAL (SELECT f.datos::jsonb AS d) x
@@ -897,7 +899,7 @@ async def registrar_venta(
                 raise NoEncontradoError("Factura no encontrada")
             if factura["tipo_ecf"] not in (31, 32):
                 raise DatosInvalidosError("El POS solo registra e-CF de consumo (32) o crédito fiscal (31)")
-            if not factura["track_id"]:
+            if not factura["track_id"] and factura["estado"] != "contingencia":
                 raise ConflictoSolucionesError("La factura aún no se ha enviado a la DGII")
             montos = calc.validar_pagos(factura["total"], pagos)
             pagos_json = [

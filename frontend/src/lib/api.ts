@@ -1,6 +1,8 @@
 import { fetchConSesion } from "./sesion";
 import type {
   EnviarResponse,
+  EstadoContingenciaApi,
+  ReintentoContingencia,
   FacturaDatos,
   FacturaDetalle,
   FacturaResumen,
@@ -85,6 +87,12 @@ export const api = {
     request<FacturaDetalle>(`/facturas/${id}/actualizar-estado`, { method: "POST" }),
 
   representacionImpresaUrl: (id: string) => `${API_URL}/facturas/${id}/representacion-impresa`,
+
+  /** Modo contingencia: estado, pendientes de envío y últimos lotes. */
+  contingencia: () => request<EstadoContingenciaApi>("/contingencia"),
+
+  /** "Reintentar conexión ahora": sonda corta y, si la DGII responde, lanza el envío por lotes. */
+  reintentarContingencia: () => request<ReintentoContingencia>("/contingencia/reintentar", { method: "POST" }),
 };
 
 export { ApiError };

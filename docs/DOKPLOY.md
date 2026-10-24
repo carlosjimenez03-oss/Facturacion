@@ -84,6 +84,14 @@ aparte. Instalación, migración de los datos existentes, configuración de
   de fondo cada `SINCRONIZAR_ESTADO_CADA_SEGUNDOS` (default `120`, `0` la
   desactiva). Cada consulta se audita en `facturacion.envios_dgii` con
   `modulo = 'consulta_resultado'`. Ver la sección "Facturación" del README.
+  **Modo contingencia** (ver `docs/dgii/CONTINGENCIA.md`): facturas-api
+  firma el e-CF con el mismo certificado (`CERTIFICADO_PATH`, necesita el
+  .p12 montado) y, si la DGII no responde, lo deja en `contingencia` y lo
+  envía por lotes en esa misma tarea de fondo. Opcionales:
+  `TIMEOUT_ENVIO_SEGUNDOS` (60), `TIMEOUT_SONDA_SEGUNDOS` (5),
+  `CONTINGENCIA_LOTE_TAMANO` (20) y `CONTINGENCIA_HORAS_LIMITE` (72). Sus
+  tablas (`facturacion.contingencia`, `facturacion.lotes_contingencia`) las
+  crea al arrancar.
 - `inventario-api` usa el esquema `inventario` y `formato-606` el esquema
   `compras606`, ambos de forma obligatoria.
 - `erp-api` usa el esquema `ventas` (obligatorio) y **lo crea por sí mismo

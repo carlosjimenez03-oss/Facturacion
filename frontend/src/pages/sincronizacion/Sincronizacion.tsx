@@ -5,9 +5,9 @@
 // (actualizar estado / enviar) y la bandeja de Compras (aprobar / rechazar).
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../../lib/api";
+import { api, ApiError } from "../../lib/api";
 import { comprasApi } from "../../lib/comprasApi";
-import { TIPO_ECF_LABEL } from "../../lib/estados";
+import { LEYENDA_CONTINGENCIA, TIPO_ECF_LABEL } from "../../lib/estados";
 import { sincronizacionApi } from "../../lib/operacionApi";
 import type {
   CanalSincronizacion,
@@ -15,6 +15,7 @@ import type {
   EventoSincronizacion,
   FacturaPapel,
   ItemSincronizacion,
+  LoteContingencia,
   ResultadoEvento,
   ResumenSincronizacion,
 } from "../../lib/operacionApi";
@@ -58,6 +59,22 @@ const MODULOS = [
 
 const PAGINA_HISTORIAL = 25;
 const MAXIMO_REINTENTOS = 20;
+// Mientras facturas-api envía los lotes en segundo plano, el estado se refresca cada pocos segundos.
+const REFRESCO_LOTES_MS = 3_000;
+const REFRESCO_LOTES_MAXIMO = 60;
+
+const ESTADO_LOTE: Record<LoteContingencia["estado"], { label: string; badge: string }> = {
+  en_cola: { label: "En cola", badge: "bd b-borr" },
+  enviando: { label: "Enviando", badge: "bd b-env" },
+  interrumpido: { label: "Interrumpido", badge: "bd b-pend" },
+  completado: { label: "Completado", badge: "bd b-acep" },
+  con_rechazos: { label: "Con rechazos", badge: "bd b-rech" },
+};
+
+/** Si aún hay lotes en curso o resultados por llegar (para seguir refrescando). */
+function lotesEnCurso(lotes: LoteContingencia[]): boolean {
+  return lotes.some((l) => l.estado === "en_cola" || l.estado === "enviando" || l.aceptados + l.rechazados < l.documentos);
+}
 
 export function SincronizacionPage() {
   const [resumen, setResumen] = useState<ResumenSincronizacion | null>(null);
@@ -137,15 +154,63 @@ export function SincronizacionPage() {
     }
   }
 
-  /** "Reintentar conexión ahora": prueba con el primer pendiente de la DGII y, si responde, sigue con los demás. */
+  /** Refresca el resumen mientras facturas-api envía los lotes en segundo plano. */
+  async function seguirLotes() {
+    for (let i = 0; i < REFRESCO_LOTES_MAXIMO; i += 1) {
+      await new Promise((r) => window.setTimeout(r, REFRESCO_LOTES_MS));
+      const r = await sincronizacionApi.resumen().catch(() => null);
+      if (!r) continue;
+      setResumen(r);
+      if (!r.contingencia.pendientes && !lotesEnCurso(r.contingencia.lotes)) break;
+      if (r.contingencia.activa && r.contingencia.lotes.some((l) => l.estado === "interrumpido")) break;
+    }
+    await cargar();
+  }
+
+  /**
+   * "Reintentar conexión ahora": sonda corta de facturas-api (POST /contingencia/reintentar) que, si la DGII responde,
+   * envía por lotes lo emitido en contingencia; luego reintenta los envíos fallidos y las consultas pendientes.
+   */
   async function reintentarConexion() {
+    setReintentando(true);
+    let disponible = true;
+    let lanzado = false;
+    try {
+      const r = await api.reintentarContingencia();
+      disponible = r.disponible;
+      lanzado = r.envio_iniciado;
+      if (!r.disponible) {
+        setReintentando(false);
+        await cargar();
+        mostrarToast("La DGII sigue sin responder", {
+          detalle: `${r.detalle ?? "Sin conexión"}. Se reintentará automáticamente. Puede seguir facturando en contingencia.`,
+          error: true,
+        });
+        return;
+      }
+      if (lanzado) {
+        mostrarToast("Conexión con la DGII restablecida", {
+          detalle: `Enviando ${r.estado.pendientes} comprobante(s) emitidos en contingencia en lotes de ${r.estado.lote_tamano}.`,
+        });
+      }
+    } catch (err) {
+      // facturas-api sin el modo contingencia (404): se sigue con los reintentos uno a uno.
+      if (!(err instanceof ApiError && err.status === 404)) {
+        setReintentando(false);
+        mostrarToast("No se pudo probar la conexión", { detalle: mensajeError(err), error: true });
+        return;
+      }
+    }
     const cola = pendientes.filter((i) => (i.canal === "dgii_envio" || i.canal === "dgii_resultado") && i.accion).slice(0, MAXIMO_REINTENTOS);
     if (cola.length === 0) {
-      await cargar();
-      mostrarToast("No hay envíos pendientes de la DGII", { detalle: "El estado se actualizó." });
+      setReintentando(false);
+      if (lanzado) await seguirLotes();
+      else {
+        await cargar();
+        mostrarToast(disponible ? "La DGII responde" : "No hay envíos pendientes de la DGII", { detalle: "No hay envíos pendientes; el estado se actualizó." });
+      }
       return;
     }
-    setReintentando(true);
     let ok = 0;
     let fallo: string | null = null;
     for (const item of cola) {
@@ -161,6 +226,7 @@ export function SincronizacionPage() {
     await cargar();
     if (ok === 0) mostrarToast("La DGII sigue sin responder", { detalle: fallo ?? "Se reintentará automáticamente. Puede seguir facturando.", error: true });
     else mostrarToast("Conexión con la DGII restablecida", { detalle: `${ok} de ${cola.length} comprobantes sincronizados${fallo ? ` · último error: ${fallo}` : ""}.` });
+    if (lanzado) await seguirLotes();
   }
 
   const c = resumen?.contingencia;
@@ -177,8 +243,8 @@ export function SincronizacionPage() {
           </svg>
           <div className="sy-banner-t">
             <b>Modo contingencia activo desde las {hora(c.desde).replace(/\.$/, "")}.</b> Los servicios de la DGII no responden ({c.errores_consecutivos} intentos seguidos fallaron
-            {c.ultimo_error ? `: ${c.ultimo_error}` : ""}). Las facturas se siguen emitiendo; las que no llegaron a la DGII se envían al restablecerse la
-            conexión. Puede entregarlas al cliente con la leyenda de contingencia.
+            {c.ultimo_error ? `: ${c.ultimo_error}` : ""}). Las facturas se siguen emitiendo y firmando; se enviarán en lotes al restablecerse la conexión. Puede
+            entregarlas al cliente: su representación impresa lleva la leyenda «{LEYENDA_CONTINGENCIA}»
           </div>
           <button type="button" className="btn btn-o btn-sm" onClick={reintentarConexion} disabled={reintentando}>
             {reintentando ? "Reintentando…" : "Reintentar conexión ahora"}
@@ -213,7 +279,7 @@ export function SincronizacionPage() {
           </span>
           <span className="s">
             {resumen
-              ? `${c!.pendientes} sin llegar a la DGII · ${resumen.en_proceso_dgii} en proceso · RD$ ${formatoMonto(Number(c!.monto_pendiente) + Number(resumen.monto_en_proceso))}`
+              ? `${c!.pendientes} ${c!.fuente === "facturas_api" ? "en contingencia" : "sin llegar a la DGII"} · ${resumen.en_proceso_dgii} en proceso · RD$ ${formatoMonto(Number(c!.monto_pendiente) + Number(resumen.monto_en_proceso))}`
               : "—"}
           </span>
         </div>
@@ -221,7 +287,13 @@ export function SincronizacionPage() {
           <span className="k">{c?.activa ? "Tiempo en contingencia" : "Conexión con la DGII"}</span>
           <span className="v">{c ? (c.activa ? duracion(c.desde, ahora) : resumen!.errores_7d ? "Con fallas" : "En línea") : "—"}</span>
           <span className="s">
-            {c?.activa ? "Límite recomendado: 72 horas" : resumen ? `${resumen.eventos_7d} eventos en 7 días · ${resumen.errores_7d} con error` : "—"}
+            {c?.activa
+              ? c.vence_en
+                ? `Plazo de la DGII: 72 horas · enviar antes del ${fechaHora(c.vence_en)}`
+                : "Plazo de la DGII: 72 horas para enviar lo emitido"
+              : resumen
+                ? `${resumen.eventos_7d} eventos en 7 días · ${resumen.errores_7d} con error`
+                : "—"}
           </span>
         </div>
         <div className="card stat">
@@ -320,21 +392,29 @@ export function SincronizacionPage() {
             <section className="card">
               <div className="card-h">
                 <h2>Progreso por lotes</h2>
+                <span className="hint">{c.pendientes ? `${c.pendientes} por enviar` : "Todo enviado"}</span>
               </div>
               <div className="card-b sy-canales">
                 {c.lotes.map((l) => {
                   const hechos = l.aceptados + l.rechazados;
+                  const enviados = l.enviados ?? l.documentos - l.pendientes;
                   return (
-                    <div key={l.id} className="sy-canal">
+                    <div key={l.id} className="sy-canal" data-lote={l.id}>
                       <div className="sy-canal-h">
                         <span>
-                          <span className="mono">{l.id}</span> · {l.documentos} e-CF
+                          <span className="mono">{l.id}</span> · {l.documentos} e-CF <span className={ESTADO_LOTE[l.estado].badge}>{ESTADO_LOTE[l.estado].label}</span>
                         </span>
                         <span className="mut">{l.estado === "en_cola" ? "En cola" : `${hechos} de ${l.documentos}`}</span>
                       </div>
                       <div className={l.estado === "interrumpido" ? "pb warn" : l.rechazados ? "pb bad" : "pb"}>
                         <span style={{ width: `${l.documentos ? (hechos * 100) / l.documentos : 0}%` }} />
                       </div>
+                      <span className="hint">
+                        {enviados} enviados · {l.aceptados} aceptados{l.rechazados ? ` · ${l.rechazados} rechazados` : ""}
+                        {l.estado === "interrumpido" ? " · se retoma al reconectar" : ""}
+                        {l.iniciado_en ? ` · ${fechaHora(l.iniciado_en)}` : ""}
+                      </span>
+                      {l.estado === "interrumpido" && l.ultimo_error && <span className="hint sy-err">{l.ultimo_error}</span>}
                     </div>
                   );
                 })}
