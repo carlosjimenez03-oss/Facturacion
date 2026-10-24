@@ -3,7 +3,8 @@ cobros y cuentas por cobrar, y un resumen de los documentos de venta; y el
 módulo de impuestos (formatos 607/608, pre-cálculos IT-1/IR-17/IR-2 y
 declaraciones), con sus rutas en `impuestos.py`; y Compras (bandeja de
 entrada de e-CF recibidos, cuentas por pagar, pagos a proveedores y
-retenciones), con sus rutas en `compras.py`.
+retenciones), con sus rutas en `compras.py`; y Kontara Nómina (empleados,
+períodos de nómina, TSS e ISR de asalariados), con sus rutas en `nomina.py`.
 
 Vive en sus propios esquemas `ventas`, `impuestos` y `compras` (más
 `recepcion.ecf_recibidos`), que este servicio crea
@@ -26,7 +27,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from libs.ecf_common.db import cerrar_pool, crear_pool
 
-from . import compras, impuestos, repository
+from . import compras, impuestos, nomina, repository
 from .config import ErpApiSettings, get_settings
 from .migraciones import aplicar_migraciones
 from .repository import (
@@ -108,6 +109,7 @@ app.add_middleware(
 
 app.include_router(impuestos.router)
 app.include_router(compras.router)
+app.include_router(nomina.router)
 
 
 def _pool():

@@ -33,6 +33,16 @@ import { AjustesPage } from "./pages/inventario/Ajustes";
 import { AlmacenesPage } from "./pages/inventario/Almacenes";
 import { KardexPage } from "./pages/inventario/Kardex";
 import { LotesPage } from "./pages/inventario/Lotes";
+import { BandejaNominaPage } from "./pages/nomina/Bandeja";
+import { ConfiguracionNominaPage } from "./pages/nomina/Configuracion";
+import { EmpleadosPage } from "./pages/nomina/Empleados";
+import { NominaInicio } from "./pages/nomina/Inicio";
+import { PagosNominaPage } from "./pages/nomina/Pagos";
+import { PeriodoDetalle } from "./pages/nomina/PeriodoDetalle";
+import { PeriodosPage } from "./pages/nomina/Periodos";
+import { RecibosPage } from "./pages/nomina/Recibos";
+import { ReportesNominaPage } from "./pages/nomina/Reportes";
+import { SuscripcionesNominaPage } from "./pages/nomina/Suscripciones";
 import { Inicio } from "./pages/Inicio";
 import { Proximamente } from "./pages/Proximamente";
 
@@ -104,6 +114,17 @@ export default function App() {
           element={<Formato606RegistroForm />}
         />
         <Route path="/formato-606/registros/:id/editar" element={<Formato606RegistroForm />} />
+
+        <Route path="/nomina" element={<NominaInicio />} />
+        <Route path="/nomina/bandeja" element={<BandejaNominaPage />} />
+        <Route path="/nomina/empleados" element={<EmpleadosPage />} />
+        <Route path="/nomina/periodos" element={<PeriodosPage />} />
+        <Route path="/nomina/periodos/:id" element={<PeriodoDetalle />} />
+        <Route path="/nomina/periodos/:id/recibos" element={<RecibosPage />} />
+        <Route path="/nomina/reportes" element={<ReportesNominaPage />} />
+        <Route path="/nomina/pagos" element={<PagosNominaPage />} />
+        <Route path="/nomina/suscripciones" element={<SuscripcionesNominaPage />} />
+        <Route path="/nomina/configuracion" element={<ConfiguracionNominaPage />} />
 
         <Route path="/modulo/:slug" element={<Proximamente />} />
         <Route path="*" element={<Proximamente />} />

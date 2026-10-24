@@ -117,7 +117,7 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
 ];
 
 export const MENU_SOLUCIONES: MenuItem[] = [
-  { id: "nomina", label: "Nómina", icon: <IconNomina />, to: pendiente("nomina") },
+  { id: "nomina", label: "Nómina", icon: <IconNomina />, to: "/nomina" },
   { id: "pos", label: "POS", icon: <IconPos />, to: pendiente("pos") },
   { id: "portal", label: "Portal de clientes", icon: <IconPortal />, to: pendiente("portal-clientes") },
   { id: "ventas", label: "Ventas", icon: <IconReportes />, to: pendiente("ventas") },
