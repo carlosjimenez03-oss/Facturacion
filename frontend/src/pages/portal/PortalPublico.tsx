@@ -1,11 +1,15 @@
 // Página pública del portal de clientes (/p/:token): sin sesión, de solo
 // lectura. erp-api valida el token y solo devuelve los e-CF aceptados del
 // cliente de ese enlace; los PDF y XML también pasan por erp-api con el token.
+// Fase 7: «Pagar con tarjeta» lleva al cliente a la página de pago del banco
+// (Azul) con un formulario firmado por erp-api; la tarjeta nunca pasa por aquí.
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { formatoMonto, formatoRnc, MARCA } from "../../lib/marca";
+import { enviarAPasarela, pagosApi, recordarPortal } from "../../lib/pagosApi";
 import { ErpApiError, solucionesApi } from "../../lib/solucionesApi";
-import type { PortalPublico } from "../../lib/solucionesApi";
+import type { FacturaPortal, PortalPublico } from "../../lib/solucionesApi";
+import { Modal } from "../ingresos/IngresosShell";
 import { fechaLegible, mensajeError } from "../ingresos/ingresosUtil";
 import { ESTADO_PAGO, ETIQUETA_METODO } from "./portalUtil";
 import "./portal.css";
@@ -14,6 +18,10 @@ export function PortalPublicoPage() {
   const { token = "" } = useParams();
   const [datos, setDatos] = useState<PortalPublico | null>(null);
   const [error, setError] = useState<{ noValido: boolean; texto: string } | null>(null);
+  const [pagar, setPagar] = useState<FacturaPortal | null>(null);
+  const [monto, setMonto] = useState("");
+  const [enviando, setEnviando] = useState(false);
+  const [errorPago, setErrorPago] = useState<string | null>(null);
 
   useEffect(() => {
     document.title = `Mis facturas · ${MARCA}`;
@@ -47,6 +55,41 @@ export function PortalPublicoPage() {
   }
 
   const t = datos.transferencia;
+  const enLinea = datos.pago_en_linea;
+  const puedePagar = (f: FacturaPortal) => Boolean(enLinea) && Number(f.pendiente) > 0;
+
+  function abrirPago(f: FacturaPortal) {
+    setPagar(f);
+    setMonto(String(Number(f.pendiente).toFixed(2)));
+    setErrorPago(null);
+  }
+
+  async function continuarAlPago() {
+    if (!pagar || !enLinea) return;
+    const parcial = enLinea.permitir_parcial && Number(monto) !== Number(pagar.pendiente);
+    if (parcial && !(Number(monto) > 0 && Number(monto) <= Number(pagar.pendiente))) {
+      setErrorPago(`Escriba un monto entre RD$ 0.01 y RD$ ${formatoMonto(pagar.pendiente)}.`);
+      return;
+    }
+    setEnviando(true);
+    setErrorPago(null);
+    try {
+      const pago = await pagosApi.iniciar(token, pagar.id, parcial ? Number(monto).toFixed(2) : null);
+      recordarPortal(pago.referencia, token);
+      enviarAPasarela(pago);
+    } catch (err) {
+      setErrorPago(mensajeError(err));
+      setEnviando(false);
+    }
+  }
+
+  const botonPagar = (f: FacturaPortal) =>
+    puedePagar(f) && (
+      <button type="button" className="btn btn-p btn-sm" data-pagar={f.encf} onClick={() => abrirPago(f)}>
+        Pagar con tarjeta
+      </button>
+    );
+
   return (
     <div className="pp">
       <div className="pp-in">
@@ -87,6 +130,7 @@ export function PortalPublicoPage() {
                       {Number(f.pendiente) > 0 ? ` · Pendiente RD$ ${formatoMonto(f.pendiente)}` : ""}
                     </span>
                     <div className="row">
+                      {botonPagar(f)}
                       <a className="btn btn-o btn-sm" href={solucionesApi.portalPdfUrl(token, f.id)} target="_blank" rel="noopener noreferrer">
                         PDF
                       </a>
@@ -121,6 +165,7 @@ export function PortalPublicoPage() {
                           {f.vence && Number(f.pendiente) > 0 && <span className="hint"> vence {fechaLegible(f.vence)}</span>}
                         </td>
                         <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                          {botonPagar(f)}
                           <a className="btn btn-g btn-sm" href={solucionesApi.portalPdfUrl(token, f.id)} target="_blank" rel="noopener noreferrer">
                             PDF
                           </a>
@@ -163,14 +208,27 @@ export function PortalPublicoPage() {
                     ) : (
                       <span className="hint">Solicite los datos bancarios a {datos.empresa}.</span>
                     ))}
-                  {m === "tarjeta" && (
-                    <>
-                      <span className="bd b-borr nodot" style={{ alignSelf: "flex-start" }}>
-                        Próximamente
-                      </span>
-                      <span className="hint">El pago con tarjeta en línea aún no está disponible.</span>
-                    </>
-                  )}
+                  {m === "tarjeta" &&
+                    (enLinea ? (
+                      <>
+                        <span>Pague en línea con «Pagar con tarjeta» en la factura.</span>
+                        <span className="hint">
+                          El pago lo procesa {enLinea.nombre} en su página segura: {datos.empresa} no recibe los datos de su tarjeta.
+                        </span>
+                        {enLinea.pruebas && (
+                          <span className="bd b-proc nodot" style={{ alignSelf: "flex-start" }}>
+                            Ambiente de pruebas: no se cobra dinero real
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <>
+                        <span className="bd b-borr nodot" style={{ alignSelf: "flex-start" }}>
+                          Próximamente
+                        </span>
+                        <span className="hint">El pago con tarjeta en línea aún no está disponible.</span>
+                      </>
+                    ))}
                   {(m === "pago_movil" || m === "deposito") && <span className="hint">Coordine el pago con {datos.empresa}.</span>}
                 </div>
               ))}
@@ -182,6 +240,51 @@ export function PortalPublicoPage() {
           Enlace privado de solo lectura · válido hasta el {fechaLegible(datos.expira_en)} · {MARCA}
         </p>
       </div>
+
+      {pagar && enLinea && (
+        <Modal
+          titulo="Pagar con tarjeta"
+          onCerrar={() => !enviando && setPagar(null)}
+          pie={
+            <>
+              <button type="button" className="btn btn-o" onClick={() => setPagar(null)} disabled={enviando}>
+                Cancelar
+              </button>
+              <button type="button" className="btn btn-p" onClick={() => void continuarAlPago()} disabled={enviando}>
+                {enviando ? "Abriendo la página de pago…" : "Continuar al pago seguro"}
+              </button>
+            </>
+          }
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <span>
+              Factura <b className="mono">{pagar.encf}</b> · saldo pendiente <b>RD$ {formatoMonto(pagar.pendiente)}</b>
+            </span>
+            {enLinea.permitir_parcial ? (
+              <div className="fld">
+                <label className="lbl" htmlFor="pp-monto">
+                  Monto a pagar (RD$)
+                </label>
+                <input id="pp-monto" className="inp mono" inputMode="decimal" value={monto} onChange={(e) => setMonto(e.target.value.replace(/[^0-9.]/g, ""))} />
+                <span className="hint">Puede pagar una parte del saldo.</span>
+              </div>
+            ) : (
+              <span>
+                Monto a pagar: <b data-monto-pago>RD$ {formatoMonto(pagar.pendiente)}</b>
+              </span>
+            )}
+            <span className="hint">
+              Lo llevaremos a la página de pago de {enLinea.nombre}. Allí escribe los datos de su tarjeta; {datos.empresa} no los recibe ni los guarda.
+            </span>
+            {enLinea.pruebas && <span className="bd b-proc nodot">Ambiente de pruebas: no se cobra dinero real</span>}
+            {errorPago && (
+              <div className="al al-d" role="alert">
+                <span>{errorPago}</span>
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

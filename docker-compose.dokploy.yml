@@ -280,6 +280,13 @@ services:
       # Plantilla aprobada en Meta (cuerpo con {{1}}) para los mensajes fuera
       # de la ventana de 24 h, si no hay una en Configuración.
       WHATSAPP_PLANTILLA: ${WHATSAPP_PLANTILLA:-}
+      # Pagos con tarjeta en línea desde el portal (docs/PAGOS.md).
+      # PAGOS_URL_PUBLICA = origen público del frontend (de él salen las URL
+      # de retorno de Azul; obligatorio en producción). AZUL_AUTH_KEY es la
+      # alternativa a guardar el AuthKey cifrado en Configuración (manda).
+      PAGOS_URL_PUBLICA: ${PAGOS_URL_PUBLICA:-}
+      AZUL_AUTH_KEY: ${AZUL_AUTH_KEY:-}
+      PAGOS_VIGENCIA_MINUTOS: ${PAGOS_VIGENCIA_MINUTOS:-30}
     # Único servicio que ESCRIBE el certificado activo (los demás lo montan
     # de solo lectura, ver x-modulo-comun).
     volumes:

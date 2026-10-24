@@ -997,6 +997,28 @@ reglas puras en `app/soluciones_calculos.py`; esquema `soluciones`
   emitido por facturas-api con el emisor, el siguiente e-NCF y el vencimiento
   de la secuencia de Configuración.
 
+## Pagos con tarjeta en línea (fase 7)
+
+Rutas en `app/pagos.py` (repositorio `app/pagos_repository.py`, pasarelas y
+firma en `app/pagos_proveedores.py`); tablas `soluciones.pagos_en_linea` y
+`soluciones.pagos_en_linea_eventos` (`DDL_PAGOS` = `db/init/018_pagos_en_linea.sql`).
+Contrato: `frontend/src/lib/pagosApi.ts`. Detalle, campos de Azul y fuentes:
+[`PAGOS.md`](PAGOS.md).
+
+| Método y ruta | Qué hace |
+|---|---|
+| `GET/PUT /configuracion/pagos-en-linea` | Configuración → Pagos en línea (guardar: solo administradores, 403). El AuthKey nunca se devuelve |
+| `GET /pagos-en-linea?factura_id=&estado=` · `GET /pagos-en-linea/{id}/eventos` | Intentos de pago con su estado, AuthorizationCode, RRN, cobro e incidencia (Cobros) |
+| `POST /portal/publico/{token}/pagos` | **Público**: crea el intento y devuelve el formulario firmado para la página del banco |
+| `GET\|POST /portal/publico/pagos/{ref}/retorno/{aprobado\|declinado\|cancelado}` | **Público**: retorno del banco; valida la firma, registra el cobro una sola vez y redirige a `/p/pago/{ref}` |
+| `GET /portal/publico/pagos/{ref}` | **Público**: estado del intento para la página del resultado |
+| `POST /portal/publico/pagos/{ref}/simulado` | **Público**: página de pago del proveedor simulado (nunca en producción) |
+
+`GET /portal/publico/{token}` trae además `pago_en_linea` (null si no se
+ofrece). El cobro de un pago aprobado se registra con
+`repository.registrar_cobro_en` (mismas validaciones y candado que
+`POST /cobros`) y su asiento con `contabilidad_repository.contabilizar_documento`.
+
 ## Despliegue
 
 Servicio `erp-api` en `docker-compose.dokploy.yml` (puerto de host 8019,

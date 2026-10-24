@@ -5,6 +5,7 @@
 // marcas de tiempo ISO 8601.
 import { useEffect, useState } from "react";
 import { ERP_API_URL, ErpApiError } from "./erpApi";
+import type { PagoEnLineaPortal } from "./pagosApi";
 import { fetchConSesion } from "./sesion";
 
 /** Rutas del portal que el cliente abre sin sesión (nginx no las protege). */
@@ -182,6 +183,8 @@ export interface PortalPublico {
   transferencia: Omit<ConfigPortal, "actualizado_en"> | null;
   saldo_pendiente: string;
   facturas: FacturaPortal[];
+  /** Pago con tarjeta en línea (fase 7); null = no se ofrece. */
+  pago_en_linea: PagoEnLineaPortal | null;
 }
 
 // --- Kontara Ventas ------------------------------------------------

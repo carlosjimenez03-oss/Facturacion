@@ -860,43 +860,68 @@ async def registrar_cobro(
     usar FOR UPDATE: facturacion.facturas es de solo lectura para este
     servicio). Con `cuenta_bancaria_id`, el cobro es un movimiento de esa
     cuenta de Bancos (ver `validar_cuenta_bancaria`)."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            return await registrar_cobro_en(
+                conn,
+                factura_id=factura_id,
+                fecha=fecha,
+                monto=monto,
+                metodo=metodo,
+                cuenta_destino=cuenta_destino,
+                referencia=referencia,
+                notas=notas,
+                cuenta_bancaria_id=cuenta_bancaria_id,
+            )
+
+
+async def registrar_cobro_en(
+    conn: asyncpg.Connection,
+    *,
+    factura_id: uuid.UUID,
+    fecha: date | None,
+    monto: Decimal,
+    metodo: str,
+    cuenta_destino: str | None,
+    referencia: str | None,
+    notas: str | None,
+    cuenta_bancaria_id: uuid.UUID | None = None,
+) -> dict[str, Any]:
+    """`registrar_cobro` dentro de una transacción que ya abrió quien llama
+    (las mismas validaciones y el mismo candado por factura). Lo usa también
+    el pago con tarjeta en línea (pagos_repository.py), que marca el intento
+    como cobrado en esa misma transacción."""
     monto = _redondear(monto)
     if monto <= 0:
         raise DatosInvalidosError("El monto del cobro debe ser mayor que cero")
     fecha = fecha or hoy()
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await validar_cuenta_bancaria(conn, cuenta_bancaria_id, fecha, documento="cobro")
-            await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", str(factura_id))
-            cuenta = await conn.fetchrow(
-                f"WITH {_CTE_CXC} SELECT pendiente FROM cxc WHERE factura_id = $1", factura_id
-            )
-            if cuenta is None:
-                raise DatosInvalidosError("La factura no es a crédito o no fue enviada")
-            pendiente: Decimal = cuenta["pendiente"]
-            if pendiente <= 0:
-                raise DatosInvalidosError("La factura ya está cobrada por completo")
-            if monto > pendiente:
-                raise DatosInvalidosError(
-                    f"El monto del cobro ({monto}) supera lo pendiente de la factura ({pendiente})"
-                )
-            cobro_id = await conn.fetchval(
-                """
-                INSERT INTO ventas.cobros
-                    (factura_id, fecha, monto, metodo, cuenta_destino, referencia, notas, cuenta_bancaria_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                RETURNING id
-                """,
-                factura_id,
-                fecha,
-                monto,
-                metodo,
-                cuenta_destino,
-                referencia,
-                notas,
-                cuenta_bancaria_id,
-            )
-            fila = await conn.fetchrow(f"{_SELECT_COBROS} WHERE co.id = $1", cobro_id)
+    await validar_cuenta_bancaria(conn, cuenta_bancaria_id, fecha, documento="cobro")
+    await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", str(factura_id))
+    cuenta = await conn.fetchrow(f"WITH {_CTE_CXC} SELECT pendiente FROM cxc WHERE factura_id = $1", factura_id)
+    if cuenta is None:
+        raise DatosInvalidosError("La factura no es a crédito o no fue enviada")
+    pendiente: Decimal = cuenta["pendiente"]
+    if pendiente <= 0:
+        raise DatosInvalidosError("La factura ya está cobrada por completo")
+    if monto > pendiente:
+        raise DatosInvalidosError(f"El monto del cobro ({monto}) supera lo pendiente de la factura ({pendiente})")
+    cobro_id = await conn.fetchval(
+        """
+        INSERT INTO ventas.cobros
+            (factura_id, fecha, monto, metodo, cuenta_destino, referencia, notas, cuenta_bancaria_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id
+        """,
+        factura_id,
+        fecha,
+        monto,
+        metodo,
+        cuenta_destino,
+        referencia,
+        notas,
+        cuenta_bancaria_id,
+    )
+    fila = await conn.fetchrow(f"{_SELECT_COBROS} WHERE co.id = $1", cobro_id)
     return _fila_cobro(fila)
 
 

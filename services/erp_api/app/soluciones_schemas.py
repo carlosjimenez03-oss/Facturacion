@@ -12,6 +12,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
+from .pagos_schemas import PagoEnLineaPortal
 from .schemas import Monto, _Entrada
 
 PlanClave = Literal["emprendedor", "pyme", "empresarial"]
@@ -181,6 +182,8 @@ class PortalPublico(BaseModel):
     transferencia: DatosTransferencia | None = None
     saldo_pendiente: Monto
     facturas: list[FacturaPortal]
+    # Pago con tarjeta en línea (fase 7); None = no se ofrece.
+    pago_en_linea: PagoEnLineaPortal | None = None
 
 
 class CorreoPayload(_Entrada):
