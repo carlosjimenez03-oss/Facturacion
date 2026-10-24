@@ -68,9 +68,10 @@ movimientos por factura × producto. Por eso:
   por factura que procesó **falló** (facturas-api la deja con
   `facturacion.facturas.inventario_sincronizado = false` e
   `inventario_error` con `no unique or exclusion constraint matching the ON
-  CONFLICT specification`). Se recupera reenviando esas facturas a
-  `POST /movimientos/salida-por-factura` (idempotente por factura) desde la
-  versión nueva. Lo que la versión vieja sí haya escrito (compras,
+  CONFLICT specification`). facturas-api las reintenta solo: su tarea de
+  fondo (cada `SINCRONIZAR_ESTADO_CADA_SEGUNDOS`) reenvía a
+  `POST /movimientos/salida-por-factura` (idempotente por factura) toda
+  factura enviada/aceptada con `inventario_sincronizado = false`. Lo que la versión vieja sí haya escrito (compras,
   productos) queda en `stock_actual` sin reparto por almacén y aparece en
   el aviso del log; se corrige asignando la diferencia al principal:
 

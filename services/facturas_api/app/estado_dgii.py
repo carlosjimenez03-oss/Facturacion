@@ -32,9 +32,10 @@ from typing import Any
 
 from libs.ecf_common.db import registrar_envio
 
-from . import consulta_resultado_client, repository
+from . import consulta_resultado_client, inventario_client, repository
 from .config import FacturasApiSettings
 from .consulta_resultado_client import ConsultaResultadoError
+from .inventario_client import InventarioApiError
 
 logger = logging.getLogger(__name__)
 
@@ -186,6 +187,33 @@ async def sincronizar_pendientes(pool, settings: FacturasApiSettings) -> int:
     return cambiadas
 
 
+async def sincronizar_inventario_pendiente(pool, settings: FacturasApiSettings) -> int:
+    """Reintenta la salida de mercancía de las facturas ya enviadas cuyo
+    registro en inventario_api falló (`inventario_sincronizado = false`).
+    Devuelve cuántas quedaron sincronizadas. Si inventario_api no responde,
+    corta la iteración y lo intenta en la próxima."""
+    pendientes = await repository.listar_inventario_pendiente(pool, limite=LIMITE_POR_ITERACION)
+    sincronizadas = 0
+    for factura in pendientes:
+        fid = uuid.UUID(factura["id"])
+        try:
+            await inventario_client.registrar_salida_por_factura(
+                settings.inventario_api_url,
+                factura["id"],
+                factura["items_inventario"],
+                documento=factura.get("encf"),
+            )
+        except InventarioApiError as exc:
+            await repository.registrar_sincronizacion_inventario(pool, fid, sincronizado=False, error=str(exc))
+            logger.warning("Salida de inventario de la factura %s sigue pendiente: %s", factura["id"], exc)
+            if "No se pudo contactar" in str(exc):
+                break
+            continue
+        await repository.registrar_sincronizacion_inventario(pool, fid, sincronizado=True, error=None)
+        sincronizadas += 1
+    return sincronizadas
+
+
 async def bucle_sincronizacion(pool, settings: FacturasApiSettings) -> None:
     """Tarea de fondo: cada `sincronizar_estado_cada_segundos` consulta las
     facturas pendientes. Cualquier excepción se registra y el bucle sigue;
@@ -198,5 +226,8 @@ async def bucle_sincronizacion(pool, settings: FacturasApiSettings) -> None:
             cambiadas = await sincronizar_pendientes(pool, settings)
             if cambiadas:
                 logger.info("Sincronización de estados DGII: %s factura(s) actualizada(s)", cambiadas)
+            inventario = await sincronizar_inventario_pendiente(pool, settings)
+            if inventario:
+                logger.info("Salidas de inventario reintentadas: %s factura(s) sincronizada(s)", inventario)
         except Exception:
             logger.exception("Falló la sincronización de estados DGII; se reintenta en %ss", intervalo)
