@@ -504,6 +504,10 @@ async def _precalculo_ir2(conn: asyncpg.Connection, anio: str) -> dict[str, Any]
     valuacion = await conn.fetchval(
         "SELECT COALESCE(sum(GREATEST(stock_actual, 0) * costo_promedio), 0) FROM inventario.productos"
     )
+    # Importación diferida: contabilidad_repository importa compras_repository,
+    # que importa este módulo.
+    from .contabilidad_repository import depreciacion_fiscal
+
     resultado = precalculos.calcular_ir2(
         anio=anio,
         ingresos=ingresos,
@@ -511,6 +515,7 @@ async def _precalculo_ir2(conn: asyncpg.Connection, anio: str) -> dict[str, Any]
         valuacion_inventario=precalculos.redondear(Decimal(valuacion)),
         ajustes=await _leer_ajustes(conn, "ir2", anio),
         hoy=hoy(),
+        depreciacion_sugerida=(await depreciacion_fiscal(conn, anio))["total"],
     )
     resultado["advertencias"] = _advertencia_pendientes(
         await _cantidad_pendientes_dgii(conn, desde, hasta)
