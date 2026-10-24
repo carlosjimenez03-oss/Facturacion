@@ -91,6 +91,7 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
     label: "Contabilidad",
     icon: <IconContabilidad />,
     hijos: [
+      { label: "Resumen", to: "/contabilidad/resumen" },
       { label: "Catálogo de cuentas", to: "/contabilidad/catalogo" },
       { label: "Asientos", to: "/contabilidad/asientos" },
       { label: "Activos fijos", to: "/contabilidad/activos" },
