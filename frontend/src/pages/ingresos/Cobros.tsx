@@ -5,7 +5,8 @@ import { bancosApi } from "../../lib/bancosApi";
 import type { CuentaBancaria } from "../../lib/bancosApi";
 import { erpApi } from "../../lib/erpApi";
 import type { Cobro, CuentaPorCobrar, EstadoCuentaCobrar, MetodoCobro } from "../../lib/erpApi";
-import { EMPRESA_NOMBRE, formatoMonto, formatoRnc } from "../../lib/marca";
+import { formatoMonto, formatoRnc } from "../../lib/marca";
+import { empresaActual } from "../../lib/configuracionApi";
 import { AvisoError, Buscador, Cargando, Estadistica, IngresosEncabezado, Modal, SinResultados, Vacio } from "./IngresosShell";
 import { useAviso } from "./useAviso";
 import { etiquetaCuenta } from "../bancos/bancosUtil";
@@ -56,7 +57,7 @@ function textoRecordatorio(c: CuentaPorCobrar): string {
     `Saludos, ${c.cliente_nombre}.\n\n` +
     `Le recordamos amablemente que la factura ${c.encf ?? ""} tiene un saldo pendiente de RD$ ${formatoMonto(c.pendiente)}, ` +
     `${vencida ? "vencido desde" : "con vencimiento el"} ${fechaLegible(c.vence)}.\n\n` +
-    `Si ya realizó el pago, por favor ignore este mensaje y disculpe la molestia. ¡Gracias por su preferencia!\n${EMPRESA_NOMBRE}`
+    `Si ya realizó el pago, por favor ignore este mensaje y disculpe la molestia. ¡Gracias por su preferencia!\n${empresaActual().nombre}`
   );
 }
 

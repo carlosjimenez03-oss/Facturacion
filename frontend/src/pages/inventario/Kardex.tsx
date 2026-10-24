@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { inventarioApi } from "../../lib/inventarioApi";
 import type { KardexParams } from "../../lib/inventarioApi";
-import { EMPRESA_NOMBRE, formatoMonto } from "../../lib/marca";
+import { formatoMonto } from "../../lib/marca";
+import { useDatosEmpresa } from "../../lib/configuracionApi";
 import type { Almacen, Kardex, MetodoValuacion, Producto } from "../../lib/types";
 import { Ayuda } from "../compras/ComprasShell";
 import { AvisoError, Cargando, Vacio } from "../ingresos/IngresosShell";
@@ -34,6 +35,7 @@ function primeroDelMes(): string {
 }
 
 export function KardexPage() {
+  const miEmpresa = useDatosEmpresa();
   const [params, setParams] = useSearchParams();
   const [productos, setProductos] = useState<Producto[]>([]);
   const [almacenes, setAlmacenes] = useState<Almacen[]>([]);
@@ -160,7 +162,7 @@ export function KardexPage() {
       <div className="inv-imp">
         <h1>Kardex valorizado · {kardex ? etiquetaProducto({ sku: kardex.producto_sku, nombre: kardex.producto_nombre }) : ""}</h1>
         <p>
-          {EMPRESA_NOMBRE} · {almacen ? `Almacén ${almacen.nombre}` : "Todos los almacenes"} · {periodo} · {metodoTexto} · Montos en RD$
+          {miEmpresa.nombre} · {almacen ? `Almacén ${almacen.nombre}` : "Todos los almacenes"} · {periodo} · {metodoTexto} · Montos en RD$
         </p>
       </div>
 

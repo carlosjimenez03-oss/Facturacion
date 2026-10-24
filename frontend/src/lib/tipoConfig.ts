@@ -28,7 +28,8 @@ const DEFAULT_CONFIG: TipoEcfConfig = {
 
 export const TIPO_ECF_CONFIG: Record<string, TipoEcfConfig> = {
   "31": { ...DEFAULT_CONFIG, compradorRncRequerido: true, etiqueta: "Crédito Fiscal" },
-  "32": { ...DEFAULT_CONFIG, compradorRncRequerido: false, etiqueta: "Consumo" },
+  // El XSD del E32 no tiene FechaVencimientoSecuencia (y exige el nodo Comprador, ver construirDatos).
+  "32": { ...DEFAULT_CONFIG, compradorRncRequerido: false, requiereFechaVencimientoSecuencia: false, etiqueta: "Consumo" },
   "33": {
     ...DEFAULT_CONFIG,
     informacionReferenciaRequerida: true,

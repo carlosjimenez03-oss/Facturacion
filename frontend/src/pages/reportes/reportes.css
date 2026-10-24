@@ -1,0 +1,34 @@
+/* Reportes (Reportes.dc.html); el sistema de diseño está en index.css. */
+.rp-periodo{flex-wrap:wrap}
+.rp-periodo .inp{width:auto;min-width:170px}
+.rp-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.rp-card{text-align:left;font:inherit;cursor:pointer;padding:16px;border-radius:12px;border:1px solid #E5E7EB;background:#fff;display:flex;flex-direction:column;gap:4px}
+.rp-card:hover{border-color:#B7E3DD}
+.rp-card.on{border:1.5px solid #0F766E;background:#F0FAF9}
+.rp-card .chip{align-self:flex-start}
+.rp-card b{color:#111827;font-size:14.5px;margin-top:4px}
+.rp-d{font-size:12.5px;color:#6B7280}
+.rp-filtros{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;padding:12px 20px;border-bottom:1px solid #EEF0F2}
+.rp-filtros .fld{flex:0 1 220px}
+.rp-adv{margin:12px 20px 0}
+.rp-tabla+.rp-tabla{border-top:1px solid #EEF0F2}
+.rp-tt{margin:0;padding:14px 20px 4px;font-size:14px;color:#111827}
+.rp-tabla .tw{border:0;border-radius:0}
+.tbl td.rp-c0{color:#111827}
+.tbl tr.rp-total td{font-weight:650;background:#FAFBFC;color:#111827}
+.rp-imp{display:none}
+@media (max-width:640px){
+  .rp-periodo,.rp-periodo .inp{width:100%}
+  .rp-filtros{padding:12px 16px}
+  .rp-filtros .fld{flex:1 1 100%}
+}
+@media print{
+  .rp-imp{display:block!important;padding:0 0 12px;border-bottom:3px solid #0F766E;margin-bottom:12px}
+  .rp-imp h1{margin:0;font-size:20px}
+  .rp-imp p{margin:4px 0 0;font-size:11.5px;color:#4B5563}
+  .rp-reporte{border:0;box-shadow:none}
+  .rp-reporte .tw{overflow:visible}
+  .rp-reporte .tbl{min-width:0!important;font-size:10.5px}
+  .rp-reporte .tbl th,.rp-reporte .tbl td{padding:4px 6px}
+  .rp-adv{margin:6px 0}
+}

@@ -11,12 +11,24 @@ Dos llamadas, con dos políticas de fallo distintas y a propósito:
   propagarse como error de la respuesta -- ver `app.main.enviar_factura`,
   que solo registra el fallo (`inventario_sincronizado`/`inventario_error`)
   para poder detectarlo y resolverlo manualmente.
+
+Ambas llevan la cabecera de llamada interna (`X-Kontara-Interno`, ver
+libs/ecf_common/auth/sesion_supabase.py) para que funcionen aunque
+inventario-api tenga REQUIRE_AUTH=true.
 """
 from __future__ import annotations
 
 from typing import Any
 
 import httpx
+
+from libs.ecf_common.auth.sesion_supabase import cabeceras_internas
+
+from .config import get_settings
+
+
+def _cabeceras() -> dict[str, str]:
+    return cabeceras_internas(get_settings().kontara_token_interno)
 
 
 class InventarioApiError(Exception):
@@ -49,6 +61,7 @@ async def validar_disponibilidad(base_url: str, items_inventario: list[dict[str,
             respuesta = await client.post(
                 f"{base_url}/movimientos/validar-disponibilidad",
                 json={"items": _items_venta(items_inventario)},
+                headers=_cabeceras(),
             )
     except httpx.HTTPError as exc:
         raise InventarioApiError(f"No se pudo contactar inventario_api: {exc}") from exc
@@ -70,6 +83,7 @@ async def registrar_salida_por_factura(
             respuesta = await client.post(
                 f"{base_url}/movimientos/salida-por-factura",
                 json={"factura_id": factura_id, "items": _items_venta(items_inventario), "documento": documento},
+                headers=_cabeceras(),
             )
     except httpx.HTTPError as exc:
         raise InventarioApiError(f"No se pudo contactar inventario_api: {exc}") from exc

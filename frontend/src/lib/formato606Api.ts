@@ -1,3 +1,4 @@
+import { fetchConSesion } from "./sesion";
 import type {
   ErrorValidacion606,
   PeriodoResumen606,
@@ -18,7 +19,7 @@ class Formato606ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${FORMATO_606_API_URL}${path}`, {
+  const response = await fetchConSesion(`${FORMATO_606_API_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
@@ -122,7 +123,7 @@ export const formato606Api = {
     request<ValidacionResponse606>(`/periodos/${periodo}/validar`, { method: "POST" }),
 
   async generarArchivo(periodo: string): Promise<{ nombreArchivo: string; contenido: Blob }> {
-    const response = await fetch(`${FORMATO_606_API_URL}/periodos/${periodo}/generar`);
+    const response = await fetchConSesion(`${FORMATO_606_API_URL}/periodos/${periodo}/generar`);
     if (!response.ok) {
       let detail = response.statusText;
       try {

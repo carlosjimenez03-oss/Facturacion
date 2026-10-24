@@ -1,0 +1,97 @@
+/* Kontara Nómina (Nomina.dc.html del prototipo). El sistema de diseño está en index.css. */
+
+/* Marco: menú propio de Nómina + contenido. Dentro del contenido de la app el menú va a la izquierda
+   como una columna; si el layout global lo dibuja en lugar del menú principal (NominaSidebar), la
+   columna no se muestra. */
+.nm{display:grid;grid-template-columns:224px minmax(0,1fr);gap:24px;align-items:start}
+.nm-solo{display:block}
+.nm-sb{position:sticky;top:16px;display:flex;flex-direction:column;gap:2px;background:#fff;border:1px solid var(--bd);border-radius:12px;padding:6px 10px 14px}
+.nm-head{display:flex;align-items:center;justify-content:space-between;gap:8px;height:52px;padding:0 4px 0 6px;margin-bottom:4px}
+.nm-logo{display:flex;align-items:center;gap:10px;text-decoration:none;color:var(--ink)}
+.nm-word{line-height:1}
+.nm-word small{display:block;font-size:10px;color:#6B7280}
+.nm-word b{font-size:19px;font-weight:600;color:var(--ink)}
+.nm-nav{display:flex;flex-direction:column;gap:2px}
+.nm-nav .nv{padding-right:8px}
+.nm-nav .nv.on::before{left:-10px}
+.nm-chip{margin-left:auto;background:#E6F4F2;color:#0F766E}
+.nm-trial{margin-top:20px;background:#F5F7F8;border:1px solid #EEF0F2;border-radius:10px;padding:14px 12px;display:flex;flex-direction:column;gap:12px}
+.nm-trial b{font-size:14px;font-weight:500;color:#111827}
+.nm-trial .pb{height:5px}
+.nm-trial .pb span{background:#2BA89D}
+.nm-cta{background:#2BA89D;color:#fff;width:100%}.nm-cta:hover{background:var(--teal);color:#fff}
+.nm-main{min-width:0}
+@media (max-width:1100px){
+  .nm{grid-template-columns:minmax(0,1fr);gap:16px}
+  .nm-sb{position:static;padding:4px 8px}
+  .nm-head{height:44px}
+  .nm-nav{flex-direction:row;overflow-x:auto;gap:4px;padding-bottom:6px}
+  .nm-nav .nv{width:auto;white-space:nowrap;flex:none}
+  .nm-nav .nv.on::before{display:none}
+  .nm-nav .sb-sep{display:none}
+  .nm-trial{display:none}
+}
+
+/* Inicio */
+.nm-sum{display:flex;flex-wrap:wrap;align-items:center;gap:20px;padding:18px 24px}
+.nm-sum-i{flex:1 1 180px;display:flex;gap:12px;align-items:center;min-width:0}
+.nm-sum-ic{width:44px;height:44px;border-radius:50%;background:#F3F4F6;display:grid;place-items:center;color:#4B5563;flex:none;font-weight:700}
+.nm-sum-i b{display:block;font-weight:600;color:#374151;font-size:14px}
+.nm-sum-i span{font-size:13px}
+.nm-calc{background:#CCEFEA;color:#0F766E}.nm-calc:hover{background:#B7E3DD;color:#0F766E}
+.nm-cols{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.nm-ind{display:flex;align-items:center;gap:16px;padding:16px 20px;border-bottom:1px solid #F0F1F3}
+.nm-ind:last-child{border-bottom:0}
+.nm-ind-ic{width:52px;height:52px;border-radius:50%;background:#EEF0FF;color:#4F46E5;display:grid;place-items:center;font-weight:700;font-size:12px;flex:none}
+.nm-ind b{display:block;font-weight:600;color:#111827;font-size:15px}
+.nm-ind-v{font-weight:700;color:#111827;font-variant-numeric:tabular-nums;white-space:nowrap}
+.nm-form3{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-top:4px}
+.nm-bars{display:flex;gap:12px;align-items:flex-end;height:240px;padding:0 8px;border-bottom:1px solid var(--bd)}
+.nm-bar-g{flex:1 1 0;display:flex;gap:6px;align-items:flex-end;justify-content:center;height:100%;min-width:0}
+.nm-bar{width:100%;max-width:44px;border-radius:6px 6px 0 0;background:#0F766E;min-height:2px}
+.nm-bar.neto{background:#99D5CE}
+.nm-bars-x{display:flex;gap:12px;padding:8px 8px 0;font-size:12.5px;color:#6B7280}
+.nm-bars-x span{flex:1 1 0;text-align:center;text-transform:capitalize}
+.nm-leyenda{display:flex;gap:16px;font-size:12.5px;color:var(--mut);align-items:center}
+.nm-leyenda i{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+
+/* Tablas de nómina */
+.nm-tbl td,.nm-tbl th{padding-left:10px;padding-right:10px}
+.nm-tbl td:first-child{white-space:nowrap}
+.nm-sub{white-space:nowrap}
+.nm-tbl tfoot td{font-weight:650;color:var(--ink);background:#FAFBFC;border-top:1px solid var(--bd)}
+.nm-sub{display:block;font-size:12px;color:var(--mut);font-weight:400}
+.nm-nov{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.nm-det{display:grid;grid-template-columns:1fr auto;gap:6px 16px;font-size:13.5px;background:#FAFBFC;border:1px solid var(--bd);border-radius:10px;padding:12px 14px}
+.nm-det .t{font-weight:650;color:var(--ink);border-top:1px solid var(--bd);padding-top:6px}
+.nm-msg{display:flex;gap:14px;align-items:flex-start;padding:16px 20px;border-bottom:1px solid #F0F1F3}
+.nm-msg:last-child{border-bottom:0}
+.nm-msg.nuevo{background:#F6FBFA}
+.nm-dot{width:8px;height:8px;border-radius:50%;margin-top:7px;background:#D1D5DB;flex:none}
+.nm-msg.nuevo .nm-dot{background:#14B8A6}
+.nm-msg b{color:#111827}
+.nm-import textarea{min-height:160px;font-size:12px;white-space:pre}
+
+/* Recibos de pago: uno por hoja al imprimir */
+.nm-recibo{background:#fff;border:1px solid var(--bd);border-radius:12px;padding:24px 28px;color:#111827;font-size:13.5px}
+.nm-recibo-h{display:flex;flex-wrap:wrap;justify-content:space-between;gap:16px;border-bottom:3px solid #0F766E;padding-bottom:12px;margin-bottom:14px}
+.nm-recibo-h h2{margin:0;font-size:18px}
+.nm-recibo-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px}
+.nm-recibo table{width:100%;border-collapse:collapse}
+.nm-recibo th{text-align:left;font-size:11.5px;color:#6B7280;border-bottom:1px solid #D1D5DB;padding:6px 4px;font-weight:600}
+.nm-recibo td{padding:6px 4px;border-bottom:1px solid #EEF0F2}
+.nm-recibo th.num{text-align:right}
+.nm-recibo .tot td{font-weight:700;border-bottom:0;border-top:1px solid #D1D5DB}
+.nm-neto{margin-top:14px;display:flex;justify-content:space-between;align-items:center;background:#E6F4F2;color:#0F766E;border-radius:10px;padding:12px 16px;font-size:16px;font-weight:700}
+.nm-firmas{display:grid;grid-template-columns:1fr 1fr;gap:40px;margin-top:40px;font-size:12px;color:#6B7280;text-align:center}
+.nm-firmas span{border-top:1px solid #9CA3AF;padding-top:6px}
+@media print{
+  @page{margin:12mm}
+  body,.shell,.main{background:#fff!important}
+  .sb-slot,.tb,.sb,.toasts,.scrim,.no-imprimir,.nm-sb{display:none!important}
+  .page{padding:0!important;max-width:none!important}
+  .nm{display:block}
+  .nm-recibo{border:0;border-radius:0;padding:0;page-break-after:always;break-after:page}
+  .nm-recibo:last-child{page-break-after:auto;break-after:auto}
+}
+.nm .fila-acc{flex-wrap:nowrap}

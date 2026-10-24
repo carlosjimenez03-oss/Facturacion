@@ -17,6 +17,7 @@ import {
   IconSync,
   IconTareas,
 } from "./icons";
+import { MARCA } from "../lib/marca";
 
 export interface MenuHoja {
   label: string;
@@ -30,9 +31,6 @@ export interface MenuItem {
   to?: string;
   hijos?: MenuHoja[];
 }
-
-/** Ruta de un módulo aún sin pantalla en React: muestra la página "En construcción". */
-const pendiente = (slug: string) => `/modulo/${slug}`;
 
 export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
   { id: "inicio", label: "Inicio", icon: <IconInicio />, to: "/" },
@@ -111,18 +109,18 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
       { label: "IR-17", to: "/impuestos/precalculo/ir17" },
     ],
   },
-  { id: "reportes", label: "Reportes", icon: <IconReportes />, to: pendiente("reportes") },
-  { id: "tareas", label: "Mis tareas", icon: <IconTareas />, to: pendiente("tareas") },
+  { id: "reportes", label: "Reportes", icon: <IconReportes />, to: "/reportes" },
+  { id: "tareas", label: "Mis tareas", icon: <IconTareas />, to: "/tareas" },
   "separador",
-  { id: "sync", label: "Centro de sincronización", icon: <IconSync />, to: pendiente("sincronizacion") },
-  { id: "config", label: "Configuración", icon: <IconConfig />, to: pendiente("configuracion") },
+  { id: "sync", label: "Centro de sincronización", icon: <IconSync />, to: "/sincronizacion" },
+  { id: "config", label: "Configuración", icon: <IconConfig />, to: "/configuracion" },
 ];
 
 export const MENU_SOLUCIONES: MenuItem[] = [
-  { id: "nomina", label: "Nómina", icon: <IconNomina />, to: pendiente("nomina") },
-  { id: "pos", label: "POS", icon: <IconPos />, to: pendiente("pos") },
-  { id: "portal", label: "Portal de clientes", icon: <IconPortal />, to: pendiente("portal-clientes") },
-  { id: "ventas", label: "Ventas", icon: <IconReportes />, to: pendiente("ventas") },
+  { id: "nomina", label: "Nómina", icon: <IconNomina />, to: "/nomina" },
+  { id: "pos", label: "POS", icon: <IconPos />, to: "/pos" },
+  { id: "portal", label: "Portal de clientes", icon: <IconPortal />, to: "/portal-clientes" },
+  { id: "ventas", label: `${MARCA} Ventas`, icon: <IconReportes />, to: "/ventas" },
 ];
 
 /** Descripción de cada módulo pendiente, para la página "En construcción". */
@@ -158,4 +156,5 @@ export const MODULOS_PENDIENTES: Record<string, { titulo: string; descripcion: s
   pos: { titulo: "POS", descripcion: "Punto de venta con e-CF de consumo." },
   "portal-clientes": { titulo: "Portal de clientes", descripcion: "Enlace para que sus clientes descarguen sus e-CF y paguen." },
   ventas: { titulo: "Ventas", descripcion: "Automatizaciones de correo y WhatsApp para fidelizar clientes." },
+  planes: { titulo: "Planes y consumo", descripcion: "Consumo del plan, comprobantes emitidos del mes y cambio de plan." },
 };

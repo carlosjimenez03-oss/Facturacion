@@ -18,9 +18,10 @@
 // `no_contabilizados` con el motivo (p. ej. falta una cuenta por defecto).
 import { ERP_API_URL, ErpApiError } from "./erpApi";
 import { textoDetalle } from "./comprasApi";
+import { fetchConSesion } from "./sesion";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${ERP_API_URL}${path}`, {
+  const response = await fetchConSesion(`${ERP_API_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });

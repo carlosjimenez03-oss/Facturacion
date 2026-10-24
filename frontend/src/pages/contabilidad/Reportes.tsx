@@ -5,7 +5,8 @@ import type { CSSProperties, ReactNode } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { contabilidadApi } from "../../lib/contabilidadApi";
 import type { BalanceGeneral, Balanza, CuentaContable, EstadoResultados, LibroDiario, Mayor, SeccionEstado } from "../../lib/contabilidadApi";
-import { EMPRESA_NOMBRE, EMPRESA_RNC, formatoMonto, formatoRnc } from "../../lib/marca";
+import { formatoMonto, formatoRnc } from "../../lib/marca";
+import { useDatosEmpresa } from "../../lib/configuracionApi";
 import { AvisoError, Cargando, Vacio } from "../ingresos/IngresosShell";
 import { descargarCsv, fechaLegible, hoyIso, mensajeError } from "../ingresos/ingresosUtil";
 import { montoContable } from "../impuestos/impuestosUtil";
@@ -40,6 +41,7 @@ function Cuadre({ ok, si, no }: { ok: boolean; si: string; no: string }) {
 }
 
 export function ReportesTab({ mostrarAviso }: { mostrarAviso: MostrarAviso }) {
+  const miEmpresa = useDatosEmpresa();
   const [params, setParams] = useSearchParams();
   const reporte = (REPORTES.find((r) => r.id === params.get("reporte"))?.id ?? "balanza") as Reporte;
   const desde = params.get("desde") ?? `${hoyIso().slice(0, 7)}-01`;
@@ -181,8 +183,8 @@ export function ReportesTab({ mostrarAviso }: { mostrarAviso: MostrarAviso }) {
       <div className="ct-imp">
         <h1>{actual.t}</h1>
         <p>
-          {EMPRESA_NOMBRE}
-          {EMPRESA_RNC ? ` · RNC ${formatoRnc(EMPRESA_RNC)}` : ""} · {periodo} · Montos en RD$ · solo asientos contabilizados
+          {miEmpresa.razonSocial}
+          {miEmpresa.rnc ? ` · RNC ${formatoRnc(miEmpresa.rnc)}` : ""} · {periodo} · Montos en RD$ · solo asientos contabilizados
         </p>
       </div>
 

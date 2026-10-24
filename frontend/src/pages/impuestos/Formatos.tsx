@@ -12,7 +12,8 @@ import { IconAlerta } from "../../layout/icons";
 import { formato606Api } from "../../lib/formato606Api";
 import { impuestosApi } from "../../lib/impuestosApi";
 import type { Declaracion, Fila608, Formato607, Formato608, MarcarPresentadaPayload, TipoAnulacion } from "../../lib/impuestosApi";
-import { EMPRESA_RNC, formatoMonto } from "../../lib/marca";
+import { empresaActual } from "../../lib/configuracionApi";
+import { formatoMonto } from "../../lib/marca";
 import type { Registro606 } from "../../lib/types";
 import { AvisoError, Cargando, Estadistica, Modal, Vacio } from "../ingresos/IngresosShell";
 import { descargarCsv, mensajeError } from "../ingresos/ingresosUtil";
@@ -49,7 +50,7 @@ const rd = (n: number | string) => `RD$ ${formatoMonto(n)}`;
 const registros = (n: number) => `${n.toLocaleString("en-US")} ${n === 1 ? "registro" : "registros"}`;
 
 function nombreArchivo(formato: Formato, rnc: string, periodo: string) {
-  return `DGII_F_${formato}_${(rnc || EMPRESA_RNC || "<RNC>").replace(/\D/g, "") || "<RNC>"}_${periodo}.TXT`;
+  return `DGII_F_${formato}_${(rnc || empresaActual().rnc || "<RNC>").replace(/\D/g, "") || "<RNC>"}_${periodo}.TXT`;
 }
 
 export function FormatosPage() {
@@ -550,7 +551,7 @@ function Formato606Vista({ periodo, mostrar }: VistaProps) {
                 </tbody>
               </table>
             </div>
-            <PieTabla mostrando={visibles.length} total={filas.length} archivo={nombreArchivo("606", EMPRESA_RNC, periodo)} onVerTodos={() => setTodos(true)} />
+            <PieTabla mostrando={visibles.length} total={filas.length} archivo={nombreArchivo("606", empresaActual().rnc, periodo)} onVerTodos={() => setTodos(true)} />
           </>
         )}
       </TarjetaFormato>

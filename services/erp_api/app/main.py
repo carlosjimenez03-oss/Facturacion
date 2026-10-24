@@ -4,8 +4,9 @@ módulo de impuestos (formatos 607/608, pre-cálculos IT-1/IR-17/IR-2 y
 declaraciones), con sus rutas en `impuestos.py`; y Compras (bandeja de
 entrada de e-CF recibidos, cuentas por pagar, pagos a proveedores y
 retenciones), con sus rutas en `compras.py`; Bancos (cuentas, movimientos,
-transferencias y conciliación) en `bancos.py` y Contabilidad (catálogo,
-asientos, reportes y activos fijos) en `contabilidad.py`.
+transferencias y conciliación) en `bancos.py`; Contabilidad (catálogo,
+asientos, reportes y activos fijos) en `contabilidad.py`; y Kontara Nómina
+(empleados, períodos de nómina, TSS e ISR de asalariados) en `nomina.py`.
 
 Vive en sus propios esquemas `ventas`, `impuestos`, `compras`, `bancos` y
 `contabilidad` (más `recepcion.ecf_recibidos`), que este servicio crea
@@ -16,20 +17,36 @@ cliente y `/documentos-venta` se calculan LEYENDO `facturacion.facturas`
 El contrato con el frontend es `frontend/src/lib/erpApi.ts` (y
 `frontend/src/lib/impuestosApi.ts` para impuestos,
 `frontend/src/lib/comprasApi.ts` para compras, `bancosApi.ts` y
-`contabilidadApi.ts` para bancos y contabilidad).
+`contabilidadApi.ts` para bancos y contabilidad y
+`frontend/src/lib/solucionesApi.ts` para Soluciones: planes, portal de
+clientes, Kontara Ventas y POS, con sus rutas en `soluciones.py`).
 """
 import asyncio
 import logging
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
 from libs.ecf_common.db import cerrar_pool, crear_pool
 
-from . import bancos, compras, contabilidad, impuestos, repository
+from . import (
+    bancos,
+    compras,
+    configuracion,
+    contabilidad,
+    impuestos,
+    nomina,
+    plataforma,
+    reportes,
+    repository,
+    sincronizacion,
+    soluciones,
+    tareas,
+)
 from .config import ErpApiSettings, get_settings
 from .migraciones import aplicar_migraciones
 from .repository import (
@@ -92,12 +109,41 @@ async def lifespan(app: FastAPI):
     # En Supabase nadie ejecuta db/init: el esquema `ventas` se crea aquí.
     await aplicar_migraciones(pool)
     app.state.db_pool = pool
+    # Envío automático por correo de las facturas aceptadas (Configuración →
+    # WhatsApp y correo; no hace nada mientras no se encienda allí).
+    envio = None
+    if settings.envio_automatico_cada_segundos > 0:
+        envio = asyncio.create_task(configuracion.iniciar_envio_automatico(pool, settings))
     yield
+    if envio is not None:
+        envio.cancel()
+        with suppress(asyncio.CancelledError):
+            await envio
     await cerrar_pool(app.state.db_pool)
 
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.state.db_pool = None
+
+# ERP_REQUIRE_AUTH (o REQUIRE_AUTH): la API misma exige sesión (ver
+# docs/AUTH.md). /auth/verificar hace su propia verificación (es el que
+# consulta nginx) y el portal público de clientes (/portal/publico/<token>,
+# Soluciones) se abre sin sesión: lo protege su token.
+RUTA_PORTAL_PUBLICO = "/portal/publico/"
+
+
+async def _marcar_acceso(request, usuario) -> None:
+    await plataforma.marcar_acceso_si_falta(settings, usuario)
+
+
+instalar_verificacion_sesion(
+    app,
+    settings,
+    rutas_publicas={"/auth/verificar"},
+    es_publica=lambda ruta: ruta.startswith(RUTA_PORTAL_PUBLICO),
+    revocacion=plataforma.REVOCACION,
+    al_verificar=_marcar_acceso,
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -113,6 +159,14 @@ app.include_router(impuestos.router)
 app.include_router(compras.router)
 app.include_router(bancos.router)
 app.include_router(contabilidad.router)
+# Fase 6 · Operación: Mis tareas, Centro de sincronización y Reportes.
+app.include_router(tareas.router)
+app.include_router(sincronizacion.router)
+app.include_router(reportes.router)
+app.include_router(configuracion.router)
+app.include_router(plataforma.router)
+app.include_router(nomina.router)
+app.include_router(soluciones.router)
 
 
 def _pool():

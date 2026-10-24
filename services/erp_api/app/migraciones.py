@@ -1,15 +1,18 @@
 """Migraciones de los esquemas `ventas` (clientes, cotizaciones, cobros),
 `impuestos` (anulaciones manuales del 608, ajustes de los pre-cálculos y
 declaraciones presentadas), `compras` (facturas de compra y pagos a
-proveedores) y la tabla `recepcion.ecf_recibidos` (bandeja de entrada).
+proveedores), `nomina` (Kontara Nómina: empleados, parámetros de ley y
+períodos de nómina) y la tabla `recepcion.ecf_recibidos` (bandeja de entrada).
 
 En producción la base es Supabase y los archivos de `db/init` NO se
 ejecutan solos (ver docs/SUPABASE.md) -- por eso `erp_api` aplica su propio
 DDL al arrancar (lifespan de main.py), justo después de crear el pool. Todo
 es idempotente (`IF NOT EXISTS` / `CREATE OR REPLACE`), así que correrlo en
 cada arranque es seguro. `db/init/007_ventas.sql`, `008_impuestos.sql`,
-`009_fecha_dgii_segura.sql`, `010_compras.sql` y
-`012_bancos_contabilidad.sql` contienen exactamente el mismo DDL para el Postgres local de desarrollo (lo verifica
+`009_fecha_dgii_segura.sql`, `010_compras.sql`, `012_bancos_contabilidad.sql`,
+`013_configuracion.sql`, `014_operacion.sql`, `015_nomina.sql` y
+`016_soluciones.sql` contienen
+exactamente el mismo DDL para el Postgres local de desarrollo (lo verifica
 tests/test_migraciones.py).
 
 `recepcion.ecf_recibidos` la escribe `receptor_recepcion` (que no tiene
@@ -28,6 +31,7 @@ from collections.abc import Awaitable, Callable
 import asyncpg
 
 from .contabilidad_calculos import ddl_semilla_catalogo
+from .migraciones_configuracion import DDL_CONFIGURACION
 
 logger = logging.getLogger(__name__)
 
@@ -635,6 +639,420 @@ $$;
 """
 
 
+# Fase 6 · Operación: Mis tareas y facturas en papel. Las tareas automáticas
+# NO se guardan (se calculan al leer de los datos de cada módulo, ver
+# tareas_repository.py); aquí solo viven las tareas manuales, lo que el
+# usuario hizo con una automática (completarla o posponerla), por su clave
+# estable, y las facturas en papel de una contingencia (sincronizacion_repository.py).
+DDL_OPERACION = """
+CREATE SCHEMA IF NOT EXISTS operacion;
+
+-- Tareas que el usuario agrega a mano. `pospuesta_hasta` la saca de las
+-- pendientes hasta esa fecha (inclusive).
+CREATE TABLE IF NOT EXISTS operacion.tareas (
+    id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    titulo           text NOT NULL,
+    descripcion      text,
+    vence            date,
+    prioridad        text NOT NULL DEFAULT 'media' CHECK (prioridad IN ('alta', 'media', 'baja')),
+    completada       boolean NOT NULL DEFAULT false,
+    completada_en    timestamptz,
+    pospuesta_hasta  date,
+    creado_en        timestamptz NOT NULL DEFAULT now(),
+    actualizado_en   timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS tareas_completada_idx ON operacion.tareas (completada, vence);
+
+-- Estado de una tarea automática por su clave (p. ej. 'declaracion:it1:202609',
+-- 'factura_rechazada:<id>'): completada o pospuesta. Cuando la condición
+-- que la genera desaparece, la fila se borra al listar
+-- (`tareas_repository.listar_tareas`): si vuelve a darse, la tarea reaparece.
+CREATE TABLE IF NOT EXISTS operacion.tareas_automaticas (
+    clave            text PRIMARY KEY,
+    completada_en    timestamptz,
+    pospuesta_hasta  date,
+    actualizado_en   timestamptz NOT NULL DEFAULT now()
+);
+
+-- Facturas emitidas en papel (NCF serie B) durante una caída total del
+-- sistema o de la DGII (Centro de sincronización). Los montos son los del
+-- comprobante, por tasa de ITBIS; `forma_pago` es la del 607 (1 efectivo,
+-- 2 cheque/transferencia, 3 tarjeta, 4 crédito, 5 bonos, 6 permuta, 7 otras).
+-- `encf_reemplazo` es el e-CF que la sustituye al restablecerse el servicio
+-- (código de modificación 4). Pensadas para alimentar luego el 607 y la
+-- contabilidad.
+CREATE TABLE IF NOT EXISTS operacion.facturas_papel (
+    id               uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    ncf              text NOT NULL,
+    fecha            date NOT NULL,
+    cliente_rnc      text,
+    cliente_nombre   text,
+    gravado_18       numeric(14, 2) NOT NULL DEFAULT 0,
+    gravado_16       numeric(14, 2) NOT NULL DEFAULT 0,
+    gravado_0        numeric(14, 2) NOT NULL DEFAULT 0,
+    exento           numeric(14, 2) NOT NULL DEFAULT 0,
+    itbis_18         numeric(14, 2) NOT NULL DEFAULT 0,
+    itbis_16         numeric(14, 2) NOT NULL DEFAULT 0,
+    total            numeric(14, 2) NOT NULL DEFAULT 0,
+    forma_pago       smallint NOT NULL DEFAULT 1 CHECK (forma_pago BETWEEN 1 AND 7),
+    notas            text,
+    encf_reemplazo   text,
+    creado_en        timestamptz NOT NULL DEFAULT now(),
+    actualizado_en   timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS facturas_papel_ncf_idx ON operacion.facturas_papel (upper(ncf));
+CREATE INDEX IF NOT EXISTS facturas_papel_fecha_idx ON operacion.facturas_papel (fecha DESC);
+"""
+
+
+# Kontara Nómina (docs/NOMINA.md): copia de db/init/015_nomina.sql.
+DDL_NOMINA = """
+-- Kontara Nómina: empresa empleadora, parámetros de ley por fecha de
+-- vigencia (tasas TSS, topes en salarios mínimos cotizables y escala del
+-- ISR de asalariados), empleados, períodos de nómina y sus líneas. Las
+-- fuentes de cada valor están en docs/NOMINA.md; todo es editable en
+-- Nómina › Configuración (los INSERT de abajo solo siembran lo que falte).
+CREATE SCHEMA IF NOT EXISTS nomina;
+
+-- Una sola fila (id = 1). `tasa_srl` = tasa del Seguro de Riesgos Laborales
+-- de la empresa (1 % fijo + 0.1 % a 0.3 % según su riesgo).
+CREATE TABLE IF NOT EXISTS nomina.empresa (
+    id              smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    rnc             text,
+    razon_social    text,
+    categoria       text,
+    municipio       text,
+    contacto_nombre text,
+    tasa_srl        numeric(6, 4) NOT NULL DEFAULT 0.0110 CHECK (tasa_srl >= 0 AND tasa_srl < 0.1),
+    frecuencia_pago text NOT NULL DEFAULT 'mensual' CHECK (frecuencia_pago IN ('mensual', 'quincenal')),
+    dia_pago        smallint NOT NULL DEFAULT 30 CHECK (dia_pago BETWEEN 1 AND 31),
+    banco           text,
+    cuenta_origen   text,
+    actualizado_en  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Parámetros de ley vigentes desde `vigente_desde` (hasta la fila
+-- siguiente). Tasas como fracción (0.0287 = 2.87 %); topes en cantidad de
+-- salarios mínimos cotizables; `escala_isr` = tramos anuales
+-- [{"desde", "tasa", "fijo"}]; `regalia_tope_exento` NULL = regalía
+-- pascual exenta sin tope.
+CREATE TABLE IF NOT EXISTS nomina.parametros (
+    vigente_desde                 date PRIMARY KEY,
+    salario_minimo_cotizable      numeric(14, 2) NOT NULL CHECK (salario_minimo_cotizable > 0),
+    afp_empleado                  numeric(7, 5) NOT NULL CHECK (afp_empleado >= 0 AND afp_empleado < 1),
+    afp_empleador                 numeric(7, 5) NOT NULL CHECK (afp_empleador >= 0 AND afp_empleador < 1),
+    sfs_empleado                  numeric(7, 5) NOT NULL CHECK (sfs_empleado >= 0 AND sfs_empleado < 1),
+    sfs_empleador                 numeric(7, 5) NOT NULL CHECK (sfs_empleador >= 0 AND sfs_empleador < 1),
+    srl_empleador                 numeric(7, 5) NOT NULL CHECK (srl_empleador >= 0 AND srl_empleador < 1),
+    infotep_empleador             numeric(7, 5) NOT NULL CHECK (infotep_empleador >= 0 AND infotep_empleador < 1),
+    infotep_bonificacion_empleado numeric(7, 5) NOT NULL
+                                  CHECK (infotep_bonificacion_empleado >= 0 AND infotep_bonificacion_empleado < 1),
+    tope_afp_salarios             numeric(6, 2) NOT NULL CHECK (tope_afp_salarios > 0),
+    tope_sfs_salarios             numeric(6, 2) NOT NULL CHECK (tope_sfs_salarios > 0),
+    tope_srl_salarios             numeric(6, 2) NOT NULL CHECK (tope_srl_salarios > 0),
+    escala_isr                    jsonb NOT NULL,
+    regalia_tope_exento           numeric(14, 2) CHECK (regalia_tope_exento >= 0),
+    divisor_salario_diario        numeric(6, 2) NOT NULL DEFAULT 23.83 CHECK (divisor_salario_diario > 0),
+    horas_jornada                 numeric(4, 2) NOT NULL DEFAULT 8 CHECK (horas_jornada > 0),
+    recargo_horas_extra           numeric(5, 4) NOT NULL DEFAULT 0.35 CHECK (recargo_horas_extra >= 0),
+    recargo_horas_extra_exceso    numeric(5, 4) NOT NULL DEFAULT 1.00 CHECK (recargo_horas_extra_exceso >= 0),
+    fuente                        text,
+    actualizado_en                timestamptz NOT NULL DEFAULT now()
+);
+
+INSERT INTO nomina.parametros (
+    vigente_desde, salario_minimo_cotizable, afp_empleado, afp_empleador, sfs_empleado, sfs_empleador,
+    srl_empleador, infotep_empleador, infotep_bonificacion_empleado, tope_afp_salarios, tope_sfs_salarios,
+    tope_srl_salarios, escala_isr, regalia_tope_exento, fuente
+) VALUES
+    ('2025-04-01', 21674.80, 0.0287, 0.0710, 0.0304, 0.0709, 0.0110, 0.0100, 0.0050, 20, 10, 4,
+     '[{"desde": "0.00", "tasa": "0", "fijo": "0.00"}, {"desde": "416220.00", "tasa": "0.15", "fijo": "0.00"}, {"desde": "624329.00", "tasa": "0.20", "fijo": "31216.00"}, {"desde": "867123.00", "tasa": "0.25", "fijo": "79776.00"}]',
+     NULL, 'TSS: salario mínimo cotizable RD$21,674.80 (abr. 2025 - ene. 2026). DGII: escala ISR de asalariados 2025'),
+    ('2026-02-01', 23223.00, 0.0287, 0.0710, 0.0304, 0.0709, 0.0110, 0.0100, 0.0050, 20, 10, 4,
+     '[{"desde": "0.00", "tasa": "0", "fijo": "0.00"}, {"desde": "416220.00", "tasa": "0.15", "fijo": "0.00"}, {"desde": "624329.00", "tasa": "0.20", "fijo": "31216.00"}, {"desde": "867123.00", "tasa": "0.25", "fijo": "79776.00"}]',
+     NULL, 'TSS Res. 01-2025: salario mínimo cotizable RD$23,223.00 desde el 01/02/2026. DGII Res. DDG-AR1-2026-00001: escala ISR 2026')
+ON CONFLICT (vigente_desde) DO NOTHING;
+
+-- Empleados. `cedula` solo dígitos (11). `tipo_pago` decide en qué
+-- períodos entra (mensual o quincenal). Dar de baja = estado 'inactivo'.
+CREATE TABLE IF NOT EXISTS nomina.empleados (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    cedula          text NOT NULL UNIQUE CHECK (cedula ~ '^[0-9]{11}$'),
+    nombre          text NOT NULL CHECK (btrim(nombre) <> ''),
+    cargo           text,
+    departamento    text,
+    fecha_ingreso   date NOT NULL,
+    salario_mensual numeric(14, 2) NOT NULL CHECK (salario_mensual > 0),
+    tipo_pago       text NOT NULL DEFAULT 'mensual' CHECK (tipo_pago IN ('mensual', 'quincenal')),
+    banco           text,
+    cuenta_bancaria text,
+    tipo_cuenta     text CHECK (tipo_cuenta IN ('ahorro', 'corriente')),
+    afp             text,
+    ars             text,
+    correo          text,
+    estado          text NOT NULL DEFAULT 'activo' CHECK (estado IN ('activo', 'inactivo')),
+    fecha_salida    date,
+    creado_en       timestamptz NOT NULL DEFAULT now(),
+    actualizado_en  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS empleados_nombre_idx ON nomina.empleados (lower(nombre));
+
+-- Período de nómina: borrador -> calculada -> aprobada -> pagada -> cerrada.
+-- `parametros` guarda la copia de los parámetros con que se calculó (así
+-- editar la tabla de parámetros no cambia una nómina ya calculada).
+CREATE TABLE IF NOT EXISTS nomina.periodos (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tipo         text NOT NULL CHECK (tipo IN ('mensual', 'quincenal')),
+    anio         smallint NOT NULL CHECK (anio BETWEEN 2000 AND 2100),
+    mes          smallint NOT NULL CHECK (mes BETWEEN 1 AND 12),
+    quincena     smallint CHECK (quincena IN (1, 2)),
+    fecha_inicio date NOT NULL,
+    fecha_fin    date NOT NULL,
+    fecha_pago   date NOT NULL,
+    estado       text NOT NULL DEFAULT 'borrador'
+                 CHECK (estado IN ('borrador', 'calculada', 'aprobada', 'pagada', 'cerrada')),
+    parametros   jsonb,
+    tasa_srl     numeric(6, 4),
+    notas        text,
+    calculado_en timestamptz,
+    aprobado_en  timestamptz,
+    pagado_en    timestamptz,
+    cerrado_en   timestamptz,
+    creado_en    timestamptz NOT NULL DEFAULT now(),
+    CHECK ((tipo = 'mensual') = (quincena IS NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS periodos_unico_idx ON nomina.periodos (tipo, anio, mes, COALESCE(quincena, 0));
+
+-- Una línea por empleado y período: copia de los datos del empleado al
+-- calcular, novedades capturadas (horas extra, otros ingresos, descuentos)
+-- y el resultado (NULL mientras no se calcule).
+CREATE TABLE IF NOT EXISTS nomina.lineas (
+    periodo_id              uuid NOT NULL REFERENCES nomina.periodos (id) ON DELETE CASCADE,
+    empleado_id             uuid NOT NULL REFERENCES nomina.empleados (id),
+    cedula                  text NOT NULL,
+    nombre                  text NOT NULL,
+    cargo                   text,
+    departamento            text,
+    salario_mensual         numeric(14, 2) NOT NULL,
+    banco                   text,
+    cuenta_bancaria         text,
+    tipo_cuenta             text,
+    horas_extra_35          numeric(8, 2) NOT NULL DEFAULT 0 CHECK (horas_extra_35 >= 0),
+    horas_extra_100         numeric(8, 2) NOT NULL DEFAULT 0 CHECK (horas_extra_100 >= 0),
+    otros_ingresos          numeric(14, 2) NOT NULL DEFAULT 0 CHECK (otros_ingresos >= 0),
+    bonificacion            numeric(14, 2) NOT NULL DEFAULT 0 CHECK (bonificacion >= 0),
+    ingresos_exentos        numeric(14, 2) NOT NULL DEFAULT 0 CHECK (ingresos_exentos >= 0),
+    regalia                 numeric(14, 2) NOT NULL DEFAULT 0 CHECK (regalia >= 0),
+    otros_descuentos        numeric(14, 2) NOT NULL DEFAULT 0 CHECK (otros_descuentos >= 0),
+    salario                 numeric(14, 2),
+    horas_extra             numeric(14, 2),
+    total_ingresos          numeric(14, 2),
+    salario_cotizable       numeric(14, 2),
+    base_isr                numeric(14, 2),
+    afp                     numeric(14, 2),
+    sfs                     numeric(14, 2),
+    isr                     numeric(14, 2),
+    infotep_empleado        numeric(14, 2),
+    total_descuentos        numeric(14, 2),
+    neto                    numeric(14, 2),
+    afp_empleador           numeric(14, 2),
+    sfs_empleador           numeric(14, 2),
+    srl                     numeric(14, 2),
+    infotep                 numeric(14, 2),
+    total_aportes_empleador numeric(14, 2),
+    costo_total             numeric(14, 2),
+    pagado                  boolean NOT NULL DEFAULT false,
+    pagado_en               timestamptz,
+    referencia_pago         text,
+    PRIMARY KEY (periodo_id, empleado_id)
+);
+
+CREATE INDEX IF NOT EXISTS lineas_empleado_idx ON nomina.lineas (empleado_id);
+"""
+
+
+
+# Soluciones (fase 6): planes y suscripción, portal de clientes, Kontara
+# Ventas (automatizaciones y su cola de envíos) y POS (sesiones de caja y
+# ventas). Requiere `ventas.clientes` (DDL_VENTAS). Mismo DDL en
+# db/init/016_soluciones.sql.
+DDL_SOLUCIONES = """
+CREATE SCHEMA IF NOT EXISTS soluciones;
+
+-- Suscripción de la empresa (una sola fila, id = 1). La prueba gratis de 15
+-- días empieza con el primer uso (la primera vez que se consulta
+-- GET /suscripcion). `plan` NULL = en prueba; un plan se activa solo cuando
+-- un asesor confirma el pago (no hay pasarela): elegir un plan en la
+-- pantalla crea una solicitud en `solicitudes_plan`.
+CREATE TABLE IF NOT EXISTS soluciones.suscripcion (
+    id              smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    plan            text CHECK (plan IN ('emprendedor', 'pyme', 'empresarial')),
+    periodicidad    text CHECK (periodicidad IN ('mensual', 'anual')),
+    prueba_inicio   date NOT NULL,
+    prueba_fin      date NOT NULL,
+    activo_desde    date,
+    proxima_factura date,
+    creado_en       timestamptz NOT NULL DEFAULT now(),
+    actualizado_en  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Solicitudes de plan ("Elegir plan"): montos calculados en el servidor con
+-- el precio de lista del momento. Un asesor las atiende (pago por
+-- transferencia) y activa el plan.
+CREATE TABLE IF NOT EXISTS soluciones.solicitudes_plan (
+    id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    plan               text NOT NULL CHECK (plan IN ('emprendedor', 'pyme', 'empresarial')),
+    periodicidad       text NOT NULL CHECK (periodicidad IN ('mensual', 'anual')),
+    forma_pago         text NOT NULL CHECK (forma_pago IN ('transferencia', 'tarjeta')),
+    subtotal           numeric(14, 2) NOT NULL,
+    itbis              numeric(14, 2) NOT NULL,
+    total              numeric(14, 2) NOT NULL,
+    contacto_nombre    text,
+    contacto_correo    text,
+    contacto_telefono  text,
+    notas              text,
+    estado             text NOT NULL DEFAULT 'pendiente' CHECK (estado IN ('pendiente', 'atendida', 'cancelada')),
+    creado_en          timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS solicitudes_plan_creado_idx ON soluciones.solicitudes_plan (creado_en DESC);
+
+-- Portal de clientes: enlaces de solo lectura por cliente. Del token
+-- (aleatorio, 32 bytes) solo se guarda su SHA-256: el enlace completo se
+-- muestra una única vez, al crearlo. Un enlace revocado o vencido responde
+-- 404 en el portal público.
+CREATE TABLE IF NOT EXISTS soluciones.portal_enlaces (
+    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    cliente_id        uuid NOT NULL REFERENCES ventas.clientes (id) ON DELETE CASCADE,
+    token_hash        text NOT NULL UNIQUE,
+    metodos_pago      text[] NOT NULL DEFAULT '{}',
+    expira_en         timestamptz NOT NULL,
+    revocado_en       timestamptz,
+    ultimo_acceso_en  timestamptz,
+    accesos           integer NOT NULL DEFAULT 0,
+    creado_en         timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS portal_enlaces_cliente_idx ON soluciones.portal_enlaces (cliente_id);
+
+-- RNC/cédula del cliente AL CREAR el enlace: el portal muestra las facturas
+-- de esa identificación aunque luego se edite el RNC del contacto. Los
+-- enlaces anteriores toman el RNC actual del cliente (una sola vez).
+ALTER TABLE soluciones.portal_enlaces ADD COLUMN IF NOT EXISTS rnc text;
+UPDATE soluciones.portal_enlaces e SET rnc = c.rnc
+FROM ventas.clientes c
+WHERE c.id = e.cliente_id AND e.rnc IS NULL AND c.rnc IS NOT NULL;
+
+-- Datos para pagar por transferencia que ve el cliente en el portal (una
+-- sola fila, id = 1).
+CREATE TABLE IF NOT EXISTS soluciones.portal_config (
+    id              smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    banco           text,
+    tipo_cuenta     text,
+    numero_cuenta   text,
+    titular         text,
+    rnc_titular     text,
+    instrucciones   text,
+    actualizado_en  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Kontara Ventas: activación del módulo (una sola fila, id = 1; prueba
+-- gratis de 30 días) y sus cuatro automatizaciones.
+CREATE TABLE IF NOT EXISTS soluciones.ventas_modulo (
+    id                smallint PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    activo            boolean NOT NULL DEFAULT false,
+    activado_en       timestamptz,
+    prueba_hasta      date,
+    ultima_ejecucion  timestamptz,
+    ultimo_resultado  jsonb
+);
+
+CREATE TABLE IF NOT EXISTS soluciones.automatizaciones (
+    clave           text PRIMARY KEY CHECK (clave IN ('motivar', 'cobranza', 'fidelizacion', 'reactivacion')),
+    activa          boolean NOT NULL DEFAULT false,
+    canal           text NOT NULL DEFAULT 'whatsapp' CHECK (canal IN ('whatsapp', 'correo', 'ambos')),
+    dias            integer NOT NULL CHECK (dias BETWEEN 0 AND 365),
+    asunto          text NOT NULL,
+    plantilla       text NOT NULL,
+    activada_en     timestamptz,
+    actualizado_en  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Cola de envíos que genera la tarea diaria. `clave_unica` evita repetir un
+-- mismo envío (p. ej. 'cobranza:<factura>:<vence>'). Solo pasa a 'enviado'
+-- cuando un canal configurado (SMTP / WhatsApp Cloud API) lo entregó; sin
+-- canal queda 'pendiente_canal' y el usuario puede mandarlo a mano
+-- (wa.me / correo) y marcarlo 'enviado_manual'.
+CREATE TABLE IF NOT EXISTS soluciones.envios (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    automatizacion  text NOT NULL,
+    clave_unica     text NOT NULL,
+    canal           text NOT NULL CHECK (canal IN ('whatsapp', 'correo')),
+    cliente_id      uuid,
+    cliente_nombre  text NOT NULL,
+    destino         text NOT NULL,
+    factura_id      uuid,
+    encf            text,
+    asunto          text NOT NULL,
+    mensaje         text NOT NULL,
+    estado          text NOT NULL DEFAULT 'pendiente_canal'
+                    CHECK (estado IN ('pendiente_canal', 'enviado', 'enviado_manual', 'error', 'descartado')),
+    error           text,
+    intentos        integer NOT NULL DEFAULT 0,
+    enviado_en      timestamptz,
+    creado_en       timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS envios_clave_canal_idx ON soluciones.envios (clave_unica, canal);
+CREATE INDEX IF NOT EXISTS envios_creado_idx ON soluciones.envios (creado_en DESC);
+
+-- POS: sesiones de caja (apertura con fondo, cierre con arqueo por método)
+-- y las ventas cobradas en cada una. Una caja solo puede tener una sesión
+-- abierta. `esperado`/`contado` = {"efectivo": "…", "tarjeta": "…",
+-- "transferencia": "…"}.
+CREATE TABLE IF NOT EXISTS soluciones.pos_sesiones (
+    id             uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    caja           text NOT NULL DEFAULT 'Caja principal',
+    almacen_id     uuid,
+    cajero         text,
+    fondo_inicial  numeric(14, 2) NOT NULL DEFAULT 0 CHECK (fondo_inicial >= 0),
+    abierta_en     timestamptz NOT NULL DEFAULT now(),
+    cerrada_en     timestamptz,
+    esperado       jsonb,
+    contado        jsonb,
+    notas_cierre   text,
+    estado         text NOT NULL DEFAULT 'abierta' CHECK (estado IN ('abierta', 'cerrada'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS pos_sesiones_abierta_idx ON soluciones.pos_sesiones (caja) WHERE estado = 'abierta';
+
+-- Cada venta apunta a su e-CF en facturacion.facturas (sin FK: es de
+-- facturas_api). `pagos` = [{"metodo": "efectivo", "monto": "…",
+-- "referencia": …}]; el `cambio` sale del efectivo.
+CREATE TABLE IF NOT EXISTS soluciones.pos_ventas (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    sesion_id       uuid NOT NULL REFERENCES soluciones.pos_sesiones (id),
+    factura_id      uuid NOT NULL UNIQUE,
+    encf            text,
+    tipo_ecf        smallint NOT NULL,
+    cliente_rnc     text,
+    cliente_nombre  text,
+    total           numeric(14, 2) NOT NULL,
+    pagos           jsonb NOT NULL,
+    recibido        numeric(14, 2) NOT NULL,
+    cambio          numeric(14, 2) NOT NULL DEFAULT 0 CHECK (cambio >= 0),
+    creado_en       timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS pos_ventas_sesion_idx ON soluciones.pos_ventas (sesion_id);
+"""
+
+
+
 async def _migrar(conn: asyncpg.Connection) -> None:
     async with conn.transaction():
         await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
@@ -645,6 +1063,10 @@ async def _migrar(conn: asyncpg.Connection) -> None:
         await conn.execute(DDL_COMPRAS)
         await conn.execute(DDL_CONTABILIDAD)
         await conn.execute(DDL_BANCOS)
+        await conn.execute(DDL_CONFIGURACION)
+        await conn.execute(DDL_OPERACION)
+        await conn.execute(DDL_NOMINA)
+        await conn.execute(DDL_SOLUCIONES)
 
 
 async def aplicar_migraciones(
@@ -654,7 +1076,8 @@ async def aplicar_migraciones(
     dormir: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> None:
     """Crea (si no existen) los esquemas `ventas`, `impuestos`, `compras`,
-    `recepcion`, `contabilidad` y `bancos`, sus tablas/índices y las
+    `recepcion`, `contabilidad`, `bancos`, `configuracion`, `operacion`,
+    `nomina` y `soluciones`, sus tablas/índices y las
     funciones auxiliares de las consultas, y siembra el catálogo de cuentas
     sugerido si está vacío. Con `lock_timeout`: si una tabla está ocupada
     (o hay un deadlock) suelta todo y reintenta con espera creciente."""
@@ -677,5 +1100,6 @@ async def aplicar_migraciones(
             await dormir(espera)
             espera = min(espera * 2, _ESPERA_MAXIMA_SEGUNDOS)
     logger.info(
-        "Esquemas 'ventas', 'impuestos', 'compras', 'recepcion', 'contabilidad' y 'bancos' verificados/creados"
+        "Esquemas 'ventas', 'impuestos', 'compras', 'recepcion', 'contabilidad', 'bancos', "
+        "'configuracion', 'operacion', 'nomina' y 'soluciones' verificados/creados"
     )

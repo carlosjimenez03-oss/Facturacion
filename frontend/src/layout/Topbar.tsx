@@ -1,29 +1,103 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
+import { cargarEmpresa, nombreEmpresa, useEmpresa } from "../lib/configuracionApi";
+import { ERP_API_URL } from "../lib/erpApi";
+import type { ResumenSincronizacion, ResumenTareas } from "../lib/operacionApi";
 import { EMPRESA_NOMBRE, EMPRESA_RNC, formatoRnc, MARCA, nombreAmbiente } from "../lib/marca";
+import { AUTH_CONFIGURADA, cerrarSesion, fetchConSesion } from "../lib/sesion";
 import { motivoRechazo, useFacturas } from "../lib/useFacturas";
-import { IconAlerta, IconApps, IconAyuda, IconBuscar, IconCampana, IconCerrar, IconCheck, IconChevron, IconHoja, IconMas, IconRechazo, IconSalir } from "./icons";
+import { useSesion } from "../pages/plataforma/useSesion";
+import {
+  IconActualizar,
+  IconAlerta,
+  IconApps,
+  IconAyuda,
+  IconBuscar,
+  IconCampana,
+  IconCerrar,
+  IconCheck,
+  IconChevron,
+  IconConfig,
+  IconEmpresa,
+  IconEscudo,
+  IconExterno,
+  IconHoja,
+  IconIngresos,
+  IconMas,
+  IconNomina,
+  IconPlan,
+  IconPos,
+  IconRechazo,
+  IconSalir,
+  IconUsuario,
+} from "./icons";
 import { MENU_PRINCIPAL, MENU_SOLUCIONES } from "./menu";
 
 type Panel = "nuevo" | "ayuda" | "notif" | "eco" | "apps" | "empresa" | "usuario" | null;
+type Modal = "pos" | "agregar-empresa" | null;
 
 const AYUDA = [
   { t: "Emitir una factura electrónica", d: "Elija el tipo de e-CF, agregue los productos, genere el XML, firme y envíe a la DGII.", to: "/facturas/nueva" },
   { t: "Qué hacer si la DGII rechaza un e-CF", d: "Abra la factura en el listado: el detalle muestra el código y el mensaje devuelto por la DGII.", to: "/facturas" },
+  { t: "Configurar la facturación electrónica", d: "Datos de la empresa, certificado digital, ambiente DGII y secuencias autorizadas.", to: "/configuracion" },
   { t: "Formato 606", d: "Registre las compras del período y genere el archivo para la Oficina Virtual.", to: "/formato-606" },
   { t: "Inventario y costos", d: "Productos, compras a proveedores y movimientos de existencia.", to: "/inventario/productos" },
 ];
 
+/** Iniciales para el avatar: "María Rosario" -> "MR", "maria@x.do" -> "M". */
+function iniciales(nombre: string, correo: string): string {
+  const partes = nombre.trim().split(/\s+/).filter(Boolean);
+  if (partes.length >= 2) return (partes[0][0] + partes[1][0]).toUpperCase();
+  return (partes[0]?.[0] ?? correo[0] ?? "U").toUpperCase();
+}
+
+/**
+ * Consulta opcional a endpoints de otros módulos (Mis tareas: GET
+ * /tareas/resumen; Centro de sincronización: GET /sincronizacion/resumen).
+ * Si fallan, devuelve null y la barra sigue como si no estuvieran.
+ */
+function useOpcional<T>(ruta: string, cadaMs: number): T | null {
+  const [valor, setValor] = useState<T | null>(null);
+  useEffect(() => {
+    let vivo = true;
+    const leer = () =>
+      fetchConSesion(`${ERP_API_URL}${ruta}`)
+        .then((r) => (r.ok ? (r.json() as Promise<T>) : null))
+        .catch(() => null)
+        .then((v) => vivo && setValor(v));
+    void leer();
+    const t = window.setInterval(leer, cadaMs);
+    return () => {
+      vivo = false;
+      window.clearInterval(t);
+    };
+  }, [ruta, cadaMs]);
+  return valor;
+}
+
 export function Topbar() {
   const navigate = useNavigate();
+  const sesion = useSesion();
+  const empresa = useEmpresa();
   const { facturas, enLinea, error } = useFacturas();
   const [panel, setPanel] = useState<Panel>(null);
+  const [modal, setModal] = useState<Modal>(null);
   const [q, setQ] = useState("");
   const [leidas, setLeidas] = useState(false);
   const toggle = (p: Panel) => setPanel((actual) => (actual === p ? null : p));
 
-  const ambiente = nombreAmbiente(facturas[0]?.ambiente);
-  const rnc = EMPRESA_RNC || facturas[0]?.rnc_emisor || "";
+  const resumenTareas = useOpcional<ResumenTareas>("/tareas/resumen", 120_000);
+  const tareas = resumenTareas?.pendientes ?? null;
+  // Modo contingencia calculado por el Centro de sincronización (fallos seguidos con la DGII).
+  const sincronizacion = useOpcional<ResumenSincronizacion>("/sincronizacion/resumen", 60_000);
+  const contingencia = Boolean(sincronizacion?.contingencia.activa);
+
+  const ambiente = nombreAmbiente(empresa?.ambiente ?? facturas[0]?.ambiente);
+  const nombre = nombreEmpresa(empresa, EMPRESA_NOMBRE);
+  const razonSocial = empresa?.razon_social || nombre;
+  const rnc = empresa?.rnc || EMPRESA_RNC || facturas[0]?.rnc_emisor || "";
+  const usuarioNombre = sesion?.usuario.nombre || (AUTH_CONFIGURADA ? "" : "Usuario sin sesión");
+  const usuarioCorreo = sesion?.usuario.email ?? "";
 
   const notificaciones = useMemo(
     () =>
@@ -33,7 +107,9 @@ export function Topbar() {
         .slice(0, 8),
     [facturas],
   );
-  const sinLeer = leidas ? 0 : notificaciones.filter((f) => f.estado !== "aceptado").length;
+  const rechazosSinLeer = leidas ? 0 : notificaciones.filter((f) => f.estado !== "aceptado").length;
+  // La campana cuenta las tareas pendientes (Mis tareas); si ese módulo aún no responde, los rechazos sin leer.
+  const contador = tareas ?? rechazosSinLeer;
 
   const resultados = useMemo(() => {
     const texto = q.trim().toLowerCase();
@@ -55,6 +131,18 @@ export function Topbar() {
     setQ("");
     navigate(to);
   };
+
+  async function salir() {
+    setPanel(null);
+    await cerrarSesion();
+    navigate("/login", { replace: true });
+  }
+
+  const conexion = contingencia
+    ? { cls: "conn-cont", txt: "Modo contingencia", tip: "La DGII no responde: los e-CF se firman y quedan en cola para enviarse al restablecerse el servicio." }
+    : enLinea
+      ? { cls: "conn-on", txt: "En línea", tip: "La API de facturación responde." }
+      : { cls: "conn-off", txt: "Sin conexión", tip: `Sin conexión con la API de facturación. ${error ?? ""}` };
 
   return (
     <header className="tb">
@@ -101,10 +189,10 @@ export function Topbar() {
             <div className="pop pop-center" style={{ width: 260 }}>
               <div className="pop-h">Crear nuevo</div>
               <div className="pop-sec">
-                <button type="button" className="pop-i" onClick={() => ir("/facturas/nueva")}>Factura electrónica</button>
-                <button type="button" className="pop-i" onClick={() => ir("/inventario/compras/nueva")}>Factura de compra</button>
+                <button type="button" className="pop-i" onClick={() => ir("/facturas/nueva")}>Factura de venta</button>
+                <button type="button" className="pop-i" onClick={() => ir("/compras/facturas/nueva")}>Factura de compra</button>
+                <button type="button" className="pop-i" onClick={() => ir("/contactos/nuevo")}>Cliente o proveedor</button>
                 <button type="button" className="pop-i" onClick={() => ir("/inventario/productos/nuevo")}>Producto</button>
-                <button type="button" className="pop-i" onClick={() => ir("/inventario/proveedores/nuevo")}>Proveedor</button>
               </div>
             </div>
           )}
@@ -112,24 +200,24 @@ export function Topbar() {
       </div>
 
       <div className="tb-right">
-        <span className="tip" data-tip="Ambiente de la DGII al que se envían los e-CF. Solo Producción tiene validez fiscal.">
+        <span className="tip tb-env" data-tip="Ambiente de la DGII al que se envían los e-CF. Solo Producción tiene validez fiscal.">
           <span className={`env ${ambiente === "Producción" ? "env-prod" : ambiente === "Certificación" ? "env-cert" : "env-test"}`}>DGII · {ambiente}</span>
         </span>
-        <span className="tip r" data-tip={enLinea ? "La API de facturación responde." : `Sin conexión con la API de facturación. ${error ?? ""}`}>
-          <span className={`conn ${enLinea ? "conn-on" : "conn-off"}`}>
+        <span className="tip r tb-conn" data-tip={conexion.tip}>
+          <span className={`conn ${conexion.cls}`}>
             <i />
-            {enLinea ? "En línea" : "Sin conexión"}
+            <span className="conn-txt">{conexion.txt}</span>
           </span>
         </span>
 
-        <button type="button" className={`ib${panel === "ayuda" ? " act" : ""}`} onClick={() => toggle("ayuda")} aria-label="Centro de ayuda">
+        <button type="button" className={`ib tb-opc${panel === "ayuda" ? " act" : ""}`} onClick={() => toggle("ayuda")} aria-label="Centro de ayuda">
           <IconAyuda />
         </button>
 
         <div className="pw">
-          <button type="button" className={`ib${panel === "notif" ? " act" : ""}`} onClick={() => toggle("notif")} aria-expanded={panel === "notif"} aria-label={`Notificaciones, ${sinLeer} sin leer`}>
+          <button type="button" className={`ib${panel === "notif" ? " act" : ""}`} onClick={() => toggle("notif")} aria-expanded={panel === "notif"} aria-label={`Notificaciones, ${contador} pendientes`}>
             <IconCampana />
-            {sinLeer > 0 && <span className="dot-n">{sinLeer}</span>}
+            {contador > 0 && <span className="dot-n">{contador > 99 ? "99+" : contador}</span>}
           </button>
           {panel === "notif" && (
             <div className="pop" style={{ width: 380 }}>
@@ -139,6 +227,21 @@ export function Topbar() {
                   Marcar todo como leído
                 </button>
               </div>
+              {tareas !== null && (
+                <div className="pop-sec">
+                  <button type="button" className="pop-i" onClick={() => ir("/tareas")}>
+                    <span className="chip">{tareas}</span>
+                    <span className="pop-txt">
+                      <b>Tareas pendientes</b>
+                      <span className="hint">
+                        {resumenTareas && (resumenTareas.vencidas > 0 || resumenTareas.vencen_hoy > 0)
+                          ? `${resumenTareas.vencidas} vencidas · ${resumenTareas.vencen_hoy} vencen hoy`
+                          : "Vencimientos fiscales y pendientes de gestión"}
+                      </span>
+                    </span>
+                  </button>
+                </div>
+              )}
               <div className="pop-sec">
                 {notificaciones.length === 0 && <div className="pop-empty">No hay respuestas recientes de la DGII.</div>}
                 {notificaciones.map((f) => {
@@ -161,7 +264,7 @@ export function Topbar() {
           )}
         </div>
 
-        <div className="pw">
+        <div className="pw tb-opc">
           <button type="button" className={`ib${panel === "eco" ? " act" : ""}`} onClick={() => toggle("eco")} aria-label="Compromiso ambiental">
             <span className="eco">
               <IconHoja />
@@ -188,8 +291,8 @@ export function Topbar() {
           )}
         </div>
 
-        <div className="pw">
-          <button type="button" className={`ib${panel === "apps" ? " act" : ""}`} onClick={() => toggle("apps")} aria-label="Mis soluciones">
+        <div className="pw tb-opc">
+          <button type="button" className={`ib${panel === "apps" ? " act" : ""}`} onClick={() => toggle("apps")} aria-expanded={panel === "apps"} aria-label="Mis soluciones">
             <IconApps />
           </button>
           {panel === "apps" && (
@@ -197,77 +300,181 @@ export function Topbar() {
               <div className="pop-h">Mis soluciones</div>
               <div className="pop-sec">
                 <button type="button" className="pop-i" onClick={() => ir("/")}>
+                  <span className="app-ic">
+                    <IconIngresos />
+                  </span>
                   <span className="pop-txt">
                     <b className="teal">{MARCA} Facturación</b>
-                    <span className="hint">Factura electrónica, inventario e impuestos.</span>
+                    <span className="hint">Factura electrónica, contabilidad e inventario.</span>
                   </span>
                   <IconCheck />
                 </button>
+                <button type="button" className="pop-i" onClick={() => ir("/nomina")}>
+                  <span className="app-ic">
+                    <IconNomina />
+                  </span>
+                  <span className="pop-txt">
+                    <b className="teal">Nómina</b>
+                    <span className="hint">Nómina con TSS, ISR e INFOTEP.</span>
+                  </span>
+                </button>
               </div>
               <div className="pop-sep" />
-              <div className="pop-h">Descubre más</div>
+              <div className="pop-h" style={{ paddingTop: 8 }}>Descubre más</div>
               <div className="pop-sec">
-                {MENU_SOLUCIONES.map((s) => (
-                  <button key={s.id} type="button" className="pop-i" onClick={() => ir(s.to ?? "/")}>
-                    {s.icon}
-                    <span className="pop-txt">
-                      <b className="teal">{s.label}</b>
-                    </span>
-                  </button>
-                ))}
+                <button
+                  type="button"
+                  className="pop-i"
+                  onClick={() => {
+                    setPanel(null);
+                    setModal("pos");
+                  }}
+                >
+                  <span className="app-ic">
+                    <IconPos />
+                  </span>
+                  <span className="pop-txt">
+                    <b className="teal">POS</b>
+                    <span className="hint">Vende y emite e-CF de consumo en caja.</span>
+                  </span>
+                  <span className="bd b-acep nodot" style={{ boxShadow: "inset 0 0 0 1px #BBF7D0" }}>
+                    Probar gratis
+                  </span>
+                </button>
+              </div>
+              <div className="pop-f">
+                <Link to="/configuracion" className="link-strong" onClick={() => setPanel(null)} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                  <IconConfig />
+                  Administrar mis soluciones
+                </Link>
               </div>
             </div>
           )}
         </div>
 
         <div className="pw">
-          <button type="button" className={`co${panel === "empresa" ? " act" : ""}`} onClick={() => toggle("empresa")} aria-label="Empresa">
-            <span className="co-av">{EMPRESA_NOMBRE.charAt(0).toUpperCase()}</span>
-            <span className="co-txt">{EMPRESA_NOMBRE}</span>
+          <button type="button" className={`co${panel === "empresa" ? " act" : ""}`} onClick={() => toggle("empresa")} aria-expanded={panel === "empresa"} aria-label="Cambiar empresa">
+            <span className="co-av">{nombre.charAt(0).toUpperCase()}</span>
+            <span className="co-txt">{nombre}</span>
             <IconChevron width={16} height={16} />
           </button>
           {panel === "empresa" && (
-            <div className="pop" style={{ width: 340 }}>
-              <div className="pop-h">
+            <div className="pop" style={{ width: 360 }}>
+              <div className="pop-h" style={{ fontSize: 14, color: "#111827" }}>
                 Mis empresas
-                <button type="button" className="ib" onClick={() => setPanel(null)} aria-label="Cerrar">
-                  <IconCerrar />
-                </button>
+                <span style={{ display: "flex", gap: 2 }}>
+                  <button type="button" className="ib" style={{ width: 32, height: 32 }} onClick={() => void cargarEmpresa(true)} aria-label="Actualizar lista">
+                    <IconActualizar width={17} height={17} />
+                  </button>
+                  <button type="button" className="ib" style={{ width: 32, height: 32 }} onClick={() => setPanel(null)} aria-label="Cerrar">
+                    <IconCerrar />
+                  </button>
+                </span>
               </div>
               <div className="pop-sec">
                 <div className="pop-i pop-static">
-                  <span className="co-av">{EMPRESA_NOMBRE.charAt(0).toUpperCase()}</span>
+                  <span className="co-av" style={{ width: 32, height: 32 }}>
+                    {nombre.charAt(0).toUpperCase()}
+                  </span>
                   <span className="pop-txt">
-                    <b>{EMPRESA_NOMBRE}</b>
-                    <span className="hint">{rnc ? `RNC ${formatoRnc(rnc)}` : "Configure VITE_EMPRESA_RNC"} · {ambiente}</span>
+                    <b>{razonSocial}</b>
+                    <span className="hint">{rnc ? `RNC ${formatoRnc(rnc)}` : "RNC sin configurar"} · Emisor electrónico</span>
                   </span>
                   <IconCheck />
                 </div>
               </div>
+              <div className="co-empty">
+                <span className="co-empty-ic">
+                  <IconEmpresa />
+                  <b>+</b>
+                </span>
+                <b style={{ color: "#111827", fontSize: 14.5 }}>¡Agrega otras empresas a tu cuenta!</b>
+                <span className="hint" style={{ fontSize: 13, lineHeight: 1.5 }}>
+                  Gestiona todas tus empresas en un mismo lugar y simplifica tu administración.
+                </span>
+              </div>
+              <div style={{ padding: "12px 16px 16px" }}>
+                <button
+                  type="button"
+                  className="btn co-add"
+                  onClick={() => {
+                    setPanel(null);
+                    setModal("agregar-empresa");
+                  }}
+                >
+                  + Agregar empresa
+                </button>
+              </div>
             </div>
           )}
         </div>
 
         <div className="pw">
-          <button type="button" className={`av${panel === "usuario" ? " act" : ""}`} onClick={() => toggle("usuario")} aria-label="Menú de usuario">
-            {EMPRESA_NOMBRE.charAt(0).toUpperCase()}
+          <button type="button" className={`av${panel === "usuario" ? " act" : ""}`} onClick={() => toggle("usuario")} aria-expanded={panel === "usuario"} aria-label="Menú de usuario">
+            {iniciales(usuarioNombre, usuarioCorreo || nombre)}
           </button>
           {panel === "usuario" && (
-            <div className="pop" style={{ width: 290 }}>
-              <div className="pop-h">{EMPRESA_NOMBRE}</div>
+            <div className="pop" style={{ width: 300 }}>
+              <div className="pop-user">
+                <b>{usuarioNombre || usuarioCorreo}</b>
+                <span className="hint" style={{ fontSize: 13 }}>
+                  {usuarioNombre ? usuarioCorreo : ""}
+                  {!AUTH_CONFIGURADA && "Inicio de sesión no configurado"}
+                </span>
+              </div>
+              <div className="pop-sep" />
               <div className="pop-row">
-                <span>Facturación electrónica</span>
-                <span className={`bd ${enLinea ? "b-acep" : "b-borr"} nodot`}>{enLinea ? "Activa" : "Sin conexión"}</span>
+                <span style={{ color: "#111827" }}>Facturación electrónica</span>
+                <span className={`bd ${enLinea ? "b-acep" : "b-borr"} nodot`}>{enLinea ? "Activada" : "Sin conexión"}</span>
+              </div>
+              <div className="pop-row solo-movil">
+                <span style={{ color: "#111827" }}>Ambiente DGII</span>
+                <span className="hint">{ambiente}{contingencia ? " · contingencia" : ""}</span>
               </div>
               <div className="pop-sep" />
               <div className="pop-sec">
-                <button type="button" className="pop-i" onClick={() => ir("/modulo/configuracion")}>Configuración</button>
-                <button type="button" className="pop-i" onClick={() => ir("/modulo/sincronizacion")}>Estado de las soluciones</button>
+                <button type="button" className="pop-i" onClick={() => ir("/planes")}>
+                  <IconPlan />
+                  <span style={{ flex: 1 }}>Consumo del plan</span>
+                  <IconExterno className="pop-ext" />
+                </button>
+                <button type="button" className="pop-i" onClick={() => ir("/configuracion")}>
+                  <IconConfig />
+                  <span style={{ flex: 1 }}>Configuración</span>
+                </button>
+                <button type="button" className="pop-i" onClick={() => ir("/cuenta/perfil")}>
+                  <IconUsuario />
+                  <span style={{ flex: 1 }}>Mi perfil</span>
+                  <IconExterno className="pop-ext" />
+                </button>
+                <button type="button" className="pop-i" onClick={() => ir("/cuenta/seguridad")}>
+                  <IconEscudo />
+                  <span style={{ flex: 1 }}>Seguridad</span>
+                  <IconExterno className="pop-ext" />
+                </button>
+                <button type="button" className="pop-i" onClick={() => ir("/estado-soluciones")}>
+                  <span className="pop-dot">
+                    <i className={enLinea && !contingencia ? "" : "bad"} />
+                  </span>
+                  <span style={{ flex: 1 }}>Estado de las soluciones</span>
+                  <IconExterno className="pop-ext" />
+                </button>
+                <button type="button" className="pop-i solo-movil" onClick={() => setPanel("ayuda")}>
+                  <IconAyuda />
+                  <span style={{ flex: 1 }}>Centro de ayuda</span>
+                </button>
               </div>
               <div className="pop-sep" />
               <div className="pop-sec">
-                <button type="button" className="pop-i" onClick={() => setPanel(null)}>
-                  <IconSalir /> Cerrar sesión
+                <button
+                  type="button"
+                  className="pop-i"
+                  onClick={() => void salir()}
+                  disabled={!AUTH_CONFIGURADA}
+                  title={AUTH_CONFIGURADA ? undefined : "El inicio de sesión no está configurado (ver docs/AUTH.md)"}
+                >
+                  <IconSalir />
+                  <span style={{ flex: 1 }}>Cerrar sesión</span>
                 </button>
               </div>
             </div>
@@ -303,6 +510,85 @@ export function Topbar() {
           </div>
         </aside>
       )}
+
+      {modal === "pos" && <ModalPos onCerrar={() => setModal(null)} onProbar={() => { setModal(null); navigate("/pos"); }} />}
+      {modal === "agregar-empresa" && (
+        <div className="scrim" role="presentation" onClick={() => setModal(null)}>
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="agregar-empresa-t" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-h">
+              <h3 id="agregar-empresa-t">Varias empresas: muy pronto</h3>
+            </div>
+            <div className="modal-b">
+              <p style={{ margin: 0 }}>
+                Por ahora {MARCA} administra <b>una empresa por instalación</b>: {razonSocial}
+                {rnc ? ` (RNC ${formatoRnc(rnc)})` : ""}. Estamos preparando la gestión de varias empresas desde una misma cuenta.
+              </p>
+              <p style={{ margin: 0 }}>
+                Mientras tanto, si necesita facturar con otro RNC, se instala una copia aparte de la aplicación con su propio certificado
+                digital y sus secuencias.
+              </p>
+            </div>
+            <div className="modal-f">
+              <button type="button" className="btn btn-p" onClick={() => setModal(null)}>
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </header>
+  );
+}
+
+function ModalPos({ onCerrar, onProbar }: { onCerrar: () => void; onProbar: () => void }) {
+  const punto = (texto: string) => (
+    <div className="pos-li">
+      <IconCheck />
+      <span>{texto}</span>
+    </div>
+  );
+  return (
+    <div className="scrim" style={{ zIndex: 120 }} role="presentation" onClick={onCerrar}>
+      <div className="pos-modal" role="dialog" aria-modal="true" aria-labelledby="pos-t" onClick={(e) => e.stopPropagation()}>
+        <button type="button" className="ib" onClick={onCerrar} aria-label="Cerrar">
+          <IconCerrar />
+        </button>
+        <div className="pos-txt">
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span className="app-ic" style={{ width: 32, height: 32, background: "#14B8A6", color: "#fff" }}>
+              <IconPos />
+            </span>
+            <span style={{ lineHeight: 1 }}>
+              <span style={{ display: "block", fontSize: 10, color: "#6B7280" }}>{MARCA.toLowerCase()}</span>
+              <b style={{ fontSize: 17, color: "#111827" }}>POS</b>
+            </span>
+          </div>
+          <h2 id="pos-t">
+            Conecta tu <span>punto de venta</span> y automatiza ventas
+          </h2>
+          <p style={{ margin: 0, fontSize: 14, color: "#374151" }}>Al conectar {MARCA} POS con tu facturación, podrás:</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            {punto("Emitir e-CF de consumo desde caja y actualizar tu contabilidad al instante.")}
+            {punto("Cerrar el mes sin tareas repetitivas.")}
+            {punto("Sincronizar caja, ingresos y bancos en un solo lugar.")}
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "center", marginTop: 8 }}>
+            <button type="button" className="btn" style={{ background: "#2BA89D", color: "#fff" }} onClick={onProbar}>
+              Probar {MARCA} POS
+            </button>
+            <button type="button" className="btn btn-g" style={{ color: "#0F766E" }} onClick={onCerrar}>
+              Seguir en Facturación
+            </button>
+          </div>
+        </div>
+        <div className="pos-art" aria-hidden="true">
+          <div>
+            {Array.from({ length: 6 }, (_, i) => (
+              <i key={i} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }

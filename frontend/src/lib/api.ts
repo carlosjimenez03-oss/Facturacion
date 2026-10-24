@@ -1,3 +1,4 @@
+import { fetchConSesion } from "./sesion";
 import type {
   EnviarResponse,
   FacturaDatos,
@@ -19,7 +20,7 @@ class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetchConSesion(`${API_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
@@ -50,11 +51,14 @@ export const api = {
 
   obtener: (id: string) => request<FacturaDetalle>(`/facturas/${id}`),
 
+  /** `asignar_encf` (o `encf` null): el servidor toma el siguiente e-NCF de la secuencia de Configuración, sin duplicados (409 si está agotada, vencida o desactivada). */
   crear: (payload: {
     tipo_ecf: number;
     encf: string | null;
+    asignar_encf?: boolean;
     datos: FacturaDatos;
     items_inventario?: ItemInventarioLink[];
+    vendedor_id?: string | null;
   }) =>
     request<FacturaDetalle>("/facturas", {
       method: "POST",
@@ -63,7 +67,7 @@ export const api = {
 
   actualizar: (
     id: string,
-    payload: { encf: string | null; datos: FacturaDatos; items_inventario?: ItemInventarioLink[] },
+    payload: { encf: string | null; datos: FacturaDatos; items_inventario?: ItemInventarioLink[]; vendedor_id?: string | null },
   ) =>
     request<FacturaDetalle>(`/facturas/${id}`, {
       method: "PUT",

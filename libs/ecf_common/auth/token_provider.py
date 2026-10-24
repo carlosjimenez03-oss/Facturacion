@@ -13,6 +13,7 @@ from libs.ecf_common.environments import DGIIEnvironment
 
 from .dgii_client import AutenticacionDGIIClient
 from .schemas import TokenResponse
+from .certificado_activo import huella_activo
 from .signing import CredencialFirma, cargar_certificado_p12, firmar_xml
 from .token_cache import TokenCache
 
@@ -31,12 +32,17 @@ class TokenProvider:
         self._cache = TokenCache(margen_segundos=margen_segundos)
         self._lock = asyncio.Lock()
         self._credencial: CredencialFirma | None = None
+        self._huella_certificado: float | None = None
 
     def _credencial_firma(self) -> CredencialFirma:
-        if self._credencial is None:
+        # Si en Configuración se cargó otro certificado, se recarga (y el
+        # token de la DGII que se pida después ya sale firmado con el nuevo).
+        huella = huella_activo()
+        if self._credencial is None or huella != self._huella_certificado:
             self._credencial = cargar_certificado_p12(
                 self._certificado_path, self._certificado_password
             )
+            self._huella_certificado = huella
         return self._credencial
 
     async def obtener_token(self, forzar_renovacion: bool = False) -> TokenResponse:

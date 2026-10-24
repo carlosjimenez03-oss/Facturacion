@@ -847,6 +847,158 @@ cuenta de activos al cierre del año) y el
 entorno de desarrollo (403): el contenido se tomó del resumen del buscador
 de esas páginas oficiales; conviene revisar el texto completo.
 
+## Operación (fase 6): Mis tareas, Centro de sincronización y Reportes
+
+Rutas en `app/tareas.py`, `app/sincronizacion.py` y `app/reportes.py`
+(repositorios `*_repository.py`, esquemas en `app/operacion_schemas.py`).
+Contrato con el frontend:
+[`frontend/src/lib/operacionApi.ts`](../frontend/src/lib/operacionApi.ts)
+(todas las peticiones pasan por su `request()` local).
+
+### Datos
+
+- Esquema propio **`operacion`** (`DDL_OPERACION` de `migraciones.py`; copia
+  en [`db/init/014_operacion.sql`](../db/init/014_operacion.sql)):
+  `tareas` (manuales), `tareas_automaticas` (completada / pospuesta de una
+  tarea automática, por su clave estable) y `facturas_papel`.
+- Todo lo demás se **calcula al leer**, con consultas de solo lectura sobre
+  las tablas de los otros módulos y los mismos criterios que sus pantallas:
+  `facturacion.facturas` y `facturacion.envios_dgii` (facturas-api y los
+  módulos DGII), `recepcion.ecf_recibidos`, `compras606.registros`,
+  `ventas.*`, `compras.*`, `impuestos.declaraciones_presentadas` e
+  `inventario.*` (de inventario-api: productos, lotes, existencias,
+  movimientos — se lee por SQL, nunca se escribe).
+
+### Mis tareas
+
+| Método y ruta | Qué hace |
+|---|---|
+| `GET /tareas?estado=&categoria=` | Manuales + automáticas con su `estado` (`pendiente`/`pospuesta`/`completada`), las vencidas y urgentes primero |
+| `GET /tareas/resumen` | Contadores para la campana de la barra superior: pendientes, vencidas, vencen hoy, alta, por categoría y las 5 más urgentes |
+| `POST /tareas` · `PUT /tareas/{id}` · `DELETE /tareas/{id}` | Tareas manuales (título, descripción, vence, prioridad); las automáticas no se editan ni se borran (422) |
+| `POST /tareas/{id}/completar` · `/reabrir` · `/posponer` (`{hasta}`) | Para ambas; `id` es el uuid o la clave de la automática (404 si su motivo ya no existe) |
+
+Tareas automáticas (clave → condición): `declaracion:<form>:<periodo>`
+(pendientes que vencen en ≤ 30 días o vencidas hace ≤ 180, de
+`listar_declaraciones`), `factura_rechazada|factura_error:<id>` (últimos 90
+días), `dgii_en_proceso:<huella>` ('enviado' hace > 1 h), `ecf_por_aprobar:<id>`,
+`cxc_vencida:<factura>`, `cxp_vencida|cxp_por_vencer:<registro606>` (≤ 7 días),
+`cotizacion_por_vencer:<id>:<vence>` (≤ 3 días), `lote_vencido|lote_por_vencer:<lote>:<fecha>`
+(con existencia, ≤ 30 días, criterio de `alertas_lotes`), `stock_bajo:<producto>`
+(criterio de `estado_stock`), `inventario_sin_sincronizar:<huella>` y
+`papel_sin_reemplazo:<id>`. Al listar se borra el estado guardado de las
+claves cuya condición desapareció (si vuelve a darse, la tarea reaparece
+pendiente); si una fuente falla (p. ej. falta el esquema de inventario), sus
+tareas no salen y su estado no se toca.
+
+### Centro de sincronización
+
+| Método y ruta | Qué hace |
+|---|---|
+| `GET /sincronizacion/resumen` | Estado por canal (envío DGII, resultado DGII, inventario, aprobación comercial, entrega del ACECF), contadores de 7 días y la **contingencia** calculada |
+| `GET /sincronizacion/pendientes?canal=` | Lo pendiente con su `accion`: `actualizar_estado` / `reenviar` (facturas-api), `reintentar_aprobacion` / `decidir_aprobacion` (`/compras/bandeja/{id}/aprobar|rechazar`), `reintentar_entrega` |
+| `GET /sincronizacion/historial?modulo=&resultado=&q=&desde=&hasta=` | Bitácora de `facturacion.envios_dgii` |
+| `GET /sincronizacion/envios-por-dia?dias=7` | Historial de envíos por día |
+| `POST /sincronizacion/entregas/{id}/reintentar` | Vuelve a entregar al proveedor el ACECF ya aceptado (mismas columnas y función que `decidir_aprobacion`) |
+| `GET/POST /sincronizacion/facturas-papel` · `PUT/DELETE /sincronizacion/facturas-papel/{id}` | Facturas emitidas en papel (NCF serie B, cliente, montos por tasa, ITBIS calculado si no se indica, forma de pago del 607, e-CF de reemplazo) |
+
+**Contingencia (calculada).** `contingencia.activa` cuando los últimos 3 o
+más envíos/consultas a la DGII auditados en `envios_dgii` (últimas 24 h)
+fallaron seguidos; `desde` es el primero de la racha y `pendientes` los e-CF
+en 'error' sin trackId. La tarea de fondo de facturas-api no guarda cuándo
+corre: `ultima_consulta_resultado` es la última consulta auditada y
+`proximo_intento` = esa + 120 s si hay e-CF 'enviado'. **Falta en
+facturas-api** (otro paso): firmar y encolar localmente en contingencia,
+enviar por lotes (`contingencia.lotes` sale vacía hasta entonces: hace falta
+una tabla de lotes con documentos/aceptados/rechazados y su estado), un
+estado propio para la factura "firmada en contingencia" (hoy cuentan las
+'error' sin trackId), reenvío automático al reconectar, guardar la última
+corrida del bucle y la leyenda de contingencia en la representación impresa.
+Las facturas en papel todavía no alimentan el 607 ni la contabilidad.
+
+### Reportes
+
+Todos con `desde`/`hasta` (ambos incluidos, ≤ 1100 días) salvo antigüedad e
+inventario valorizado (a hoy):
+
+| Ruta | Qué agrega |
+|---|---|
+| `GET /reportes/ventas?agrupar=mes\|dia\|cliente\|producto\|tipo_ecf&cliente_rnc=&tipo_ecf=` | e-CF de venta aceptados (E34 resta) con el desglose por tasa del IT-1 (`formatos.desglose_por_tasa`); por producto, las líneas |
+| `GET /reportes/itbis` | Por mes completo: ITBIS de ventas (como el IT-1), compras/ITBIS/costo/adelantado del 606 y retenido por mes de pago |
+| `GET /reportes/compras?agrupar=proveedor\|categoria\|mes&proveedor_rnc=&tipo_bienes_servicios=` | 606 por fecha del comprobante (notas de crédito restan) |
+| `GET /reportes/antiguedad-cxc?cliente_rnc=` · `/antiguedad-cxp?proveedor_rnc=` | Saldos de los CTE de cuentas por cobrar/pagar en tramos por vencer, 1-30, 31-60, 61-90, > 90 días, por contacto y por documento |
+| `GET /reportes/cobros-pagos` | Cobros y pagos no anulados por mes, por método y detalle |
+| `GET /reportes/inventario-valorizado?almacen_id=&categoria=` | Existencia × costo promedio (negativos valen 0) |
+| `GET /reportes/rotacion-inventario?categoria=` | Existencia inicial/final reconstruida del Kardex, entradas/salidas (sin transferencias), rotación = salidas / existencia promedio |
+| `GET /reportes/mas-vendidos?limite=&categoria=` | Salidas por factura del Kardex |
+| `GET /reportes/retenciones` | Efectuadas (606 por fecha de pago, por proveedor y por tipo) y las que retuvieron los clientes en e-CF aceptados |
+
+Pruebas: `tests/test_operacion.py` (rutas, repos simulados) y
+`tests/test_operacion_postgres.py` (Postgres real con
+`OPERACION_TEST_DATABASE_URL`, datos de `tests/operacion_semilla.py` y
+totales calculados a mano).
+
+## Configuración y plataforma (fase 6)
+
+Rutas en `app/configuracion.py` (prefijo `/configuracion`) y
+`app/plataforma.py`; esquema `configuracion` (`app/migraciones_configuracion.py`
+= `db/init/013_configuracion.sql`). Contrato: `frontend/src/lib/configuracionApi.ts`.
+
+| Método y ruta | Qué hace |
+|---|---|
+| `GET/PUT /configuracion/empresa` | Datos de la empresa (una fila). El RNC es `EMISOR_RNC` si está configurado |
+| `GET/POST /configuracion/certificado` | Estado del `.p12` con que se firma; carga validada de uno nuevo (ver AUTH.md) |
+| `GET /configuracion/secuencias`, `GET/PUT/DELETE /configuracion/secuencias/{tipo}` | Rango e-NCF por tipo (31…47): siguiente e-NCF = mayor entre `desde`, `proximo` y el último usado en `facturacion.facturas` + 1; usados, disponibles, consumo y avisos (vencida, agotada, por vencer ≤ 30 días, por agotarse ≤ 10 o ≥ 90 %) |
+| `GET/POST /configuracion/vendedores`, `PUT/DELETE /configuracion/vendedores/{id}` | Vendedores (la factura guarda `facturacion.facturas.vendedor_id`, columna de facturas_api). No se borra uno con facturas: se desactiva |
+| `GET/POST /configuracion/usuarios`, `POST /configuracion/usuarios/{id}/desactivar\|activar` | Usuarios de Supabase Auth por la API admin de GoTrue (`SUPABASE_SERVICE_ROLE_KEY`) |
+| `GET/PUT /configuracion/inventario` | Método de valuación (preferencia; el costo sigue siendo promedio ponderado) |
+| `GET /configuracion/envio`, `PUT /configuracion/envio/correo\|whatsapp`, `DELETE /configuracion/envio/whatsapp`, `POST …/prueba` | SMTP y WhatsApp Cloud API (secretos cifrados con `CERTIFICADOS_CLAVE`) |
+| `GET /auth/verificar` | 204/401: sesión válida de un usuario con acceso a Kontara (lo consulta nginx con `auth_request`; la cookie solo vale en GET de descargas) |
+| `POST /configuracion/usuarios/{id}/acceso` | Da acceso a Kontara (`app_metadata.kontara`) a un usuario que ya existía en Supabase Auth |
+| `GET /estado-servicios` | `/health` de cada servicio por la red interna (2,5 s cada uno), base de datos y Supabase Auth |
+
+El e-NCF lo asigna facturas_api al crear la factura (`POST /facturas` con
+`asignar_encf: true` o sin `encf`): toma el siguiente de esta secuencia con la
+fila bloqueada (`SELECT … FOR UPDATE`), así dos cajas a la vez nunca reciben el
+mismo, y responde 409 si la secuencia está desactivada, vencida o agotada. Un
+e-NCF que mande el cliente se acepta si ninguna otra factura del emisor lo
+tiene (índice único `(rnc_emisor, encf)`). Ver
+`services/facturas_api/app/secuencias_encf.py`. `GET /auth/verificar` responde
+503 sin `SUPABASE_JWT_SECRET`.
+
+## Soluciones (fase 6): POS, portal de clientes, planes y Kontara Ventas
+
+Rutas en `app/soluciones.py`, consultas en `app/soluciones_repository.py`,
+reglas puras en `app/soluciones_calculos.py`; esquema `soluciones`
+(`DDL_SOLUCIONES` = `db/init/016_soluciones.sql`). Contrato:
+`frontend/src/lib/solucionesApi.ts`.
+
+- **Planes**: `GET /suscripcion` (plan, `estado` prueba/activa/prueba_vencida
+  y `dias_restantes`; lo lee la tarjeta de prueba de los menús laterales) y
+  `GET /suscripcion/consumo`. Los **usuarios** del consumo son los usuarios
+  activos de Supabase Auth, contados con la API admin de GoTrue
+  (`app/gotrue_admin.py`) cuando erp-api tiene `SUPABASE_SERVICE_ROLE_KEY`;
+  sin ella llegan `null` y Planes muestra «—».
+- **Portal de clientes**: `/portal/*` (crear, revocar enlaces y datos
+  bancarios) pide sesión como todo `/api-erp`; `/portal/publico/<token>/*`
+  (lo abre el cliente desde `/p/<token>` del frontend) es **público**: nginx
+  tiene una `location /api-erp/portal/publico/` sin `auth_request` y, con
+  `REQUIRE_AUTH=true`, erp-api también la deja pasar (`main.py`). Lo protege
+  el token del enlace (solo se guarda su hash, vence y se revoca).
+- **Canales de Kontara Ventas y del portal** (`app/soluciones_canales.py`,
+  `canales_de_envio`): primero el SMTP y el WhatsApp Cloud API guardados en
+  Configuración → WhatsApp y correo (`configuracion.preferencias`, secretos
+  cifrados, ver `app/configuracion_envio.py`); si un canal no está completo
+  allí, las variables `SMTP_HOST`, `SMTP_PORT`, `SMTP_USUARIO`, `SMTP_CLAVE`,
+  `SMTP_REMITENTE`, `WHATSAPP_TOKEN` y `WHATSAPP_PHONE_NUMBER_ID`. Sin canal
+  los envíos quedan `pendiente_canal`.
+- **Tarea diaria** de Kontara Ventas: `SOLUCIONES_TAREA_ACTIVA` (true por
+  defecto) y `SOLUCIONES_TAREA_INTERVALO_HORAS` (24). El PDF de las facturas
+  lo pide a `FACTURAS_API_URL` (por defecto `http://facturas-api:8000`).
+- **POS**: sesiones de caja y ventas; cada venta es un E32 (o E31 con RNC)
+  emitido por facturas-api con el emisor, el siguiente e-NCF y el vencimiento
+  de la secuencia de Configuración.
+
 ## Despliegue
 
 Servicio `erp-api` en `docker-compose.dokploy.yml` (puerto de host 8019,

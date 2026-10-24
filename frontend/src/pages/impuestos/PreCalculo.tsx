@@ -8,7 +8,8 @@ import { Link, Navigate, useNavigate, useParams } from "react-router-dom";
 import { IconAlerta } from "../../layout/icons";
 import { impuestosApi } from "../../lib/impuestosApi";
 import type { AjusteEditable, Casilla, FormularioPreCalculo, MarcarPresentadaPayload, PreCalculo } from "../../lib/impuestosApi";
-import { EMPRESA_NOMBRE, EMPRESA_RNC, MARCA, formatoMonto, formatoRnc } from "../../lib/marca";
+import { MARCA, formatoMonto, formatoRnc } from "../../lib/marca";
+import { useDatosEmpresa } from "../../lib/configuracionApi";
 import { AvisoError, Cargando, Vacio } from "../ingresos/IngresosShell";
 import { hoyIso, mensajeError } from "../ingresos/ingresosUtil";
 import { useAviso } from "../ingresos/useAviso";
@@ -48,6 +49,7 @@ const valorCampo = (a: AjusteEditable) => String(Number(a.valor) || 0);
 const valorEnvio = (v: string) => (v.trim() === "" ? "" : (Number(v) || 0).toFixed(2));
 
 export function PreCalculoPage() {
+  const miEmpresa = useDatosEmpresa();
   const { formulario: param } = useParams<{ formulario: string }>();
   const navigate = useNavigate();
   const [mensual, setMensual] = usePeriodoMensual();
@@ -176,8 +178,8 @@ export function PreCalculoPage() {
     <div className="content">
       <div className="pc-imp-h">
         <div>
-          <b>{EMPRESA_NOMBRE}</b>
-          {EMPRESA_RNC && `RNC ${formatoRnc(EMPRESA_RNC)}`}
+          <b>{miEmpresa.razonSocial}</b>
+          {miEmpresa.rnc && `RNC ${formatoRnc(miEmpresa.rnc)}`}
         </div>
         <div style={{ textAlign: "right" }}>
           Generado por {MARCA} el {fechaDgii(hoyIso())}
