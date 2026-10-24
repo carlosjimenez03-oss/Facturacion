@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Reques
 from libs.ecf_common.ambiente import AmbienteInvalidoError, validar_ambiente
 from libs.ecf_common.auth import certificado_activo
 from libs.ecf_common.auth.sesion_supabase import SesionInvalidaError, usuario_de_request
+from libs.ecf_common.empresa import EMPRESA_PREDETERMINADA, empresa_actual
 from libs.ecf_common.environments import dgii_environment_for
 
 from . import ambiente_dgii
@@ -75,6 +76,13 @@ async def _llamar(funcion, *args, **kwargs):
 
 # --- Empresa ---------------------------------------------------------
 
+def _rnc_de_variables(settings: ErpApiSettings) -> str:
+    """EMISOR_RNC: solo es el de la empresa 1 (las demás tienen el suyo)."""
+    if empresa_actual() != EMPRESA_PREDETERMINADA:
+        return ""
+    return "".join(c for c in settings.emisor_rnc if c.isdigit())
+
+
 async def _empresa(pool, fila: dict | None, settings: ErpApiSettings) -> dict:
     """Sin fila guardada: lo que ya se sabe por las variables de entorno.
     El ambiente es el activo (Configuración → Ambiente DGII o APP_ENV)."""
@@ -82,13 +90,13 @@ async def _empresa(pool, fila: dict | None, settings: ErpApiSettings) -> dict:
     base = {
         "ambiente": ambiente,
         "ambiente_dgii": dgii_environment_for(ambiente).value,
-        "emisor_rnc_configurado": "".join(c for c in settings.emisor_rnc if c.isdigit()) or None,
+        "emisor_rnc_configurado": _rnc_de_variables(settings) or None,
     }
     if fila is None:
         return {
             **base,
             "configurada": False,
-            "razon_social": settings.emisor_razon_social,
+            "razon_social": settings.emisor_razon_social if empresa_actual() == EMPRESA_PREDETERMINADA else "",
             "rnc": base["emisor_rnc_configurado"],
         }
     return {**base, **fila, "configurada": True}
@@ -104,11 +112,15 @@ async def guardar_empresa(
     request: Request, payload: EmpresaPayload, settings: ErpApiSettings = Depends(get_settings)
 ):
     campos = payload.model_dump()
-    # El RNC es el del emisor autorizado (EMISOR_RNC): no se cambia aquí.
-    emisor_rnc = "".join(c for c in settings.emisor_rnc if c.isdigit())
+    # El RNC de la empresa 1 es el del emisor autorizado (EMISOR_RNC): no se
+    # cambia aquí. El de las demás sí (único en la instalación).
+    emisor_rnc = _rnc_de_variables(settings)
     if emisor_rnc:
         campos["rnc"] = emisor_rnc
-    fila = await _llamar(repo.guardar_empresa, _pool(request), **campos)
+    try:
+        fila = await _llamar(repo.guardar_empresa, _pool(request), **campos)
+    except repo.RncEnUsoError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return await _empresa(_pool(request), fila, settings)
 
 
@@ -217,7 +229,11 @@ async def crear_usuario(payload: UsuarioPayload, settings: ErpApiSettings = Depe
 
 
 def _usuario_actual(request: Request, settings: ErpApiSettings):
-    """El usuario con sesión, o None si el inicio de sesión no está configurado."""
+    """El usuario con sesión (con su rol en la empresa del request, si lo
+    verificó el middleware), o None si el inicio de sesión no está configurado."""
+    verificado = getattr(request.state, "usuario", None)
+    if verificado is not None:
+        return verificado
     try:
         return usuario_de_request(request, settings.supabase_jwt_secret, admins=settings.kontara_admin_emails)
     except SesionInvalidaError:
@@ -265,7 +281,7 @@ _P12_MAX_BYTES = 100_000
 
 
 def _rnc_empresa(settings: ErpApiSettings, fila: dict | None) -> str:
-    return "".join(c for c in (settings.emisor_rnc or (fila or {}).get("rnc") or "") if c.isdigit())
+    return "".join(c for c in (_rnc_de_variables(settings) or (fila or {}).get("rnc") or "") if c.isdigit())
 
 
 @router.get("/certificado", response_model=CertificadoEstado)

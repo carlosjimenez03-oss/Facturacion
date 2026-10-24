@@ -667,7 +667,7 @@ async def guardar_ajustes(
                         """
                         INSERT INTO impuestos.ajustes_precalculo (formulario, periodo, clave, valor)
                         VALUES ($1, $2, $3, $4)
-                        ON CONFLICT (formulario, periodo, clave)
+                        ON CONFLICT (empresa_id, formulario, periodo, clave)
                         DO UPDATE SET valor = EXCLUDED.valor, actualizado_en = now()
                         """,
                         formulario,
@@ -747,7 +747,7 @@ async def marcar_presentada(
             """
             INSERT INTO impuestos.declaraciones_presentadas (formulario, periodo, presentada_en, monto, referencia)
             VALUES ($1, $2, $3, $4, $5)
-            ON CONFLICT (formulario, periodo)
+            ON CONFLICT (empresa_id, formulario, periodo)
             DO UPDATE SET presentada_en = EXCLUDED.presentada_en, monto = EXCLUDED.monto,
                           referencia = EXCLUDED.referencia
             RETURNING presentada_en, monto, referencia

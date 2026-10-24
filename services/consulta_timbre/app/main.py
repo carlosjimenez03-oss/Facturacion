@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from libs.ecf_common.ambiente import AmbienteDGII, AmbienteInvalidoError
 from libs.ecf_common.db import cerrar_pool, crear_pool
+from libs.ecf_common.empresa import instalar_empresa
 from libs.ecf_common.environments import DGIIEnvironment, dgii_environment_for
 from libs.ecf_common.http_client import DGIIServiceError
 
@@ -37,6 +38,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.state.db_pool = None
+
+# Empresa del request (multiempresa, docs/MULTIEMPRESA.md): la que manda
+# quien llama por la red interna (X-Kontara-Empresa); con ella se eligen el
+# certificado, el ambiente y el token de la DGII. Sin cabecera: la empresa 1.
+instalar_empresa(app, settings)
 
 app.add_middleware(
     CORSMiddleware,

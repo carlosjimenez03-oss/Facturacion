@@ -12,9 +12,11 @@ from libs.ecf_common.auth.sesion_supabase import (
     RevocacionSesiones,
     SesionInvalidaError,
     UsuarioSesion,
+    cookie_permitida,
     respuesta_sin_sesion,
     usuario_de_request,
 )
+from libs.ecf_common.empresa import CABECERA_EMPRESA, EMPRESA_PREDETERMINADA, empresa_pedida, resolver_empresa
 from libs.ecf_common.environments import dgii_environment_for
 
 from . import ambiente_dgii, gotrue_admin
@@ -65,7 +67,11 @@ def _sin_sesion(motivo: str, codigo: str | None) -> Response:
 @router.get(
     "/auth/verificar",
     status_code=204,
-    responses={401: {"description": "Sin sesión válida"}, 503: {"description": "Sin SUPABASE_JWT_SECRET"}},
+    responses={
+        401: {"description": "Sin sesión válida"},
+        403: {"description": "El usuario no es miembro de la empresa pedida (X-Kontara-Empresa)"},
+        503: {"description": "Sin SUPABASE_JWT_SECRET"},
+    },
 )
 async def verificar_sesion(request: Request, settings: ErpApiSettings = Depends(get_settings)):
     """204 si el request trae un `access_token` válido de Supabase Auth de un
@@ -95,12 +101,35 @@ async def verificar_sesion(request: Request, settings: ErpApiSettings = Depends(
         )
     except SesionInvalidaError as exc:
         return _sin_sesion(str(exc), "sin_acceso" if str(exc) == SIN_ACCESO else None)
-    if not await REVOCACION.vigente(request.app.state.db_pool, usuario):
+    pool = request.app.state.db_pool
+    if not await REVOCACION.vigente(pool, usuario):
         return _sin_sesion("La sesión se cerró: inicie sesión de nuevo", "sesion_cerrada")
     await marcar_acceso_si_falta(settings, usuario)
+    # Multiempresa: la empresa que pide el navegador (X-Kontara-Empresa, o la
+    # cookie kontara_empresa en las descargas) tiene que ser una de las del
+    # usuario. nginx reenvía a las APIs la que se devuelve aquí, en lugar de
+    # la que mandó el navegador (docs/MULTIEMPRESA.md).
+    metodo = request.headers.get("x-original-method") or request.method
+    ruta = request.headers.get("x-original-uri") or request.url.path
+    pedida = empresa_pedida(request, cookie_permitida=lambda _m, _r: cookie_permitida(metodo, ruta))
+    try:
+        empresa_id, _, error = await resolver_empresa(pool, usuario, pedida, interna=False)
+    except Exception:
+        logger.exception("No se pudo verificar la empresa del usuario %s", usuario.correo)
+        return JSONResponse(
+            status_code=503, content={"detail": "No se pudo verificar la empresa"}, headers={"Cache-Control": "no-store"}
+        )
+    if error is not None:
+        error.headers["Cache-Control"] = "no-store"
+        error.headers["X-Kontara-Motivo"] = "sin_empresa"
+        return error
     return Response(
         status_code=204,
-        headers={"X-Usuario-Id": usuario.id, "Cache-Control": "no-store"},
+        headers={
+            "X-Usuario-Id": usuario.id,
+            CABECERA_EMPRESA: str(empresa_id or EMPRESA_PREDETERMINADA),
+            "Cache-Control": "no-store",
+        },
     )
 
 

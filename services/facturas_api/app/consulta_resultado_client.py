@@ -14,6 +14,8 @@ from typing import Any
 
 import httpx
 
+from libs.ecf_common.empresa import cabeceras_empresa
+
 
 class ConsultaResultadoError(Exception):
     """No se pudo contactar a consulta_resultado o respondió con un error inesperado."""
@@ -23,7 +25,7 @@ async def consultar_resultado(base_url: str, track_id: str, *, ambiente: str | N
     """`ambiente`: el de la factura (test|qa|production); sin él,
     consulta_resultado usa el ambiente activo."""
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=30.0, headers=cabeceras_empresa()) as client:
             respuesta = await client.get(
                 f"{base_url}/resultado/{track_id}", params={"ambiente": ambiente} if ambiente else None
             )

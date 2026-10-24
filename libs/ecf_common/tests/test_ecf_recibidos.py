@@ -267,7 +267,7 @@ async def test_registrar_ecf_recibido_inserta_sin_esperar_candados():
     sentencias = _sentencias(conn)
     assert sentencias[0] == "SET LOCAL lock_timeout = '2s'"
     assert "INSERT INTO recepcion.ecf_recibidos" in sentencias[2]
-    assert "ON CONFLICT (rnc_emisor, encf) DO NOTHING" in sentencias[2]
+    assert "ON CONFLICT DO NOTHING" in sentencias[2]
     args = conn.llamadas[2][1]
     assert args[0] == "131234567" and args[1] == "E310000008734"
     assert args[9] == XML.decode("utf-8")

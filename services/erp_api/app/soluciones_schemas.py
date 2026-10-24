@@ -70,10 +70,19 @@ class Suscripcion(BaseModel):
     solicitud_pendiente: SolicitudPlan | None = None
 
 
+class ConsumoEmpresa(BaseModel):
+    empresa_id: int
+    nombre: str
+    ecf_emitidos: int
+
+
 class Consumo(BaseModel):
     mes: date
     plan_limites: PlanClave
+    # Total de la instalación (todas las empresas): es lo que cuenta el plan.
     ecf_emitidos: int
+    # Desglose de las empresas del usuario (multiempresa).
+    ecf_por_empresa: list[ConsumoEmpresa] = []
     ecf_limite: int | None
     ecf_porcentaje: int | None
     # None = la tabla de usuarios de la plataforma aún no existe.

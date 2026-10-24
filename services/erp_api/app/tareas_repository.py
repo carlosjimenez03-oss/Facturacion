@@ -767,7 +767,7 @@ async def _cambiar_estado(
             """
             INSERT INTO operacion.tareas_automaticas (clave, completada_en, pospuesta_hasta)
             VALUES ($1, CASE WHEN $2 THEN now() END, $3)
-            ON CONFLICT (clave) DO UPDATE
+            ON CONFLICT (empresa_id, clave) DO UPDATE
             SET completada_en = EXCLUDED.completada_en, pospuesta_hasta = EXCLUDED.pospuesta_hasta,
                 actualizado_en = now()
             RETURNING completada_en, pospuesta_hasta

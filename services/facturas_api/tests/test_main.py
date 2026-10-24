@@ -605,7 +605,8 @@ def test_enviar_factura_tipo_43_registra_compra_606_con_rnc_propio(client, monke
 
     assert response.status_code == 200
     assert len(llamadas) == 1
-    assert llamadas[0]["rnc_cedula"] == main.settings.emisor_rnc
+    # El RNC del emisor de la factura (el de su empresa).
+    assert llamadas[0]["rnc_cedula"] == factura["rnc_emisor"]
 
 
 @respx.mock

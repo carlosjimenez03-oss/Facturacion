@@ -37,9 +37,16 @@ def cargar_certificado_p12(path: str, password: str, *, preferir_activo: bool = 
 
     Si en Configuración se cargó un certificado nuevo (ver
     `certificado_activo.py`), se usa ese en vez de `path`/`password`; si no
-    existe o no se puede abrir, se usa `path` como siempre."""
+    existe o no se puede abrir, se usa `path` como siempre -- solo en la
+    empresa 1: las demás firman únicamente con el que se les cargó."""
     if preferir_activo:
-        from .certificado_activo import CertificadoInvalidoError, abrir_p12, leer_activo
+        from .certificado_activo import (
+            SIN_CERTIFICADO_EMPRESA,
+            CertificadoInvalidoError,
+            abrir_p12,
+            leer_activo,
+            usa_certificado_de_variables,
+        )
 
         activo = leer_activo()
         if activo is not None:
@@ -47,7 +54,10 @@ def cargar_certificado_p12(path: str, password: str, *, preferir_activo: bool = 
                 private_key, certificate = abrir_p12(activo[0], activo[1])
                 return CredencialFirma(private_key=private_key, certificate=certificate)
             except CertificadoInvalidoError:
-                pass
+                if not usa_certificado_de_variables():
+                    raise ValueError(SIN_CERTIFICADO_EMPRESA) from None
+        if not usa_certificado_de_variables():
+            raise FileNotFoundError(SIN_CERTIFICADO_EMPRESA)
     with open(path, "rb") as fh:
         p12_bytes = fh.read()
     private_key, certificate, _ = pkcs12.load_key_and_certificates(

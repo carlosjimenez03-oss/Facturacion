@@ -50,6 +50,7 @@ from libs.ecf_common.ambiente import (
 )
 from libs.ecf_common.auth import certificado_activo
 from libs.ecf_common.auth.sesion_supabase import SesionInvalidaError, UsuarioSesion, usuario_de_request
+from libs.ecf_common.empresa import EMPRESA_PREDETERMINADA, empresa_actual
 from libs.ecf_common.environments import dgii_environment_for
 
 from . import configuracion_repository as repo
@@ -193,7 +194,9 @@ async def listar_cambios(pool: asyncpg.Pool, *, limite: int = 10) -> list[dict[s
 
 
 def _rnc_empresa(settings: ErpApiSettings, fila: dict | None) -> str:
-    return "".join(c for c in (settings.emisor_rnc or (fila or {}).get("rnc") or "") if c.isdigit())
+    # EMISOR_RNC solo vale para la empresa 1 (docs/MULTIEMPRESA.md).
+    variables = settings.emisor_rnc if empresa_actual() == EMPRESA_PREDETERMINADA else ""
+    return "".join(c for c in (variables or (fila or {}).get("rnc") or "") if c.isdigit())
 
 
 async def certificado_para_produccion(pool, settings: ErpApiSettings) -> dict[str, Any]:
@@ -223,8 +226,11 @@ def _usuario(request: Request, settings: ErpApiSettings) -> tuple[UsuarioSesion 
     sesión configurado no hay a quién pedirle permisos: se permite."""
     if not settings.supabase_jwt_secret:
         return None, None
+    # El que verificó el middleware trae `admin` = su rol en esta empresa.
+    usuario = getattr(request.state, "usuario", None)
     try:
-        usuario = usuario_de_request(request, settings.supabase_jwt_secret, admins=settings.kontara_admin_emails)
+        if usuario is None:
+            usuario = usuario_de_request(request, settings.supabase_jwt_secret, admins=settings.kontara_admin_emails)
     except SesionInvalidaError as exc:
         return None, f"Inicie sesión como administrador para cambiar el ambiente ({exc})."
     if not usuario.admin:
@@ -295,7 +301,7 @@ async def cambiar_ambiente(
                 """
                 INSERT INTO configuracion.ambiente_dgii (id, ambiente, cambiado_por_id, cambiado_por, cambiado_en)
                 VALUES (1, $1, $2, $3, now())
-                ON CONFLICT (id) DO UPDATE SET
+                ON CONFLICT (empresa_id, id) DO UPDATE SET
                     ambiente = EXCLUDED.ambiente,
                     cambiado_por_id = EXCLUDED.cambiado_por_id,
                     cambiado_por = EXCLUDED.cambiado_por,

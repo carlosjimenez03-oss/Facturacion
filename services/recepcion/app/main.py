@@ -35,6 +35,7 @@ from lxml import etree
 from libs.ecf_common.ambiente import AmbienteDGII, AmbienteInvalidoError, TokenProviderPorAmbiente
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
+from libs.ecf_common.empresa import instalar_empresa, rnc_emisor
 from libs.ecf_common.environments import DGIIService, dgii_environment_for, dgii_service_base_url
 from libs.ecf_common.http_client import DGIIAsyncClient, DGIIServiceError
 from libs.ecf_common.xml_tools import nombre_archivo_ecf
@@ -57,6 +58,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.state.db_pool = None
+
+# Empresa del request (multiempresa, docs/MULTIEMPRESA.md): la que manda
+# quien llama por la red interna (X-Kontara-Empresa); con ella se eligen el
+# certificado, el ambiente y el token de la DGII. Sin cabecera: la empresa 1.
+instalar_empresa(app, settings)
 
 app.add_middleware(
     CORSMiddleware,
@@ -131,6 +137,7 @@ async def enviar_ecf(
     retorna el trackId."""
     ambiente = await _ambiente_de(ambiente)
     dgii = dgii_environment_for(ambiente)
+    emisor = await rnc_emisor(app.state.db_pool, settings.emisor_rnc)
     try:
         xml_bytes = await xml.read()
         if firmado:
@@ -142,7 +149,7 @@ async def enviar_ecf(
             xml_firmado = firmar_xml(xml_bytes, credencial)
 
         token = await _token_provider.obtener_token(ambiente=dgii)
-        nombre_archivo = nombre_archivo_ecf(settings.emisor_rnc, encf)
+        nombre_archivo = nombre_archivo_ecf(emisor, encf)
 
         cliente = RecepcionDGIIClient(dgii)
         respuesta = await cliente.enviar_ecf(xml_firmado, nombre_archivo, token.token)
@@ -151,7 +158,7 @@ async def enviar_ecf(
             app.state.db_pool,
             modulo="recepcion",
             ambiente=ambiente,
-            rnc_emisor=settings.emisor_rnc,
+            rnc_emisor=emisor,
             encf=encf,
             track_id=respuesta.trackId,
             respuesta=respuesta.model_dump(),
@@ -169,7 +176,7 @@ async def enviar_ecf(
             app.state.db_pool,
             modulo="recepcion",
             ambiente=ambiente,
-            rnc_emisor=settings.emisor_rnc,
+            rnc_emisor=emisor,
             encf=encf,
             error=str(exc),
         )
@@ -183,7 +190,7 @@ async def enviar_ecf(
             app.state.db_pool,
             modulo="recepcion",
             ambiente=ambiente,
-            rnc_emisor=settings.emisor_rnc,
+            rnc_emisor=emisor,
             encf=encf,
             error=detalle,
         )

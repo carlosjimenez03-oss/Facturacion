@@ -10,6 +10,8 @@ from typing import Any
 
 import httpx
 
+from libs.ecf_common.empresa import cabeceras_empresa
+
 
 class AprobacionComercialError(Exception):
     """El módulo no respondió o la DGII rechazó el envío -- compras.py lo
@@ -23,7 +25,7 @@ async def enviar_aprobacion_comercial(
     `xml_firmado` (el ACECF firmado). Un 2xx NO significa que la DGII lo
     aceptó: lo decide `codigo` (compras_calculos.resultado_aprobacion_dgii)."""
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with httpx.AsyncClient(timeout=timeout, headers=cabeceras_empresa()) as client:
             respuesta = await client.post(
                 f"{url_base.rstrip('/')}/aprobacion",
                 data={"encf": encf},
@@ -76,7 +78,10 @@ async def entregar_acecf_al_emisor(
     Bearer, la entrega falla con su 401 y queda registrada."""
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            directorio = await client.get(f"{directorio_url.rstrip('/')}/directorio/{rnc_emisor}")
+            # (Solo a consulta_directorio, interno: el POST al proveedor no la lleva.)
+            directorio = await client.get(
+                f"{directorio_url.rstrip('/')}/directorio/{rnc_emisor}", headers=cabeceras_empresa()
+            )
             if directorio.status_code >= 400:
                 raise EntregaEmisorError(
                     f"Consulta Directorio respondió {directorio.status_code}: {directorio.text[:300]}"

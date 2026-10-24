@@ -47,6 +47,8 @@ from typing import Any
 
 import httpx
 
+from libs.ecf_common.empresa import cabeceras_empresa, empresa_actual
+
 from . import contingencia_repository, envio, estado_dgii, repository, representacion_impresa
 from .config import FacturasApiSettings
 from .consulta_resultado_client import ConsultaResultadoError
@@ -78,7 +80,7 @@ async def sondear(settings: FacturasApiSettings) -> tuple[bool, str | None]:
     (GET /disponibilidad). Un `recepcion` anterior sin la sonda (404) cuenta
     como disponible: se intenta el envío y su resultado decide."""
     try:
-        async with httpx.AsyncClient(timeout=settings.timeout_sonda_segundos) as client:
+        async with httpx.AsyncClient(timeout=settings.timeout_sonda_segundos, headers=cabeceras_empresa()) as client:
             respuesta = await client.get(f"{settings.recepcion_service_url}/disponibilidad")
     except httpx.HTTPError as exc:
         return False, f"No se pudo contactar recepcion: {exc.__class__.__name__} {exc}".strip()
@@ -126,8 +128,13 @@ def vencimiento(estado: dict[str, Any], settings: FacturasApiSettings):
 
 # --- Envío por lotes ---------------------------------------------------------
 
-_candado_local = asyncio.Lock()
-_tarea_en_curso: asyncio.Task | None = None
+# Uno por empresa (multiempresa): cada una tiene su contingencia y sus lotes.
+_candados: dict[int, asyncio.Lock] = {}
+_tareas_en_curso: dict[int, asyncio.Task] = {}
+
+
+def _candado_de(empresa_id: int) -> asyncio.Lock:
+    return _candados.setdefault(empresa_id, asyncio.Lock())
 
 
 async def _enviar_lote(pool, settings: FacturasApiSettings, lote: dict[str, Any], resultado: ResultadoLotes) -> bool:
@@ -184,9 +191,10 @@ async def enviar_pendientes(pool, settings: FacturasApiSettings, *, sonda_hecha:
     """Una pasada del envío de lo pendiente de contingencia (ver el docstring
     del módulo). Sin pendientes solo sondea si la contingencia está activa,
     para salir de ella en cuanto la DGII responda."""
-    if _candado_local.locked():
+    candado = _candado_de(empresa_actual())
+    if candado.locked():
         return ResultadoLotes(disponible=True, ocupado=True)
-    async with _candado_local:
+    async with candado:
         async with contingencia_repository.candado_envio(pool) as obtenido:
             if not obtenido:
                 return ResultadoLotes(disponible=True, ocupado=True)
@@ -227,8 +235,9 @@ async def _enviar_pendientes(pool, settings: FacturasApiSettings, *, sonda_hecha
 def lanzar_envio_pendientes(pool, settings: FacturasApiSettings, *, sonda_hecha: bool = False) -> bool:
     """Lanza `enviar_pendientes` en segundo plano (si no hay uno en curso en
     este proceso). Devuelve si se lanzó."""
-    global _tarea_en_curso
-    if _tarea_en_curso is not None and not _tarea_en_curso.done():
+    empresa_id = empresa_actual()
+    tarea = _tareas_en_curso.get(empresa_id)
+    if tarea is not None and not tarea.done():
         return False
 
     async def _correr():
@@ -237,9 +246,12 @@ def lanzar_envio_pendientes(pool, settings: FacturasApiSettings, *, sonda_hecha:
         except Exception:
             logger.exception("Falló el envío de lo pendiente de contingencia")
 
-    _tarea_en_curso = asyncio.create_task(_correr())
+    # La tarea copia el contexto: corre en la empresa de quien la lanzó.
+    _tareas_en_curso[empresa_id] = asyncio.create_task(_correr())
     return True
 
 
 def envio_en_curso() -> bool:
-    return (_tarea_en_curso is not None and not _tarea_en_curso.done()) or _candado_local.locked()
+    empresa_id = empresa_actual()
+    tarea = _tareas_en_curso.get(empresa_id)
+    return (tarea is not None and not tarea.done()) or _candado_de(empresa_id).locked()

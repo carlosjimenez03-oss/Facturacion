@@ -28,6 +28,10 @@ class EcfBaseSettings(BaseSettings):
     # (INDOTEL) para firmar los archivos XML. En QA/producción se inyectan
     # como secretos (CI/CD, vault, etc.), nunca se commitean con valores reales.
     emisor_rnc: str = ""
+    # Razón social (EMISOR_RAZON_SOCIAL): nombre de la empresa 1 al crear el
+    # registro de empresas si Configuración → Empresa todavía no tiene datos
+    # (ver libs/ecf_common/multiempresa_ddl.py).
+    emisor_razon_social: str = ""
     certificado_path: str = "certs/emisor.p12"
     certificado_password: str = ""
 

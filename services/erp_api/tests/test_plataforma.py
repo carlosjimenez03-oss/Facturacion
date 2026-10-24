@@ -52,7 +52,10 @@ def client(monkeypatch):
 
 
 class _Conn:
-    async def fetchval(self, query, timeout=None):
+    async def fetchval(self, query, *args, timeout=None):
+        # Sin el registro de empresas (multiempresa): todos en la empresa 1.
+        if "empresa_usuarios" in query:
+            return None
         return 1
 
 

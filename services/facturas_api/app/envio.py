@@ -48,6 +48,7 @@ import httpx
 
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.compras606 import fecha_dgii_a_aaaammdd, registrar_compra_606
+from libs.ecf_common.empresa import cabeceras_empresa
 from libs.ecf_common.xml_tools import nombre_archivo_ecf
 
 from . import ambiente, inventario_client, repository
@@ -120,7 +121,10 @@ async def enviar_a_recepcion(
     datos = {"encf": encf, "firmado": "true"} if firmado else {"encf": encf}
     datos["ambiente"] = ambiente.de_factura(factura, settings)
     try:
-        async with httpx.AsyncClient(timeout=timeout or settings.timeout_envio_segundos) as client:
+        # La empresa: recepcion firma con su certificado y en su ambiente.
+        async with httpx.AsyncClient(
+            timeout=timeout or settings.timeout_envio_segundos, headers=cabeceras_empresa()
+        ) as client:
             respuesta = await client.post(
                 f"{settings.recepcion_service_url}/ecf",
                 data=datos,
@@ -159,7 +163,9 @@ def _detalle(respuesta: httpx.Response) -> str:
 
 # --- Tras un envío exitoso ---------------------------------------------------------
 
-def rnc_cedula_para_606(tipo_ecf: int, datos: dict, settings: FacturasApiSettings) -> str | None:
+def rnc_cedula_para_606(
+    tipo_ecf: int, datos: dict, settings: FacturasApiSettings, rnc_emisor: str | None = None
+) -> str | None:
     """A quién le compramos, para el campo "RNC o Cédula" del 606 -- distinto
     según el tipo (ver docs/dgii/FORMATO_606.md, "RNC/Cédula a reportar por
     tipo"): tipo 41 (Compras) reporta al proveedor informal (campo
@@ -169,7 +175,8 @@ def rnc_cedula_para_606(tipo_ecf: int, datos: dict, settings: FacturasApiSetting
     el RNC del propio encabezado."""
     if tipo_ecf == 41:
         return (datos.get("Encabezado", {}).get("Comprador") or {}).get("RNCComprador")
-    return settings.emisor_rnc
+    # El de la factura (el de su empresa); facturas viejas sin él: EMISOR_RNC.
+    return rnc_emisor or settings.emisor_rnc
 
 
 def separar_bienes_servicios(datos: dict) -> tuple[Decimal, Decimal]:
@@ -206,7 +213,7 @@ async def registrar_compra_606_autoemitida(pool, factura: dict, encf: str, setti
                 "Factura %s sin FechaEmision válida, no se registra en compras606", factura["id"]
             )
             return
-        rnc_cedula = rnc_cedula_para_606(factura["tipo_ecf"], datos, settings)
+        rnc_cedula = rnc_cedula_para_606(factura["tipo_ecf"], datos, settings, factura.get("rnc_emisor"))
         if not rnc_cedula:
             logger.warning(
                 "Factura %s sin RNC/Cédula de contraparte, no se registra en compras606",

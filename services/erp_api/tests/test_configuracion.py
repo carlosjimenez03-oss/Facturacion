@@ -239,13 +239,28 @@ def test_vendedores_crud(client, monkeypatch):
 
 # --- validaciones del repositorio (sin base) ---------------------------------------------------------
 
+class _Tx:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *e):
+        return False
+
+
 class _Conn:
     def __init__(self):
         self.args = None
 
+    def transaction(self):
+        return _Tx()
+
     async def fetchrow(self, query, *args):
-        self.args = args
-        return {"id": 1, "razon_social": args[0], "rnc": args[2]}
+        # UPDATE configuracion.empresas ... WHERE id = $1: los datos desde $2.
+        self.args = args[1:]
+        return {"id": args[0], "razon_social": self.args[0], "rnc": self.args[2]}
+
+    async def fetchval(self, query, *args):
+        return None  # sin la tabla configuracion.empresa de antes
 
 
 class _Acq:

@@ -31,7 +31,9 @@ from collections.abc import Awaitable, Callable
 import asyncpg
 
 from .contabilidad_calculos import ddl_semilla_catalogo
+from libs.ecf_common import multiempresa_ddl
 from libs.ecf_common.ambiente import AMBIENTES
+from libs.ecf_common.empresa import modo_sistema
 
 from .migraciones_configuracion import DDL_AMBIENTE, DDL_CONFIGURACION
 
@@ -1144,7 +1146,73 @@ CREATE INDEX IF NOT EXISTS pagos_en_linea_eventos_pago_idx ON soluciones.pagos_e
 """
 
 
-async def _migrar(conn: asyncpg.Connection, ambiente_defecto: str = "test") -> None:
+# Multiempresa (docs/MULTIEMPRESA.md, libs/ecf_common/multiempresa_ddl.py):
+# cada tabla de negocio de erp-api queda aislada por empresa (columna
+# empresa_id + política RLS) y sus claves naturales pasan a ser por empresa.
+# Quedan globales: nomina.parametros (las tasas de ley son del país),
+# soluciones.suscripcion y soluciones.solicitudes_plan (el plan es de la
+# instalación; Planes cuenta los comprobantes por empresa). Los enlaces del
+# portal y los pagos en línea se buscan por su token / orden en todas las
+# empresas (siguen únicos globales). Mismo DDL en db/init/021_multiempresa.sql.
+DDL_MULTIEMPRESA = """
+SELECT configuracion.kontara_aislar(t.tabla::regclass, t.unicos)
+FROM (VALUES
+    ('ventas.clientes', ARRAY['clientes_rnc_idx']),
+    ('ventas.cotizaciones', ARRAY['cotizaciones_numero_idx']),
+    ('ventas.cobros', ARRAY[]::text[]),
+    ('impuestos.anulaciones_608', ARRAY['anulaciones_608_ncf_idx']),
+    ('impuestos.ajustes_precalculo', ARRAY['ajustes_precalculo_pkey']),
+    ('impuestos.declaraciones_presentadas', ARRAY['declaraciones_presentadas_pkey']),
+    ('compras606.registros', ARRAY['registros_rnc_ncf_idx']),
+    ('compras.facturas', ARRAY[]::text[]),
+    ('compras.pagos', ARRAY[]::text[]),
+    ('recepcion.ecf_recibidos', ARRAY['ecf_recibidos_rnc_encf_idx']),
+    ('contabilidad.cuentas', ARRAY['cuentas_codigo_idx']),
+    ('contabilidad.cuentas_por_defecto', ARRAY['cuentas_por_defecto_pkey']),
+    ('contabilidad.asientos', ARRAY['asientos_numero_idx', 'asientos_origen_idx']),
+    ('contabilidad.asiento_lineas', ARRAY[]::text[]),
+    ('contabilidad.activos_fijos', ARRAY[]::text[]),
+    ('contabilidad.depreciaciones', ARRAY[]::text[]),
+    ('bancos.cuentas', ARRAY[]::text[]),
+    ('bancos.movimientos', ARRAY[]::text[]),
+    ('bancos.transferencias', ARRAY[]::text[]),
+    ('bancos.conciliaciones', ARRAY[]::text[]),
+    ('bancos.extractos', ARRAY[]::text[]),
+    ('bancos.extracto_lineas', ARRAY[]::text[]),
+    ('configuracion.secuencias', ARRAY['secuencias_pkey']),
+    ('configuracion.vendedores', ARRAY[]::text[]),
+    ('configuracion.preferencias', ARRAY['preferencias_pkey']),
+    ('configuracion.envios', ARRAY[]::text[]),
+    ('configuracion.ambiente_dgii', ARRAY['ambiente_dgii_pkey']),
+    ('configuracion.ambiente_dgii_cambios', ARRAY[]::text[]),
+    ('operacion.tareas', ARRAY[]::text[]),
+    ('operacion.tareas_automaticas', ARRAY['tareas_automaticas_pkey']),
+    ('operacion.facturas_papel', ARRAY['facturas_papel_ncf_idx']),
+    ('nomina.empresa', ARRAY['empresa_pkey']),
+    ('nomina.empleados', ARRAY['empleados_cedula_key']),
+    ('nomina.periodos', ARRAY['periodos_unico_idx']),
+    ('nomina.lineas', ARRAY[]::text[]),
+    ('soluciones.portal_config', ARRAY['portal_config_pkey']),
+    ('soluciones.portal_enlaces', ARRAY[]::text[]),
+    ('soluciones.ventas_modulo', ARRAY['ventas_modulo_pkey']),
+    ('soluciones.pos_sesiones', ARRAY['pos_sesiones_abierta_idx']),
+    ('soluciones.pos_ventas', ARRAY[]::text[]),
+    ('soluciones.automatizaciones', ARRAY['automatizaciones_pkey']),
+    ('soluciones.envios', ARRAY['envios_clave_canal_idx']),
+    ('soluciones.pagos_en_linea', ARRAY[]::text[]),
+    ('soluciones.pagos_en_linea_eventos', ARRAY[]::text[])
+) AS t (tabla, unicos)
+WHERE to_regclass(t.tabla) IS NOT NULL;
+
+SELECT configuracion.kontara_conceder(ARRAY['ventas', 'impuestos', 'compras', 'compras606', 'recepcion',
+                                             'contabilidad', 'bancos', 'configuracion', 'operacion', 'nomina',
+                                             'soluciones']);
+"""
+
+
+async def _migrar(
+    conn: asyncpg.Connection, ambiente_defecto: str = "test", emisor_rnc: str = "", razon_social: str = ""
+) -> None:
     async with conn.transaction():
         await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
         await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
@@ -1163,6 +1231,7 @@ async def _migrar(conn: asyncpg.Connection, ambiente_defecto: str = "test") -> N
         # Ambiente de las secuencias que ya existían (ver DDL_AMBIENTE).
         await conn.execute("SELECT set_config('kontara.ambiente_defecto', $1, true)", ambiente_defecto)
         await conn.execute(DDL_AMBIENTE)
+        await multiempresa_ddl.aplicar(conn, DDL_MULTIEMPRESA, emisor_rnc=emisor_rnc, razon_social=razon_social)
 
 
 async def aplicar_migraciones(
@@ -1178,15 +1247,22 @@ async def aplicar_migraciones(
     funciones auxiliares de las consultas, y siembra el catálogo de cuentas
     sugerido si está vacío. Con `lock_timeout`: si una tabla está ocupada
     (o hay un deadlock) suelta todo y reintenta con espera creciente."""
-    if ambiente_defecto is None:
-        from .config import get_settings
+    from .config import get_settings
 
-        ambiente_defecto = get_settings().app_env
+    settings = get_settings()
+    if ambiente_defecto is None:
+        ambiente_defecto = settings.app_env
     espera = _ESPERA_INICIAL_SEGUNDOS
     for intento in range(1, reintentos + 1):
         try:
-            async with pool.acquire() as conn:
-                await _migrar(conn, ambiente_defecto if ambiente_defecto in AMBIENTES else "test")
+            with modo_sistema():
+                async with pool.acquire() as conn:
+                    await _migrar(
+                        conn,
+                        ambiente_defecto if ambiente_defecto in AMBIENTES else "test",
+                        settings.emisor_rnc,
+                        settings.emisor_razon_social,
+                    )
             break
         except (asyncpg.LockNotAvailableError, asyncpg.DeadlockDetectedError) as exc:
             if intento == reintentos:

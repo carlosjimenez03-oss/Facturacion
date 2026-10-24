@@ -22,7 +22,7 @@ from fastapi.responses import Response
 
 from libs.ecf_common.environments import dgii_environment_for
 
-from . import gotrue_admin, pagos
+from . import empresas, gotrue_admin, pagos
 from . import soluciones_calculos as calc
 from . import soluciones_repository as repo
 from . import soluciones_tareas
@@ -163,7 +163,10 @@ async def _usuarios_activos() -> int | None:
 
 @router.get("/suscripcion/consumo", response_model=Consumo)
 async def obtener_consumo(request: Request):
-    return await repo.consumo(_pool(request), usuarios=await _usuarios_activos())
+    pool = _pool(request)
+    mias = await empresas.mis_empresas(pool, getattr(request.state, "usuario", None))
+    nombres = {e["id"]: e["nombre_comercial"] or e["razon_social"] for e in mias}
+    return await repo.consumo(pool, usuarios=await _usuarios_activos(), empresas=nombres)
 
 
 _INSTRUCCIONES_TRANSFERENCIA = [

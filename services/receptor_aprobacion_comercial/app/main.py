@@ -17,6 +17,7 @@ from lxml import etree
 
 from libs.ecf_common.auth.jwt_tokens import TokenInvalidoError, validar_token
 from libs.ecf_common.auth.signing import CredencialFirma, cargar_certificado_p12
+from libs.ecf_common.empresa import empresa_por_rnc, en_empresa
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
 
 from .config import ReceptorAprobacionComercialSettings, get_settings
@@ -82,13 +83,15 @@ async def recibir_aprobacion_comercial(
     rnc_emisor = root.findtext(".//RNCEmisor")
     encf = root.findtext(".//eNCF")
 
-    await registrar_envio(
-        app.state.db_pool,
-        modulo="receptor_aprobacion_comercial",
-        ambiente=settings.app_env,
-        rnc_emisor=rnc_emisor or settings.emisor_rnc,
-        encf=encf,
-        estado="recibido",
-    )
+    # La auditoría queda en la empresa que emitió el e-CF (multiempresa).
+    with en_empresa(await empresa_por_rnc(app.state.db_pool, rnc_emisor, settings.emisor_rnc)):
+        await registrar_envio(
+            app.state.db_pool,
+            modulo="receptor_aprobacion_comercial",
+            ambiente=settings.app_env,
+            rnc_emisor=rnc_emisor or settings.emisor_rnc,
+            encf=encf,
+            estado="recibido",
+        )
 
     return {"status": "ok"}

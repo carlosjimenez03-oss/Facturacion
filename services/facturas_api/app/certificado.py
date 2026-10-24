@@ -11,7 +11,8 @@ from libs.ecf_common.auth import certificado_activo
 from .config import FacturasApiSettings
 
 
-def estado_certificado(settings: FacturasApiSettings) -> dict[str, Any]:
+def estado_certificado(settings: FacturasApiSettings, rnc_emisor: str | None = None) -> dict[str, Any]:
+    """`rnc_emisor`: el de la empresa en curso (por defecto EMISOR_RNC)."""
     return certificado_activo.estado_certificado(
-        settings.certificado_path, settings.certificado_password, settings.emisor_rnc
+        settings.certificado_path, settings.certificado_password, settings.emisor_rnc if rnc_emisor is None else rnc_emisor
     )

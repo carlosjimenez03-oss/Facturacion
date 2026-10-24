@@ -25,6 +25,8 @@ class ErpApiSettings(EcfBaseSettings):
     # rechazado (best-effort, después de que la DGII lo acepta). En
     # docker-compose resuelve al nombre del servicio.
     consulta_directorio_url: str = "http://consulta-directorio:8000"
+    # "Agregar empresa" consulta el RNC en ese directorio (best-effort).
+    consulta_rnc_timeout_segundos: float = 8.0
     entrega_emisor_timeout_segundos: float = 30.0
 
     # Razón social de la empresa (agente de retención) para el certificado

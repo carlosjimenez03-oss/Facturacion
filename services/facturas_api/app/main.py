@@ -54,6 +54,7 @@ from libs.ecf_common.ambiente import AmbienteInvalidoError, validar_ambiente
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
+from libs.ecf_common.empresa import EMPRESA_PREDETERMINADA, empresa_actual, instalar_empresa, rnc_emisor
 from libs.ecf_common.environments import dgii_environment_for
 
 from . import (
@@ -151,6 +152,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.state.db_pool = None
 
+# Empresa de cada request (multiempresa, docs/MULTIEMPRESA.md): la que
+# verificó nginx con erp-api o, con REQUIRE_AUTH, la que pide el usuario si
+# es miembro (por dentro de la verificación de sesión: se instala antes).
+instalar_empresa(app, settings)
+
 # REQUIRE_AUTH=true: exige la sesión de Supabase Auth (ver docs/AUTH.md).
 instalar_verificacion_sesion(app, settings)
 
@@ -184,11 +190,12 @@ async def health() -> dict:
 
 
 @app.get("/certificado", response_model=CertificadoEstado)
-def certificado(settings: FacturasApiSettings = Depends(get_settings)):
+async def certificado(settings: FacturasApiSettings = Depends(get_settings)):
     """Vigencia, titular y emisor del certificado .p12 con el que se firma
-    (Configuración → Certificado digital). Nunca devuelve la llave privada
-    ni la contraseña."""
-    return estado_certificado(settings)
+    (Configuración → Certificado digital) en la empresa del request. Nunca
+    devuelve la llave privada ni la contraseña."""
+    rnc = await rnc_emisor(_pool(), settings.emisor_rnc)
+    return await asyncio.to_thread(estado_certificado, settings, rnc)
 
 
 @app.post("/facturas", response_model=FacturaDetalle, status_code=201)
@@ -202,6 +209,12 @@ async def crear_factura(
             status_code=422,
             detail=f"tipo_ecf debe ser uno de {sorted(TIPOS_SOPORTADOS)}",
         )
+    # El emisor es la empresa del request (la 1: EMISOR_RNC, como siempre).
+    emisor = await rnc_emisor(_pool(), settings.emisor_rnc)
+    if not emisor and empresa_actual() != EMPRESA_PREDETERMINADA:
+        raise HTTPException(
+            status_code=409, detail="Registre el RNC de la empresa en Configuración → Empresa antes de facturar"
+        )
     # El e-NCF lo asigna el servidor (secuencia bloqueada, sin duplicados):
     # ver app/secuencias_encf.py.
     try:
@@ -209,7 +222,7 @@ async def crear_factura(
             _pool(),
             tipo_ecf=payload.tipo_ecf,
             ambiente=await ambiente.ACTIVO.actual(_pool()),
-            rnc_emisor=settings.emisor_rnc,
+            rnc_emisor=emisor,
             encf=payload.encf,
             asignar_encf=payload.asignar_encf,
             datos=payload.datos,

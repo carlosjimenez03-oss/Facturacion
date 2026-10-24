@@ -3,11 +3,12 @@ IT-1 / IR-17 / IR-2 y el calendario de declaraciones con su marca de
 "presentada". Contrato con el frontend: `frontend/src/lib/impuestosApi.ts`.
 Ver docs/ERP_API.md, sección "Impuestos".
 """
-import re
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response
+
+from libs.ecf_common.empresa import rnc_emisor
 
 from . import formatos, impuestos_repository
 from .config import ErpApiSettings, get_settings
@@ -34,8 +35,9 @@ def _pool(request: Request):
     return request.app.state.db_pool
 
 
-def _rnc_emisor(settings: ErpApiSettings) -> str:
-    return re.sub(r"\D", "", settings.emisor_rnc or "")
+async def _rnc_emisor(request: Request, settings: ErpApiSettings) -> str:
+    """RNC de la empresa del request (la 1: EMISOR_RNC, como siempre)."""
+    return await rnc_emisor(_pool(request), settings.emisor_rnc)
 
 
 def _emisor(settings: ErpApiSettings) -> dict:
@@ -68,13 +70,13 @@ def _txt(nombre: str, contenido: bytes) -> Response:
 
 @router.get("/607", response_model=Formato607)
 async def formato_607(request: Request, periodo: str, settings: ErpApiSettings = Depends(get_settings)):
-    return await _llamar(impuestos_repository.formato_607, _pool(request), periodo, _rnc_emisor(settings), **_emisor(settings))
+    return await _llamar(impuestos_repository.formato_607, _pool(request), periodo, await _rnc_emisor(request, settings), **_emisor(settings))
 
 
 @router.get("/607/txt")
 async def descargar_607(request: Request, periodo: str, settings: ErpApiSettings = Depends(get_settings)):
     nombre, contenido = await _llamar(
-        impuestos_repository.archivo_607, _pool(request), periodo, _rnc_emisor(settings), **_emisor(settings)
+        impuestos_repository.archivo_607, _pool(request), periodo, await _rnc_emisor(request, settings), **_emisor(settings)
     )
     return _txt(nombre, contenido)
 
@@ -89,14 +91,14 @@ async def tipos_anulacion():
 @router.get("/608/txt")
 async def descargar_608(request: Request, periodo: str, settings: ErpApiSettings = Depends(get_settings)):
     nombre, contenido = await _llamar(
-        impuestos_repository.archivo_608, _pool(request), periodo, _rnc_emisor(settings), **_emisor(settings)
+        impuestos_repository.archivo_608, _pool(request), periodo, await _rnc_emisor(request, settings), **_emisor(settings)
     )
     return _txt(nombre, contenido)
 
 
 @router.get("/608", response_model=Formato608)
 async def formato_608(request: Request, periodo: str, settings: ErpApiSettings = Depends(get_settings)):
-    return await _llamar(impuestos_repository.formato_608, _pool(request), periodo, _rnc_emisor(settings), **_emisor(settings))
+    return await _llamar(impuestos_repository.formato_608, _pool(request), periodo, await _rnc_emisor(request, settings), **_emisor(settings))
 
 
 @router.post("/608", response_model=Fila608, status_code=201)

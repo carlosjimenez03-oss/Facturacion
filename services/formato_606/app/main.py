@@ -18,6 +18,7 @@ from fastapi.responses import Response
 from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
 from libs.ecf_common.compras606 import validar_periodo
 from libs.ecf_common.db import cerrar_pool, crear_pool
+from libs.ecf_common.empresa import instalar_empresa, rnc_emisor
 
 from . import repository
 from .config import Formato606Settings, get_settings
@@ -70,6 +71,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.state.db_pool = None
+
+# Empresa de cada request (multiempresa, docs/MULTIEMPRESA.md); por dentro
+# de la verificación de sesión (se instala antes) para ver al usuario.
+instalar_empresa(app, settings)
 
 # REQUIRE_AUTH=true: exige la sesión de Supabase Auth (ver docs/AUTH.md).
 instalar_verificacion_sesion(app, settings)
@@ -189,8 +194,10 @@ async def generar_archivo(
     if not registros:
         raise HTTPException(status_code=404, detail=f"No hay registros para el periodo {periodo}")
 
-    contenido = construir_archivo_606(rnc=settings.emisor_rnc, periodo=periodo, registros=registros)
-    nombre_archivo = f"DGII_F_606_{settings.emisor_rnc}_{periodo}.TXT"
+    # RNC de la empresa del request (la 1: EMISOR_RNC, como siempre).
+    rnc = await rnc_emisor(app.state.db_pool, settings.emisor_rnc)
+    contenido = construir_archivo_606(rnc=rnc, periodo=periodo, registros=registros)
+    nombre_archivo = f"DGII_F_606_{rnc}_{periodo}.TXT"
     return Response(
         content=contenido,
         media_type="text/plain",

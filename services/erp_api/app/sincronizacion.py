@@ -14,6 +14,8 @@ from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
+from libs.ecf_common.empresa import rnc_emisor
+
 from . import sincronizacion_repository
 from .compras import _entregar
 from .config import ErpApiSettings, get_settings
@@ -96,7 +98,10 @@ async def reintentar_entrega(request: Request, ecf_id: str, settings: ErpApiSett
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="id inválido") from exc
     return await _llamar(
-        sincronizacion_repository.reintentar_entrega, _pool(request), uid, entregar=_entregar(settings)
+        sincronizacion_repository.reintentar_entrega,
+        _pool(request),
+        uid,
+        entregar=_entregar(settings, await rnc_emisor(_pool(request), settings.emisor_rnc)),
     )
 
 

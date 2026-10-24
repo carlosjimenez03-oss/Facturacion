@@ -39,6 +39,7 @@ import uuid
 from typing import Any
 
 from libs.ecf_common.db import registrar_envio
+from libs.ecf_common.empresa import empresas_activas, en_empresa
 
 from . import ambiente, consulta_resultado_client, envio, inventario_client, repository
 from .config import FacturasApiSettings
@@ -278,7 +279,15 @@ async def bucle_sincronizacion(pool, settings: FacturasApiSettings) -> None:
     logger.info("Sincronización de estados DGII cada %ss", intervalo)
     while True:
         await asyncio.sleep(intervalo)
-        try:
-            await una_vuelta(pool, settings)
-        except Exception:
-            logger.exception("Falló la sincronización de estados DGII; se reintenta en %ss", intervalo)
+        # Una vuelta por empresa (multiempresa): cada una con su ambiente,
+        # su certificado y su contingencia.
+        for empresa_id in await empresas_activas(pool):
+            with en_empresa(empresa_id):
+                try:
+                    await una_vuelta(pool, settings)
+                except Exception:
+                    logger.exception(
+                        "Falló la sincronización de estados DGII de la empresa %s; se reintenta en %ss",
+                        empresa_id,
+                        intervalo,
+                    )

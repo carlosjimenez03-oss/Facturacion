@@ -52,6 +52,9 @@ from typing import NamedTuple
 
 import asyncpg
 
+from libs.ecf_common import multiempresa_ddl
+from libs.ecf_common.empresa import modo_sistema, todas_las_empresas
+
 logger = logging.getLogger(__name__)
 
 # Clave arbitraria (pero fija) del advisory lock que serializa las
@@ -396,6 +399,38 @@ VALUES (11, '011_inventario_almacenes_lotes')
 ON CONFLICT (version) DO NOTHING;
 """
 
+# Multiempresa (docs/MULTIEMPRESA.md, libs/ecf_common/multiempresa_ddl.py):
+# todo el inventario queda aislado por empresa; los SKU, códigos de barras,
+# nombres de almacén, el almacén principal y los correlativos de ajustes y
+# transferencias pasan a ser por empresa. Se aplica con el DDL común
+# (`multiempresa_ddl.aplicar`) delante. Mismo DDL en
+# db/init/021_multiempresa.sql.
+DDL_MULTIEMPRESA = """
+SELECT configuracion.kontara_aislar(t.tabla::regclass, t.unicos)
+FROM (VALUES
+    ('inventario.productos', ARRAY['productos_sku_idx', 'productos_codigo_barras_idx']),
+    ('inventario.proveedores', ARRAY[]::text[]),
+    ('inventario.compras', ARRAY[]::text[]),
+    ('inventario.compra_items', ARRAY[]::text[]),
+    ('inventario.movimientos', ARRAY[]::text[]),
+    ('inventario.almacenes', ARRAY['almacenes_nombre_idx', 'almacenes_principal_idx']),
+    ('inventario.existencias', ARRAY[]::text[]),
+    ('inventario.lotes', ARRAY[]::text[]),
+    ('inventario.existencias_lote', ARRAY[]::text[]),
+    ('inventario.ajustes', ARRAY['ajustes_numero_idx']),
+    ('inventario.ajuste_items', ARRAY[]::text[]),
+    ('inventario.transferencias', ARRAY['transferencias_numero_idx']),
+    ('inventario.transferencia_items', ARRAY[]::text[])
+) AS t (tabla, unicos)
+WHERE to_regclass(t.tabla) IS NOT NULL;
+
+SELECT configuracion.kontara_conceder(ARRAY['inventario']);
+
+INSERT INTO inventario.schema_version (version, descripcion)
+VALUES (21, '021_multiempresa')
+ON CONFLICT (version) DO NOTHING;
+"""
+
 
 class Migracion(NamedTuple):
     version: int
@@ -403,6 +438,8 @@ class Migracion(NamedTuple):
     # Tablas que ya existían antes de esta migración y que su DDL altera:
     # se bloquean todas de entrada (ver el docstring del módulo).
     tablas: tuple[str, ...]
+    # Va precedida del DDL común de la multiempresa (con su lock compartido).
+    multiempresa: bool = False
 
 
 MIGRACIONES: tuple[Migracion, ...] = (
@@ -415,6 +452,26 @@ MIGRACIONES: tuple[Migracion, ...] = (
             "inventario.compras",
             "inventario.compra_items",
         ),
+    ),
+    Migracion(
+        21,
+        DDL_MULTIEMPRESA,
+        (
+            "inventario.productos",
+            "inventario.proveedores",
+            "inventario.compras",
+            "inventario.compra_items",
+            "inventario.movimientos",
+            "inventario.almacenes",
+            "inventario.existencias",
+            "inventario.lotes",
+            "inventario.existencias_lote",
+            "inventario.ajustes",
+            "inventario.ajuste_items",
+            "inventario.transferencias",
+            "inventario.transferencia_items",
+        ),
+        multiempresa=True,
     ),
 )
 
@@ -443,6 +500,9 @@ async def version_aplicada(conn: asyncpg.Connection) -> int:
 async def _migrar(conn: asyncpg.Connection) -> list[int]:
     """Un intento: aplica las migraciones pendientes en una sola
     transacción. Devuelve las versiones aplicadas ([] si no había nada)."""
+    from .config import get_settings
+
+    settings = get_settings()
     # Camino normal (base ya al día): solo una lectura, sin locks de tabla.
     if await version_aplicada(conn) >= VERSION_ACTUAL:
         return []
@@ -463,7 +523,12 @@ async def _migrar(conn: asyncpg.Connection) -> list[int]:
             await conn.execute(f"SET LOCAL lock_timeout = '{espera_ms}ms'")
             await conn.execute(f"LOCK TABLE {', '.join(migracion.tablas)} IN ACCESS EXCLUSIVE MODE")
             await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
-            await conn.execute(migracion.ddl)
+            if migracion.multiempresa:
+                await multiempresa_ddl.aplicar(
+                    conn, migracion.ddl, emisor_rnc=settings.emisor_rnc, razon_social=settings.emisor_razon_social
+                )
+            else:
+                await conn.execute(migracion.ddl)
             aplicadas.append(migracion.version)
     return aplicadas
 
@@ -515,8 +580,9 @@ async def aplicar_migraciones(
     aplicadas: list[int] = []
     for intento in range(1, reintentos + 1):
         try:
-            async with pool.acquire() as conn:
-                aplicadas = await _migrar(conn)
+            with modo_sistema():
+                async with pool.acquire() as conn:
+                    aplicadas = await _migrar(conn)
             break
         except (asyncpg.LockNotAvailableError, asyncpg.DeadlockDetectedError) as exc:
             if intento == reintentos:
@@ -535,7 +601,9 @@ async def aplicar_migraciones(
     else:
         logger.info("Esquema 'inventario' al día (versión %s)", VERSION_ACTUAL)
     try:
-        await verificar_existencias(pool)
+        # De todas las empresas (solo lee).
+        with todas_las_empresas():
+            await verificar_existencias(pool)
     except asyncpg.PostgresError:
         logger.exception("No se pudo verificar la consistencia de existencias")
     return aplicadas

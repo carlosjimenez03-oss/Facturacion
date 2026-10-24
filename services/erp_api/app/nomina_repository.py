@@ -112,7 +112,7 @@ async def guardar_empresa(pool: asyncpg.Pool, **campos: Any) -> dict[str, Any]:
             f"""
             INSERT INTO nomina.empresa (id, {', '.join(_CAMPOS_EMPRESA)}, actualizado_en)
             VALUES (1, {', '.join(f'${i}' for i in range(1, len(_CAMPOS_EMPRESA) + 1))}, now())
-            ON CONFLICT (id) DO UPDATE SET {', '.join(f'{c} = EXCLUDED.{c}' for c in _CAMPOS_EMPRESA)},
+            ON CONFLICT (empresa_id, id) DO UPDATE SET {', '.join(f'{c} = EXCLUDED.{c}' for c in _CAMPOS_EMPRESA)},
                 actualizado_en = now()
             """,
             *(valores[c] for c in _CAMPOS_EMPRESA),
@@ -467,7 +467,7 @@ async def importar_empleados(pool: asyncpg.Pool, texto: str) -> dict[str, Any]:
                     f"""
                     INSERT INTO nomina.empleados ({', '.join(columnas)})
                     VALUES ({', '.join(f'${i}' for i in range(1, len(columnas) + 1))})
-                    ON CONFLICT (cedula) DO UPDATE SET
+                    ON CONFLICT (empresa_id, cedula) DO UPDATE SET
                         {', '.join(f'{c} = COALESCE(EXCLUDED.{c}, nomina.empleados.{c})' for c in columnas[1:])},
                         actualizado_en = now()
                     RETURNING (xmax = 0)

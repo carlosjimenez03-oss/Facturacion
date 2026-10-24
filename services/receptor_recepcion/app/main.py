@@ -26,6 +26,7 @@ from libs.ecf_common.auth.jwt_tokens import TokenInvalidoError, validar_token
 from libs.ecf_common.auth.signing import CredencialFirma, cargar_certificado_p12, firmar_xml
 from libs.ecf_common.compras606 import registrar_compra_606
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
+from libs.ecf_common.empresa import EMPRESA_PREDETERMINADA, empresa_por_rnc, empresas_activas, en_empresa
 from libs.ecf_common.ecf_recibidos import datos_606_desde_ecf, ecf_rechazado, parsear_xml, registrar_ecf_recibido
 
 from .arecf_builder import construir_arecf
@@ -120,6 +121,8 @@ async def recibir_ecf(
     authorization: str | None = Header(default=None),
     settings: ReceptorRecepcionSettings = Depends(get_settings),
 ) -> Response:
+    # El token (receptor_autenticacion) lo firma la instalación con el
+    # certificado de la empresa 1.
     try:
         credencial = cargar_certificado_p12(settings.certificado_path, settings.certificado_password)
     except (FileNotFoundError, ValueError) as exc:
@@ -133,29 +136,40 @@ async def recibir_ecf(
     root = _parse_ecf(xml_bytes)
     rnc_emisor, rnc_comprador, encf = _extraer_campos_ecf(root)
 
-    if rnc_comprador and settings.emisor_rnc and rnc_comprador != settings.emisor_rnc:
+    # Multiempresa (docs/MULTIEMPRESA.md): el e-CF es de la empresa cuyo RNC
+    # es el del comprador; se acusa con su certificado y queda en su bandeja.
+    pool = app.state.db_pool
+    empresa_id = await empresa_por_rnc(pool, rnc_comprador, settings.emisor_rnc)
+    if rnc_comprador and empresa_id is None and (settings.emisor_rnc or await empresas_activas(pool) != [1]):
         raise HTTPException(
             status_code=422,
-            detail=f"Este e-CF está dirigido al RNC {rnc_comprador}, no a {settings.emisor_rnc}",
+            detail=f"Este e-CF está dirigido al RNC {rnc_comprador}, que no es de ninguna empresa de este receptor",
         )
 
-    arecf = construir_arecf(
-        rnc_emisor=rnc_emisor, rnc_comprador=rnc_comprador or settings.emisor_rnc, encf=encf
-    )
-    arecf_firmado = firmar_xml(arecf, credencial)
+    with en_empresa(empresa_id):
+        if empresa_id not in (None, EMPRESA_PREDETERMINADA):
+            try:
+                credencial = cargar_certificado_p12(settings.certificado_path, settings.certificado_password)
+            except (FileNotFoundError, ValueError) as exc:
+                logger.error("La empresa %s (RNC %s) no tiene certificado: %s", empresa_id, rnc_comprador, exc)
+                raise HTTPException(status_code=500, detail=str(exc)) from exc
+        arecf = construir_arecf(
+            rnc_emisor=rnc_emisor, rnc_comprador=rnc_comprador or settings.emisor_rnc, encf=encf
+        )
+        arecf_firmado = firmar_xml(arecf, credencial)
 
-    await registrar_envio(
-        app.state.db_pool,
-        modulo="receptor_recepcion",
-        ambiente=settings.app_env,
-        rnc_emisor=rnc_emisor,
-        encf=encf,
-        estado="recibido",
-    )
-    await _registrar_compra_606_desde_ecf(app.state.db_pool, root, rnc_emisor, encf)
-    # Después del 606, para enlazar su renglón. Best-effort como los dos
-    # anteriores y sin esperar candados: verifica la firma del e-CF pero
-    # nunca cambia la respuesta (ver libs/ecf_common/ecf_recibidos.py).
-    await registrar_ecf_recibido(app.state.db_pool, xml_bytes, root)
+        await registrar_envio(
+            pool,
+            modulo="receptor_recepcion",
+            ambiente=settings.app_env,
+            rnc_emisor=rnc_emisor,
+            encf=encf,
+            estado="recibido",
+        )
+        await _registrar_compra_606_desde_ecf(pool, root, rnc_emisor, encf)
+        # Después del 606, para enlazar su renglón. Best-effort como los dos
+        # anteriores y sin esperar candados: verifica la firma del e-CF pero
+        # nunca cambia la respuesta (ver libs/ecf_common/ecf_recibidos.py).
+        await registrar_ecf_recibido(pool, xml_bytes, root)
 
     return Response(content=arecf_firmado, media_type="text/xml")

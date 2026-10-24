@@ -614,7 +614,7 @@ async def _insertar_606_desde_ecf(conn: asyncpg.Connection, xml: str) -> uuid.UU
              ncf, ncf_modificado, fecha_comprobante, monto_servicios, monto_bienes, itbis_facturado,
              impuesto_selectivo_consumo, otros_impuestos, monto_propina_legal)
         VALUES ($1, 'receptor_recepcion', 'ecf_recibido', NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-        ON CONFLICT (rnc_cedula, ncf) DO UPDATE SET actualizado_en = compras606.registros.actualizado_en
+        ON CONFLICT (empresa_id, rnc_cedula, ncf) DO UPDATE SET actualizado_en = compras606.registros.actualizado_en
         RETURNING id
         """,
         periodo,

@@ -25,6 +25,8 @@ from typing import Any
 
 import asyncpg
 
+from libs.ecf_common.empresa import EMPRESA_PREDETERMINADA, empresa_actual, todas_las_empresas
+
 from . import soluciones_calculos as calc
 from .repository import (
     _CTE_CXC,
@@ -60,7 +62,15 @@ _TOTAL = _monto_dgii("{Encabezado,Totales,MontoTotal}")
 
 async def _razon_social_empresa(conn: asyncpg.Connection, configurada: str = "") -> str:
     """Nombre de la empresa para mensajes y portal: el configurado o el
-    emisor de la última factura."""
+    emisor de la última factura. Las empresas nuevas (multiempresa) usan el
+    de su registro (EMISOR_RAZON_SOCIAL es el de la empresa 1)."""
+    if empresa_actual() != EMPRESA_PREDETERMINADA:
+        nombre = await conn.fetchval(
+            "SELECT COALESCE(NULLIF(nombre_comercial, ''), razon_social) FROM configuracion.empresas WHERE id = $1",
+            empresa_actual(),
+        )
+        if nombre:
+            return nombre
     if configurada:
         return configurada
     nombre = await conn.fetchval(
@@ -94,39 +104,51 @@ async def obtener_suscripcion(pool: asyncpg.Pool) -> dict[str, Any]:
     return resultado
 
 
-async def consumo(pool: asyncpg.Pool, usuarios: int | None = None) -> dict[str, Any]:
+async def consumo(
+    pool: asyncpg.Pool, usuarios: int | None = None, empresas: dict[int, str] | None = None
+) -> dict[str, Any]:
     """Uso real del mes: e-CF enviados a la DGII (con trackId) con fecha de
     emisión este mes, usuarios y bytes de XML guardados (emitidos y
     recibidos). `usuarios` = usuarios activos de Supabase Auth (los cuenta
     soluciones.py con la API admin de GoTrue); None = no se pueden contar
-    (sin SUPABASE_SERVICE_ROLE_KEY) y la pantalla muestra "—"."""
+    (sin SUPABASE_SERVICE_ROLE_KEY) y la pantalla muestra "—".
+
+    Multiempresa: el plan es de la instalación, así que se cuenta lo de
+    TODAS las empresas (el total contra el límite) y se desglosa por
+    empresa solo para las de `empresas` ({id: nombre}, las del usuario)."""
     dia = hoy()
     inicio = dia.replace(day=1)
     fin = (inicio + timedelta(days=32)).replace(day=1)
-    async with pool.acquire() as conn:
-        suscripcion = await conn.fetchrow("SELECT plan FROM soluciones.suscripcion WHERE id = 1")
-        emitidos = await conn.fetchval(
-            f"""
-            SELECT count(*)
-            FROM facturacion.facturas f
-            CROSS JOIN LATERAL (SELECT f.datos::jsonb AS d) x
-            WHERE f.track_id IS NOT NULL
-              AND COALESCE({_FECHA_EMISION}, f.creado_en::date) >= $1
-              AND COALESCE({_FECHA_EMISION}, f.creado_en::date) < $2
-            """,
-            inicio,
-            fin,
-        )
-        bytes_emitidos = await conn.fetchval(
-            "SELECT COALESCE(sum(COALESCE(octet_length(xml_generado), 0) + COALESCE(octet_length(xml_firmado), 0)), 0)"
-            " FROM facturacion.facturas"
-        )
-        bytes_recibidos = 0
-        if await conn.fetchval("SELECT to_regclass('recepcion.ecf_recibidos')") is not None:
-            bytes_recibidos = await conn.fetchval(
-                "SELECT COALESCE(sum(octet_length(xml) + COALESCE(octet_length(acecf_xml), 0)), 0)"
-                " FROM recepcion.ecf_recibidos"
+    with todas_las_empresas():
+        async with pool.acquire() as conn:
+            suscripcion = await conn.fetchrow("SELECT plan FROM soluciones.suscripcion WHERE id = 1")
+            por_empresa = {
+                fila["empresa_id"]: fila["n"]
+                for fila in await conn.fetch(
+                    f"""
+                    SELECT f.empresa_id, count(*) AS n
+                    FROM facturacion.facturas f
+                    CROSS JOIN LATERAL (SELECT f.datos::jsonb AS d) x
+                    WHERE f.track_id IS NOT NULL
+                      AND COALESCE({_FECHA_EMISION}, f.creado_en::date) >= $1
+                      AND COALESCE({_FECHA_EMISION}, f.creado_en::date) < $2
+                    GROUP BY f.empresa_id
+                    """,
+                    inicio,
+                    fin,
+                )
+            }
+            bytes_emitidos = await conn.fetchval(
+                "SELECT COALESCE(sum(COALESCE(octet_length(xml_generado), 0) + COALESCE(octet_length(xml_firmado), 0)), 0)"
+                " FROM facturacion.facturas"
             )
+            bytes_recibidos = 0
+            if await conn.fetchval("SELECT to_regclass('recepcion.ecf_recibidos')") is not None:
+                bytes_recibidos = await conn.fetchval(
+                    "SELECT COALESCE(sum(octet_length(xml) + COALESCE(octet_length(acecf_xml), 0)), 0)"
+                    " FROM recepcion.ecf_recibidos"
+                )
+    emitidos = sum(por_empresa.values())
     plan = (suscripcion["plan"] if suscripcion else None) or calc.PLAN_DE_PRUEBA
     limites = calc.PLANES[plan]
     almacenamiento = int(bytes_emitidos) + int(bytes_recibidos)
@@ -134,6 +156,10 @@ async def consumo(pool: asyncpg.Pool, usuarios: int | None = None) -> dict[str, 
         "mes": inicio,
         "plan_limites": plan,
         "ecf_emitidos": emitidos,
+        "ecf_por_empresa": [
+            {"empresa_id": empresa_id, "nombre": nombre, "ecf_emitidos": por_empresa.get(empresa_id, 0)}
+            for empresa_id, nombre in (empresas or {}).items()
+        ],
         "ecf_limite": limites["ecf_mes"],
         "ecf_porcentaje": calc.porcentaje_uso(emitidos, limites["ecf_mes"]),
         "usuarios": usuarios,
@@ -271,7 +297,7 @@ async def guardar_config_portal(pool: asyncpg.Pool, **campos: Any) -> dict[str, 
             """
             INSERT INTO soluciones.portal_config (id, banco, tipo_cuenta, numero_cuenta, titular, rnc_titular, instrucciones)
             VALUES (1, $1, $2, $3, $4, $5, $6)
-            ON CONFLICT (id) DO UPDATE SET
+            ON CONFLICT (empresa_id, id) DO UPDATE SET
                 banco = EXCLUDED.banco, tipo_cuenta = EXCLUDED.tipo_cuenta,
                 numero_cuenta = EXCLUDED.numero_cuenta, titular = EXCLUDED.titular,
                 rnc_titular = EXCLUDED.rnc_titular, instrucciones = EXCLUDED.instrucciones,
@@ -410,7 +436,7 @@ async def _asegurar_automatizaciones(conn: asyncpg.Connection) -> None:
             """
             INSERT INTO soluciones.automatizaciones (clave, dias, asunto, plantilla)
             VALUES ($1, $2, $3, $4)
-            ON CONFLICT (clave) DO NOTHING
+            ON CONFLICT (empresa_id, clave) DO NOTHING
             """,
             clave,
             a["dias"],
@@ -439,7 +465,7 @@ def _fila_automatizacion(fila: asyncpg.Record, conteos: dict[str, dict[str, int]
 
 async def estado_ventas(pool: asyncpg.Pool) -> dict[str, Any]:
     async with pool.acquire() as conn:
-        await conn.execute("INSERT INTO soluciones.ventas_modulo (id) VALUES (1) ON CONFLICT (id) DO NOTHING")
+        await conn.execute("INSERT INTO soluciones.ventas_modulo (id) VALUES (1) ON CONFLICT (empresa_id, id) DO NOTHING")
         await _asegurar_automatizaciones(conn)
         modulo = await conn.fetchrow("SELECT * FROM soluciones.ventas_modulo WHERE id = 1")
         filas = await conn.fetch("SELECT * FROM soluciones.automatizaciones ORDER BY array_position(ARRAY['motivar','cobranza','fidelizacion','reactivacion'], clave)")
@@ -472,7 +498,7 @@ async def activar_ventas(pool: asyncpg.Pool, activo: bool) -> dict[str, Any]:
             """
             INSERT INTO soluciones.ventas_modulo (id, activo, activado_en, prueba_hasta)
             VALUES (1, $1, CASE WHEN $1 THEN now() END, CASE WHEN $1 THEN $2::date END)
-            ON CONFLICT (id) DO UPDATE SET
+            ON CONFLICT (empresa_id, id) DO UPDATE SET
                 activo = EXCLUDED.activo,
                 activado_en = CASE WHEN EXCLUDED.activo THEN COALESCE(soluciones.ventas_modulo.activado_en, now())
                                    ELSE soluciones.ventas_modulo.activado_en END,
@@ -654,7 +680,7 @@ async def generar_envios(pool: asyncpg.Pool, *, empresa_configurada: str = "") -
                         (automatizacion, clave_unica, canal, cliente_id, cliente_nombre, destino,
                          factura_id, encf, asunto, mensaje)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-                    ON CONFLICT (clave_unica, canal) DO NOTHING
+                    ON CONFLICT (empresa_id, clave_unica, canal) DO NOTHING
                     RETURNING id
                     """,
                     a["clave"],

@@ -7,6 +7,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 
+from libs.ecf_common import multiempresa_ddl
 from services.erp_api.app import migraciones
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -146,10 +147,19 @@ async def test_aplicar_migraciones_toma_el_lock_antes_del_ddl():
     assert conn.execute_calls[9][0] == migraciones.DDL_OPERACION
     assert conn.execute_calls[10][0] == migraciones.DDL_NOMINA
     # Pagos en línea después de soluciones (necesita soluciones.portal_enlaces
-    # y ventas.cobros); el ambiente de las secuencias, al final.
+    # y ventas.cobros); el ambiente de las secuencias y, al final, la
+    # multiempresa (DDL común con su lock compartido y el de erp-api).
     llamadas = [c[0] for c in conn.execute_calls]
     assert llamadas.index(migraciones.DDL_PAGOS) > llamadas.index(migraciones.DDL_SOLUCIONES)
-    assert conn.execute_calls[-1][0] == migraciones.DDL_AMBIENTE
+    assert llamadas.index(migraciones.DDL_AMBIENTE) < llamadas.index(multiempresa_ddl.DDL_MULTIEMPRESA)
+    assert ("SELECT pg_advisory_xact_lock($1)", (multiempresa_ddl.LOCK_MULTIEMPRESA,)) in conn.execute_calls
+    assert llamadas[-2:] == [multiempresa_ddl.DDL_MULTIEMPRESA, migraciones.DDL_MULTIEMPRESA]
+
+
+def test_021_tiene_el_mismo_ddl_de_multiempresa():
+    archivo = (REPO_ROOT / "db" / "init" / "021_multiempresa.sql").read_text(encoding="utf-8")
+    assert multiempresa_ddl.DDL_MULTIEMPRESA.strip() in archivo
+    assert migraciones.DDL_MULTIEMPRESA.strip() in archivo
 
 
 class _ConexionOcupada(_FakeConnection):

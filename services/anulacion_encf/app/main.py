@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.ambiente import AmbienteDGII, AmbienteInvalidoError, TokenProviderPorAmbiente
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
+from libs.ecf_common.empresa import instalar_empresa, rnc_emisor
 from libs.ecf_common.environments import dgii_environment_for
 from libs.ecf_common.http_client import DGIIServiceError
 
@@ -40,6 +41,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.state.db_pool = None
+
+# Empresa del request (multiempresa, docs/MULTIEMPRESA.md): la que manda
+# quien llama por la red interna (X-Kontara-Empresa); con ella se eligen el
+# certificado, el ambiente y el token de la DGII. Sin cabecera: la empresa 1.
+instalar_empresa(app, settings)
 
 app.add_middleware(
     CORSMiddleware,
@@ -83,13 +89,14 @@ async def anular_rango(
 ) -> AnulacionRangoResponse:
     ambiente = await _ambiente_de(ambiente)
     dgii = dgii_environment_for(ambiente)
+    emisor = await rnc_emisor(app.state.db_pool, settings.emisor_rnc)
     try:
         credencial = cargar_certificado_p12(settings.certificado_path, settings.certificado_password)
         xml_bytes = await xml.read()
         xml_firmado = firmar_xml(xml_bytes, credencial)
 
         token = await _token_provider.obtener_token(ambiente=dgii)
-        nombre_archivo = f"{settings.emisor_rnc}-anulacion.xml"
+        nombre_archivo = f"{emisor}-anulacion.xml"
 
         cliente = AnulacionDGIIClient(dgii)
         respuesta = await cliente.anular_rango(xml_firmado, nombre_archivo, token.token)
@@ -106,7 +113,7 @@ async def anular_rango(
             app.state.db_pool,
             modulo="anulacion_encf",
             ambiente=ambiente,
-            rnc_emisor=settings.emisor_rnc,
+            rnc_emisor=emisor,
             codigo=respuesta.codigo,
             respuesta=respuesta.model_dump() | detalle,
         )
@@ -117,7 +124,7 @@ async def anular_rango(
             app.state.db_pool,
             modulo="anulacion_encf",
             ambiente=ambiente,
-            rnc_emisor=settings.emisor_rnc,
+            rnc_emisor=emisor,
             error=str(exc),
         )
         raise HTTPException(status_code=502, detail=str(exc)) from exc

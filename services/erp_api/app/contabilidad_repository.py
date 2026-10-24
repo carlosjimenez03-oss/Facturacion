@@ -378,7 +378,7 @@ async def actualizar_cuentas_por_defecto(pool: asyncpg.Pool, valores: dict[str, 
                 await conn.execute(
                     """
                     INSERT INTO contabilidad.cuentas_por_defecto (concepto, cuenta_id) VALUES ($1, $2)
-                    ON CONFLICT (concepto) DO UPDATE SET cuenta_id = EXCLUDED.cuenta_id, actualizado_en = now()
+                    ON CONFLICT (empresa_id, concepto) DO UPDATE SET cuenta_id = EXCLUDED.cuenta_id, actualizado_en = now()
                     """,
                     concepto, cuenta_id,
                 )

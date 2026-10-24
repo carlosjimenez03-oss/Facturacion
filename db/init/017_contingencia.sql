@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS facturacion.contingencia (
     ultimo_exito          timestamptz,
     actualizado_en        timestamptz NOT NULL DEFAULT now()
 );
-INSERT INTO facturacion.contingencia (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+-- Sin columnas en ON CONFLICT: desde la multiempresa la clave es (empresa_id, id).
+INSERT INTO facturacion.contingencia (id) VALUES (1) ON CONFLICT DO NOTHING;
 
 -- Lotes de envío de las facturas en contingencia (A-0001, A-0002...), las
 -- más antiguas primero. `estado`: en_cola -> enviando -> completado, o

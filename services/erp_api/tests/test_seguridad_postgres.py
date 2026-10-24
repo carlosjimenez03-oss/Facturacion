@@ -231,7 +231,7 @@ async def test_migracion_de_secuencias_de_una_base_anterior():
             clave = await conn.fetchval(
                 "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'secuencias_pkey'"
             )
-            assert clave == "PRIMARY KEY (ambiente, tipo_ecf)"
+            assert clave == "PRIMARY KEY (empresa_id, ambiente, tipo_ecf)"
             assert await conn.fetchval("SELECT to_regclass('facturacion.facturas_rnc_encf_unico_idx')") is None
             with pytest.raises(asyncpg.CheckViolationError):
                 await conn.execute(

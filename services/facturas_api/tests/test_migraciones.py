@@ -3,6 +3,7 @@ db/init/013_configuracion.sql / 017_contingencia.sql /
 018_pos_sin_conexion.sql (Postgres local) deben ser el mismo."""
 from pathlib import Path
 
+from libs.ecf_common import multiempresa_ddl
 from services.facturas_api.app import migraciones
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -21,6 +22,12 @@ def test_017_tiene_el_mismo_ddl_de_contingencia():
 def test_018_tiene_el_mismo_ddl_de_idempotencia():
     archivo = (REPO_ROOT / "db" / "init" / "018_pos_sin_conexion.sql").read_text(encoding="utf-8")
     assert migraciones.DDL_IDEMPOTENCIA.strip() in archivo
+
+
+def test_021_tiene_el_mismo_ddl_de_multiempresa():
+    archivo = (REPO_ROOT / "db" / "init" / "021_multiempresa.sql").read_text(encoding="utf-8")
+    assert multiempresa_ddl.DDL_MULTIEMPRESA.strip() in archivo
+    assert migraciones.DDL_MULTIEMPRESA.strip() in archivo
 
 
 def test_ddl_es_idempotente():

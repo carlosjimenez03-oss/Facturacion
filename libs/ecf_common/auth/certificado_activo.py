@@ -19,6 +19,12 @@ certificado anterior completo o el nuevo completo, nunca uno a medias.
 se puede abrir; si no (sin volumen, sin CERTIFICADOS_CLAVE, archivo dañado)
 usa como siempre CERTIFICADO_PATH/CERTIFICADO_PASSWORD. Ver docs/AUTH.md,
 "Certificado digital".
+
+**Un certificado por empresa (docs/MULTIEMPRESA.md).** La empresa 1 sigue
+usando `activo.json` (y, sin él, CERTIFICADO_PATH); cada empresa nueva el
+suyo en `empresas/<id>.json` junto a él, en el mismo volumen. Una empresa
+nueva sin certificado cargado NO usa el de CERTIFICADO_PATH (es de otro
+RNC): firmar falla con un mensaje que dice dónde cargarlo.
 """
 from __future__ import annotations
 
@@ -55,8 +61,28 @@ class CertificadoInvalidoError(Exception):
     pass
 
 
-def ruta_activo() -> Path:
-    return Path(os.environ.get("CERTIFICADO_ACTIVO_PATH") or RUTA_POR_DEFECTO)
+def ruta_activo(empresa_id: int | None = None) -> Path:
+    """Archivo del certificado cargado de la empresa (por defecto, la del
+    request en curso)."""
+    from libs.ecf_common.empresa import EMPRESA_PREDETERMINADA, empresa_actual
+
+    base = Path(os.environ.get("CERTIFICADO_ACTIVO_PATH") or RUTA_POR_DEFECTO)
+    empresa_id = empresa_actual() if empresa_id is None else empresa_id
+    if empresa_id == EMPRESA_PREDETERMINADA:
+        return base
+    return base.parent / "empresas" / f"{int(empresa_id)}.json"
+
+
+def usa_certificado_de_variables() -> bool:
+    """Solo la empresa 1 puede caer en CERTIFICADO_PATH/CERTIFICADO_PASSWORD."""
+    from libs.ecf_common.empresa import EMPRESA_PREDETERMINADA, empresa_actual
+
+    return empresa_actual() == EMPRESA_PREDETERMINADA
+
+
+SIN_CERTIFICADO_EMPRESA = (
+    "Esta empresa no tiene certificado digital: cárguelo en Configuración → Certificado digital"
+)
 
 
 LARGO_MINIMO_CLAVE = 32
@@ -267,6 +293,8 @@ def estado_certificado(certificado_path: str, certificado_password: str, emisor_
     if activo is not None:
         p12, password, metadatos = activo
         archivo, origen = metadatos.get("archivo") or "certificado.p12", "cargado"
+    elif not usa_certificado_de_variables():
+        return {"estado": "no_configurado", "origen": "cargado", "archivo": None, "error": SIN_CERTIFICADO_EMPRESA}
     else:
         archivo, origen = (os.path.basename(certificado_path) if certificado_path else None), "variables"
         if not certificado_path or not os.path.exists(certificado_path):

@@ -19,6 +19,9 @@ import logging
 
 import asyncpg
 
+from libs.ecf_common import multiempresa_ddl
+from libs.ecf_common.empresa import modo_sistema
+
 logger = logging.getLogger(__name__)
 
 # Clave fija del advisory lock (distinta de la de erp_api/inventario_api).
@@ -80,7 +83,8 @@ CREATE TABLE IF NOT EXISTS facturacion.contingencia (
     ultimo_exito          timestamptz,
     actualizado_en        timestamptz NOT NULL DEFAULT now()
 );
-INSERT INTO facturacion.contingencia (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+-- Sin columnas en ON CONFLICT: desde la multiempresa la clave es (empresa_id, id).
+INSERT INTO facturacion.contingencia (id) VALUES (1) ON CONFLICT DO NOTHING;
 
 -- Lotes de envío de las facturas en contingencia (A-0001, A-0002...), las
 -- más antiguas primero. `estado`: en_cola -> enviando -> completado, o
@@ -161,12 +165,42 @@ $$;
 """
 
 
+# Multiempresa (docs/MULTIEMPRESA.md, libs/ecf_common/multiempresa_ddl.py):
+# facturas, auditoría de envíos y contingencia por empresa. La unicidad del
+# e-NCF ya es por emisor (rnc_emisor, ambiente, encf: ver secuencias_encf) y
+# el RNC de cada empresa es único; la clave de idempotencia del POS sigue
+# siendo global (un UUID). `facturacion.envios_dgii` solo existe si la creó
+# db/init/001 (o la carga inicial a Supabase). Mismo DDL en
+# db/init/021_multiempresa.sql.
+DDL_MULTIEMPRESA = """
+SELECT configuracion.kontara_aislar(t.tabla::regclass, t.unicos)
+FROM (VALUES
+    ('facturacion.facturas', ARRAY[]::text[]),
+    ('facturacion.envios_dgii', ARRAY[]::text[]),
+    ('facturacion.contingencia', ARRAY['contingencia_pkey']),
+    ('facturacion.lotes_contingencia', ARRAY[]::text[])
+) AS t (tabla, unicos)
+WHERE to_regclass(t.tabla) IS NOT NULL;
+
+SELECT configuracion.kontara_conceder(ARRAY['facturacion']);
+"""
+
+
 async def aplicar_migraciones(pool: asyncpg.Pool) -> None:
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
-            await conn.execute(DDL_FACTURAS)
-            await conn.execute(DDL_CONTINGENCIA)
-            await conn.execute(DDL_IDEMPOTENCIA)
-            await conn.execute(DDL_FASE7)
-    logger.info("Columnas de 'facturacion.facturas', tablas de contingencia, idempotencia y fase 7 verificadas")
+    from .config import get_settings
+
+    settings = get_settings()
+    with modo_sistema():
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
+                await conn.execute(DDL_FACTURAS)
+                await conn.execute(DDL_CONTINGENCIA)
+                await conn.execute(DDL_IDEMPOTENCIA)
+                await conn.execute(DDL_FASE7)
+                await multiempresa_ddl.aplicar(
+                    conn, DDL_MULTIEMPRESA, emisor_rnc=settings.emisor_rnc, razon_social=settings.emisor_razon_social
+                )
+    logger.info(
+        "Columnas de 'facturacion.facturas', tablas de contingencia, idempotencia, fase 7 y multiempresa verificadas"
+    )
