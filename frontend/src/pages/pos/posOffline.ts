@@ -13,6 +13,11 @@
 // (secuencia bloqueada) al sincronizar; hasta entonces el ticket es
 // provisional.
 //
+// Multiempresa: cada venta guarda la empresa en que se cobró (`empresaId`) y
+// la cola vive en la base de IndexedDB de esa empresa (posAlmacen.ts); además
+// `sincronizarCola` salta las de otra empresa, para que cambiar de empresa
+// nunca mande una venta a la que no es.
+//
 // Solo importa tipos: lo prueban las pruebas de frontend/pruebas/ con Node
 // sin compilar (ver package.json, "test").
 import type { DatosEmisor } from "../../lib/preferencias";
@@ -30,6 +35,8 @@ export type EstadoVentaOffline = "pendiente" | "error" | "sincronizada";
 export interface VentaOffline {
   /** UUID generado al cobrar: `clave_idempotencia` de la factura. */
   clave: string;
+  /** Empresa en que se cobró (las de antes de la multiempresa no lo traen: la 1). */
+  empresaId?: number;
   /** ISO 8601: orden de sincronización (la más antigua primero). */
   creadaEn: string;
   sesionId: string;
@@ -237,7 +244,13 @@ export interface DependenciasSincronizacion {
   /** Guarda el progreso de la venta (IndexedDB) tras cada paso. */
   guardar(venta: VentaOffline): Promise<void>;
   ahora?: () => Date;
+  /** Empresa de la pestaña: las ventas de otra se dejan para cuando se vuelva a ella. */
+  empresaId?: number;
 }
+
+/** La venta es de la empresa `empresaId` (sin empresa guardada: la 1). */
+export const deLaEmpresa = (v: VentaOffline, empresaId: number | undefined) =>
+  empresaId === undefined || (v.empresaId ?? 1) === empresaId;
 
 export interface ResultadoSincronizacion {
   sincronizadas: VentaOffline[];
@@ -295,7 +308,7 @@ export async function sincronizarCola(
   deps: DependenciasSincronizacion,
 ): Promise<ResultadoSincronizacion> {
   const resultado: ResultadoSincronizacion = { sincronizadas: [], conError: [], detenida: null };
-  const cola = ordenarCola(sinSincronizar(ventas));
+  const cola = ordenarCola(sinSincronizar(ventas)).filter((v) => deLaEmpresa(v, deps.empresaId));
   if (cola.length === 0) return resultado;
   const sesion = await deps.prepararSesion();
   if (sesion !== "ok") return { ...resultado, detenida: sesion };

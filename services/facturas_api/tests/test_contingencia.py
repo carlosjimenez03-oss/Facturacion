@@ -680,7 +680,7 @@ async def test_sin_pendientes_la_sonda_decide_la_contingencia(monkeypatch, setti
 async def test_un_solo_envio_por_lotes_a_la_vez(monkeypatch, settings):
     base = _Base(1)
     base.instalar(monkeypatch)
-    async with contingencia._candado_local:
+    async with contingencia._candado_de(1):
         resultado = await contingencia.enviar_pendientes(object(), settings)
     assert resultado.ocupado and not resultado.lotes
 

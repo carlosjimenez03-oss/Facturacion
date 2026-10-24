@@ -36,6 +36,7 @@ import httpx
 
 from libs.ecf_common.auth import certificado_activo
 from libs.ecf_common.auth.sesion_supabase import cabeceras_internas
+from libs.ecf_common.empresa import empresas_activas, en_empresa
 
 from .config import ErpApiSettings
 from .repository import DatosInvalidosError
@@ -74,7 +75,7 @@ async def guardar_preferencia(pool: asyncpg.Pool, clave: str, valor: dict[str, A
         await conn.execute(
             """
             INSERT INTO configuracion.preferencias (clave, valor) VALUES ($1, $2::jsonb)
-            ON CONFLICT (clave) DO UPDATE SET valor = EXCLUDED.valor, actualizado_en = now()
+            ON CONFLICT (empresa_id, clave) DO UPDATE SET valor = EXCLUDED.valor, actualizado_en = now()
             """,
             clave,
             json.dumps(valor),
@@ -411,9 +412,13 @@ async def _pasada_envio(pool: asyncpg.Pool, settings: ErpApiSettings, config: di
 async def bucle_envio_automatico(pool: asyncpg.Pool, settings: ErpApiSettings, nombre_empresa) -> None:
     while True:
         await asyncio.sleep(settings.envio_automatico_cada_segundos)
-        try:
-            await enviar_facturas_aceptadas(pool, settings, await nombre_empresa())
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            logger.exception("Falló la pasada de envío automático de comprobantes")
+        # Una pasada por empresa (multiempresa): cada una con su correo, su
+        # WhatsApp y sus facturas.
+        for empresa_id in await empresas_activas(pool):
+            with en_empresa(empresa_id):
+                try:
+                    await enviar_facturas_aceptadas(pool, settings, await nombre_empresa())
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Falló la pasada de envío automático de comprobantes (empresa %s)", empresa_id)

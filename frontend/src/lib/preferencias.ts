@@ -7,6 +7,10 @@
 // ya facturados es solo el respaldo de "Verificar" el RNC cuando erp-api no
 // responde. Si el navegador no deja guardar, todo sigue funcionando con los
 // valores por defecto.
+// Multiempresa: cada empresa con sus claves (la 1, las de siempre; ver
+// empresaActual.ts claveEmpresa). Los valores por defecto VITE_EMPRESA_* son
+// de la empresa 1.
+import { claveEmpresa, empresaEnUso, EMPRESA_PREDETERMINADA } from "./empresaActual";
 import { EMPRESA_NOMBRE, EMPRESA_RNC } from "./marca";
 
 function leer<T>(clave: string, porDefecto: T): T {
@@ -33,14 +37,15 @@ export interface DatosEmisor {
   correo: string;
 }
 
-const CLAVE_EMISOR = "kontara.emisor";
-const CLAVE_SECUENCIAS = "kontara.secuencias";
-const CLAVE_CLIENTES = "kontara.clientes";
+const CLAVE_EMISOR = () => claveEmpresa("kontara.emisor");
+const CLAVE_SECUENCIAS = () => claveEmpresa("kontara.secuencias");
+const CLAVE_CLIENTES = () => claveEmpresa("kontara.clientes");
 
 export function leerEmisor(): DatosEmisor {
-  const emisor = leer<DatosEmisor>(CLAVE_EMISOR, {
-    rnc: EMPRESA_RNC,
-    razonSocial: EMPRESA_NOMBRE === "Mi empresa" ? "" : EMPRESA_NOMBRE,
+  const predeterminada = empresaEnUso() === EMPRESA_PREDETERMINADA;
+  const emisor = leer<DatosEmisor>(CLAVE_EMISOR(), {
+    rnc: predeterminada ? EMPRESA_RNC : "",
+    razonSocial: !predeterminada || EMPRESA_NOMBRE === "Mi empresa" ? "" : EMPRESA_NOMBRE,
     direccion: "",
     correo: "",
   });
@@ -48,17 +53,17 @@ export function leerEmisor(): DatosEmisor {
 }
 
 export function guardarEmisor(emisor: DatosEmisor) {
-  escribir(CLAVE_EMISOR, emisor);
+  escribir(CLAVE_EMISOR(), emisor);
 }
 
 /** Fecha (YYYY-MM-DD) hasta la que está autorizada la secuencia de cada tipo de e-CF. */
 export function leerVencimientoSecuencia(tipoEcf: string): string {
-  return leer<Record<string, string>>(CLAVE_SECUENCIAS, {})[tipoEcf] ?? "";
+  return leer<Record<string, string>>(CLAVE_SECUENCIAS(), {})[tipoEcf] ?? "";
 }
 
 export function guardarVencimientoSecuencia(tipoEcf: string, fecha: string) {
   if (!fecha) return;
-  escribir(CLAVE_SECUENCIAS, { ...leer<Record<string, string>>(CLAVE_SECUENCIAS, {}), [tipoEcf]: fecha });
+  escribir(CLAVE_SECUENCIAS(), { ...leer<Record<string, string>>(CLAVE_SECUENCIAS(), {}), [tipoEcf]: fecha });
 }
 
 export interface ClienteGuardado {
@@ -70,11 +75,11 @@ export interface ClienteGuardado {
 export function buscarCliente(rnc: string): ClienteGuardado | null {
   const limpio = rnc.replace(/\D/g, "");
   if (!limpio) return null;
-  return leer<Record<string, ClienteGuardado>>(CLAVE_CLIENTES, {})[limpio] ?? null;
+  return leer<Record<string, ClienteGuardado>>(CLAVE_CLIENTES(), {})[limpio] ?? null;
 }
 
 export function guardarCliente(rnc: string, cliente: ClienteGuardado) {
   const limpio = rnc.replace(/\D/g, "");
   if (!limpio || !cliente.razonSocial) return;
-  escribir(CLAVE_CLIENTES, { ...leer<Record<string, ClienteGuardado>>(CLAVE_CLIENTES, {}), [limpio]: cliente });
+  escribir(CLAVE_CLIENTES(), { ...leer<Record<string, ClienteGuardado>>(CLAVE_CLIENTES(), {}), [limpio]: cliente });
 }

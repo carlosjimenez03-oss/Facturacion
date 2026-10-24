@@ -7,6 +7,7 @@ import { api } from "../../lib/api";
 import { siguienteEncf } from "../../lib/buildDatos";
 import { configuracionApi } from "../../lib/configuracionApi";
 import type { Secuencia } from "../../lib/configuracionApi";
+import { empresaEnUso } from "../../lib/empresaActual";
 import { ERP_API_URL } from "../../lib/erpApi";
 import { prepararSesion } from "../../lib/sesion";
 import { solucionesApi } from "../../lib/solucionesApi";
@@ -38,6 +39,7 @@ function dependencias(alGuardar: (v: VentaOffline) => void): DependenciasSincron
   // línea, el mayor ya usado + 1.
   let secuencias: Promise<Secuencia[]> | null = null;
   return {
+    empresaId: empresaEnUso(),
     prepararSesion,
     async crearFactura(v) {
       secuencias ??= configuracionApi.secuencias();

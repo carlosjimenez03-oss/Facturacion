@@ -32,6 +32,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
 from libs.ecf_common.db import cerrar_pool, crear_pool
+from libs.ecf_common.empresa import diagnosticar, instalar_empresa, registrar_usuario_previo
 
 from . import (
     ambiente_dgii,
@@ -39,6 +40,7 @@ from . import (
     compras,
     configuracion,
     contabilidad,
+    empresas,
     impuestos,
     nomina,
     pagos,
@@ -110,6 +112,7 @@ async def lifespan(app: FastAPI):
         )
     # En Supabase nadie ejecuta db/init: el esquema `ventas` se crea aquí.
     await aplicar_migraciones(pool)
+    await diagnosticar(pool)
     app.state.db_pool = pool
     # Envío automático por correo de las facturas aceptadas (Configuración →
     # WhatsApp y correo; no hace nada mientras no se encienda allí).
@@ -136,7 +139,19 @@ RUTA_PORTAL_PUBLICO = "/portal/publico/"
 
 async def _marcar_acceso(request, usuario) -> None:
     await plataforma.marcar_acceso_si_falta(settings, usuario)
+    await registrar_usuario_previo(request.app.state.db_pool, usuario)
 
+
+# Empresa de cada request (multiempresa, docs/MULTIEMPRESA.md): por dentro
+# de la verificación de sesión (se instala antes), para ver al usuario. El
+# portal público entra a la empresa del enlace o del pago.
+instalar_empresa(
+    app,
+    settings,
+    rutas_libres={"/auth/verificar"},
+    es_libre=lambda ruta: ruta.startswith(RUTA_PORTAL_PUBLICO),
+    empresa_libre=empresas.empresa_de_ruta_publica,
+)
 
 instalar_verificacion_sesion(
     app,
@@ -168,6 +183,8 @@ app.include_router(reportes.router)
 app.include_router(configuracion.router)
 app.include_router(ambiente_dgii.router)
 app.include_router(plataforma.router)
+# Mis empresas (multiempresa).
+app.include_router(empresas.router)
 app.include_router(nomina.router)
 app.include_router(soluciones.router)
 # Fase 7 · Pagos con tarjeta en línea desde el portal de clientes (docs/PAGOS.md).

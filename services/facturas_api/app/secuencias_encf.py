@@ -51,6 +51,7 @@ from zoneinfo import ZoneInfo
 import asyncpg
 
 from libs.ecf_common.ambiente import nombre as nombre_ambiente
+from libs.ecf_common.empresa import modo_sistema, todas_las_empresas
 
 from . import repository
 
@@ -281,32 +282,38 @@ async def validar_encf_para_actualizar(
 
 async def asegurar_indice_encf_unico(pool: Any) -> bool:
     """Crea el índice único (rnc_emisor, encf) si no hay duplicados. Nunca
-    lanza: un problema aquí no debe impedir que el servicio arranque."""
+    lanza: un problema aquí no debe impedir que el servicio arranque.
+    Como el dueño de la tabla (CREATE INDEX) y mirando todas las empresas."""
     try:
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_INDICE)
-                if await conn.fetchval("SELECT to_regclass($1)", f"facturacion.{INDICE_ENCF_UNICO}") is not None:
-                    return True
-                duplicados = await conn.fetch(
-                    """
-                    SELECT rnc_emisor, ambiente, encf, count(*) AS n FROM facturacion.facturas
-                    WHERE encf IS NOT NULL GROUP BY 1, 2, 3 HAVING count(*) > 1
-                    ORDER BY 4 DESC LIMIT 10
-                    """
-                )
-                if duplicados:
-                    logger.warning(
-                        "No se crea el índice único de e-NCF: hay e-NCF repetidos en facturacion.facturas (%s). "
-                        "Corríjalos (p. ej. borre los borradores repetidos) y reinicie facturas-api; mientras tanto "
-                        "los duplicados nuevos se rechazan igual al crear la factura.",
-                        ", ".join(f"{d['encf']} ×{d['n']}" for d in duplicados),
-                    )
-                    return False
-                await conn.execute(DDL_INDICE_ENCF_UNICO)
-                await conn.execute(f"DROP INDEX IF EXISTS facturacion.{INDICE_ENCF_UNICO_ANTERIOR}")
-        logger.info("Índice único de e-NCF por emisor verificado")
-        return True
+        with modo_sistema(), todas_las_empresas():
+            return await _asegurar_indice_encf_unico(pool)
     except Exception:
         logger.exception("No se pudo crear el índice único de e-NCF (facturas-api arranca igual)")
         return False
+
+
+async def _asegurar_indice_encf_unico(pool: Any) -> bool:
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_INDICE)
+            if await conn.fetchval("SELECT to_regclass($1)", f"facturacion.{INDICE_ENCF_UNICO}") is not None:
+                return True
+            duplicados = await conn.fetch(
+                """
+                SELECT rnc_emisor, ambiente, encf, count(*) AS n FROM facturacion.facturas
+                WHERE encf IS NOT NULL GROUP BY 1, 2, 3 HAVING count(*) > 1
+                ORDER BY 4 DESC LIMIT 10
+                """
+            )
+            if duplicados:
+                logger.warning(
+                    "No se crea el índice único de e-NCF: hay e-NCF repetidos en facturacion.facturas (%s). "
+                    "Corríjalos (p. ej. borre los borradores repetidos) y reinicie facturas-api; mientras tanto "
+                    "los duplicados nuevos se rechazan igual al crear la factura.",
+                    ", ".join(f"{d['encf']} ×{d['n']}" for d in duplicados),
+                )
+                return False
+            await conn.execute(DDL_INDICE_ENCF_UNICO)
+            await conn.execute(f"DROP INDEX IF EXISTS facturacion.{INDICE_ENCF_UNICO_ANTERIOR}")
+    logger.info("Índice único de e-NCF por emisor verificado")
+    return True

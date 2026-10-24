@@ -15,6 +15,8 @@ from typing import Any
 
 import asyncpg
 
+from libs.ecf_common.empresa import empresas_activas, en_empresa
+
 from . import soluciones_repository as repo
 from .config import get_settings
 from .soluciones_canales import (
@@ -82,9 +84,13 @@ async def bucle(pool_de, settings: SolucionesSettings) -> None:
     while True:
         pool = pool_de()
         if isinstance(pool, asyncpg.Pool):
-            try:
-                resultado = await ejecutar_ciclo(pool, settings)
-                logger.info("Kontara Ventas: %s", resultado)
-            except Exception:  # la tarea nunca debe morir por un ciclo fallido
-                logger.exception("Falló el ciclo de automatizaciones de Kontara Ventas")
+            # Un ciclo por empresa (multiempresa): cada una con sus
+            # automatizaciones, sus clientes y sus canales.
+            for empresa_id in await empresas_activas(pool):
+                with en_empresa(empresa_id):
+                    try:
+                        resultado = await ejecutar_ciclo(pool, settings)
+                        logger.info("Kontara Ventas (empresa %s): %s", empresa_id, resultado)
+                    except Exception:  # la tarea nunca debe morir por un ciclo fallido
+                        logger.exception("Falló el ciclo de automatizaciones de Kontara Ventas (empresa %s)", empresa_id)
         await asyncio.sleep(settings.soluciones_tarea_intervalo_horas * 3600)

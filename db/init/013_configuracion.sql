@@ -109,5 +109,18 @@ END $$;
 -- facturas_api: DDL_FACTURAS
 -- Vendedor de la factura (configuracion.vendedores de erp_api, sin FK):
 -- metadata de la aplicación, fuera de `datos` (que refleja el XSD del e-CF).
-ALTER TABLE facturacion.facturas ADD COLUMN IF NOT EXISTS vendedor_id uuid;
-CREATE INDEX IF NOT EXISTS facturas_vendedor_idx ON facturacion.facturas (vendedor_id);
+-- Se consulta el catálogo antes: en una base ya migrada no se toma ningún
+-- lock de facturacion.facturas.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'facturacion' AND table_name = 'facturas' AND column_name = 'vendedor_id'
+    ) THEN
+        ALTER TABLE facturacion.facturas ADD COLUMN IF NOT EXISTS vendedor_id uuid;
+    END IF;
+    IF to_regclass('facturacion.facturas_vendedor_idx') IS NULL THEN
+        CREATE INDEX IF NOT EXISTS facturas_vendedor_idx ON facturacion.facturas (vendedor_id);
+    END IF;
+END;
+$$;

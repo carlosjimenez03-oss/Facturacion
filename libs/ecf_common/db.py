@@ -19,6 +19,8 @@ from urllib.parse import urlsplit
 
 import asyncpg
 
+from libs.ecf_common.empresa import crear_preparador
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,7 +50,14 @@ async def crear_pool(database_url: str, *, max_size: int = 5) -> asyncpg.Pool | 
     if not database_url:
         return None
     try:
-        return await asyncpg.create_pool(database_url, min_size=1, max_size=max_size, **opciones_pool(database_url))
+        return await asyncpg.create_pool(
+            database_url,
+            min_size=1,
+            max_size=max_size,
+            # Empresa del request en cada conexión (RLS, ver libs/ecf_common/empresa.py).
+            setup=crear_preparador(database_url),
+            **opciones_pool(database_url),
+        )
     except Exception:
         logger.exception("No se pudo conectar a la base de datos de auditoría")
         return None

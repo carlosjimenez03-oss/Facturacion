@@ -180,12 +180,14 @@ ORIGENES_AUTOMATICOS = (
 ORIGENES = ("manual", *ORIGENES_AUTOMATICOS, "depreciacion")
 
 
-def ddl_semilla_catalogo() -> str:
+def ddl_semilla_catalogo(conflicto: str = "(concepto)") -> str:
     """Bloque SQL que siembra el catálogo sugerido y sus cuentas por defecto
     solo si `contabilidad.cuentas` está vacía (idempotente: nunca toca un
     catálogo que el usuario ya tenga). Se genera desde CATALOGO_SUGERIDO y
     CONCEPTOS; db/init/012 tiene el mismo texto (lo verifica
-    tests/test_migraciones.py)."""
+    tests/test_migraciones.py). Una empresa nueva (multiempresa) lo corre
+    dentro de ella, con `conflicto` = "(empresa_id, concepto)": con RLS
+    "vacía" es "vacía para esa empresa"."""
     def texto(valor: str) -> str:
         return "'" + valor.replace("'", "''") + "'"
 
@@ -215,7 +217,7 @@ BEGIN
             {conceptos}
         ) AS v (concepto, codigo)
         JOIN contabilidad.cuentas c ON c.codigo = v.codigo
-        ON CONFLICT (concepto) DO NOTHING;
+        ON CONFLICT {conflicto} DO NOTHING;
     END IF;
 END;
 $$;"""

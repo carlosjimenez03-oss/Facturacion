@@ -17,6 +17,8 @@ from typing import Any
 
 import asyncpg
 
+from libs.ecf_common.empresa import EMPRESA_PREDETERMINADA, empresa_actual, invalidar_cache
+
 from .repository import DatosInvalidosError
 
 NOMBRES_TIPO = {
@@ -82,9 +84,46 @@ def _validar_correo(correo: str | None) -> str | None:
 
 # --- Empresa ---------------------------------------------------------
 
+# Desde la multiempresa los datos de cada empresa viven en el registro
+# `configuracion.empresas` (ver libs/ecf_common/empresa.py); la fila única
+# de `configuracion.empresa` se sigue escribiendo para la empresa 1, para
+# poder volver a una versión anterior sin perder lo guardado.
+_COLUMNAS_EMPRESA = (
+    "razon_social, nombre_comercial, rnc, direccion, telefono, correo, logo, actividad_economica, provincia, municipio"
+)
+
+
+class RncEnUsoError(Exception):
+    """Otra empresa de la instalación ya tiene ese RNC."""
+
+
+def validar_datos_empresa(
+    *,
+    razon_social: str,
+    rnc: str | None,
+    correo: str | None,
+    logo: str | None,
+) -> tuple[str, str | None, str | None, str | None]:
+    """(razón social, RNC solo dígitos, correo, logo) validados."""
+    razon = (razon_social or "").strip()
+    if not razon:
+        raise DatosInvalidosError("La razón social es obligatoria")
+    rnc_limpio = re.sub(r"\D", "", rnc or "") or None
+    if rnc_limpio and len(rnc_limpio) not in (9, 11):
+        raise DatosInvalidosError("El RNC debe tener 9 dígitos (o 11 si es una cédula)")
+    logo = _texto(logo)
+    if logo and (len(logo) > _LOGO_MAX_CARACTERES or not _LOGO_RE.match(logo)):
+        raise DatosInvalidosError("El logo debe ser una imagen PNG, JPEG, WebP o SVG de 256 KB como máximo")
+    return razon, rnc_limpio, _validar_correo(correo), logo
+
+
 async def obtener_empresa(pool: asyncpg.Pool) -> dict[str, Any] | None:
+    """Los datos guardados de la empresa en curso, o None si todavía no se
+    guardaron (la empresa 1 recién creada desde EMISOR_RNC)."""
     async with pool.acquire() as conn:
-        fila = await conn.fetchrow("SELECT * FROM configuracion.empresa WHERE id = 1")
+        fila = await conn.fetchrow(
+            "SELECT * FROM configuracion.empresas WHERE id = $1 AND configurada", empresa_actual()
+        )
     return dict(fila) if fila else None
 
 
@@ -102,44 +141,55 @@ async def guardar_empresa(
     provincia: str | None = None,
     municipio: str | None = None,
 ) -> dict[str, Any]:
-    rnc_limpio = re.sub(r"\D", "", rnc or "") or None
-    if rnc_limpio and len(rnc_limpio) not in (9, 11):
-        raise DatosInvalidosError("El RNC debe tener 9 dígitos (o 11 si es una cédula)")
-    logo = _texto(logo)
-    if logo and (len(logo) > _LOGO_MAX_CARACTERES or not _LOGO_RE.match(logo)):
-        raise DatosInvalidosError("El logo debe ser una imagen PNG, JPEG, WebP o SVG de 256 KB como máximo")
+    razon, rnc_limpio, correo, logo = validar_datos_empresa(
+        razon_social=razon_social, rnc=rnc, correo=correo, logo=logo
+    )
+    valores = (
+        razon,
+        _texto(nombre_comercial),
+        rnc_limpio,
+        _texto(direccion),
+        _texto(telefono),
+        correo,
+        logo,
+        _texto(actividad_economica),
+        _texto(provincia),
+        _texto(municipio),
+    )
+    empresa_id = empresa_actual()
     async with pool.acquire() as conn:
-        fila = await conn.fetchrow(
-            """
-            INSERT INTO configuracion.empresa
-                (id, razon_social, nombre_comercial, rnc, direccion, telefono, correo, logo,
-                 actividad_economica, provincia, municipio)
-            VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-            ON CONFLICT (id) DO UPDATE SET
-                razon_social = EXCLUDED.razon_social,
-                nombre_comercial = EXCLUDED.nombre_comercial,
-                rnc = EXCLUDED.rnc,
-                direccion = EXCLUDED.direccion,
-                telefono = EXCLUDED.telefono,
-                correo = EXCLUDED.correo,
-                logo = EXCLUDED.logo,
-                actividad_economica = EXCLUDED.actividad_economica,
-                provincia = EXCLUDED.provincia,
-                municipio = EXCLUDED.municipio,
-                actualizado_en = now()
-            RETURNING *
-            """,
-            razon_social.strip(),
-            _texto(nombre_comercial),
-            rnc_limpio,
-            _texto(direccion),
-            _texto(telefono),
-            _validar_correo(correo),
-            logo,
-            _texto(actividad_economica),
-            _texto(provincia),
-            _texto(municipio),
-        )
+        async with conn.transaction():
+            try:
+                fila = await conn.fetchrow(
+                    f"""
+                    UPDATE configuracion.empresas SET
+                        ({_COLUMNAS_EMPRESA}, configurada, actualizado_en)
+                        = ($2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true, now())
+                    WHERE id = $1
+                    RETURNING *
+                    """,
+                    empresa_id,
+                    *valores,
+                )
+            except asyncpg.UniqueViolationError as exc:
+                raise RncEnUsoError("Otra empresa de esta instalación ya tiene ese RNC") from exc
+            if fila is None:
+                raise DatosInvalidosError("La empresa no existe")
+            if empresa_id == EMPRESA_PREDETERMINADA and await conn.fetchval(
+                "SELECT to_regclass('configuracion.empresa')"
+            ):
+                await conn.execute(
+                    f"""
+                    INSERT INTO configuracion.empresa (id, {_COLUMNAS_EMPRESA})
+                    VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                    ON CONFLICT (id) DO UPDATE SET ({_COLUMNAS_EMPRESA}, actualizado_en)
+                        = (EXCLUDED.razon_social, EXCLUDED.nombre_comercial, EXCLUDED.rnc, EXCLUDED.direccion,
+                           EXCLUDED.telefono, EXCLUDED.correo, EXCLUDED.logo, EXCLUDED.actividad_economica,
+                           EXCLUDED.provincia, EXCLUDED.municipio, now())
+                    """,
+                    *valores,
+                )
+    invalidar_cache()
     return dict(fila)
 
 
@@ -323,7 +373,7 @@ async def guardar_secuencia(
             INSERT INTO configuracion.secuencias
                 (tipo_ecf, prefijo, desde, hasta, proximo, fecha_vencimiento, activa, ambiente)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (ambiente, tipo_ecf) DO UPDATE SET
+            ON CONFLICT (empresa_id, ambiente, tipo_ecf) DO UPDATE SET
                 desde = EXCLUDED.desde,
                 hasta = EXCLUDED.hasta,
                 proximo = EXCLUDED.proximo,

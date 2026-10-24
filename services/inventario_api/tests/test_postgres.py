@@ -524,7 +524,7 @@ async def test_migracion_aplicada_no_vuelve_a_correr_ddl(pool):
     (antes cada ALTER TABLE ... IF NOT EXISTS lo tomaba sobre productos,
     movimientos, compras y compra_items)."""
     async with pool.acquire() as conn:
-        assert await migraciones.version_aplicada(conn) == migraciones.VERSION_ACTUAL == 11
+        assert await migraciones.version_aplicada(conn) == migraciones.VERSION_ACTUAL == 21
         async with conn.transaction():
             # Mismo camino que aplicar_migraciones, en una transacción para
             # poder mirar los locks que deja.
@@ -534,9 +534,9 @@ async def test_migracion_aplicada_no_vuelve_a_correr_ddl(pool):
 
 
 async def test_db_init_local_queda_anotado_y_la_app_no_lo_repite(base_vacia):
-    """Postgres local: db/init corre 004 y 011; el arranque ya no migra."""
+    """Postgres local: db/init corre 004, 011 y 021; el arranque ya no migra."""
     async with base_vacia.acquire() as conn:
-        for archivo in ("004_inventario.sql", "011_inventario_almacenes_lotes.sql"):
+        for archivo in ("004_inventario.sql", "011_inventario_almacenes_lotes.sql", "021_multiempresa.sql"):
             await conn.execute((REPO_ROOT / "db" / "init" / archivo).read_text(encoding="utf-8"))
     assert await migraciones.aplicar_migraciones(base_vacia) == []
 
@@ -569,7 +569,7 @@ async def test_migracion_no_deja_en_deadlock_a_una_salida_en_curso(base_vacia):
     await venta.fetch("SELECT id FROM inventario.productos WHERE id = $1 FOR NO KEY UPDATE", pid)
     await tx.commit()
     await base_vacia.release(venta)
-    assert await asyncio.wait_for(migracion, 30) == [11]
+    assert await asyncio.wait_for(migracion, 30) == [11, 21]
     assert esperas  # tuvo que reintentar
     assert await _existencias(base_vacia, str(pid)) == {"Principal": D("10")}
 

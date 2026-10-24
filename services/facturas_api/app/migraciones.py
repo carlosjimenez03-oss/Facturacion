@@ -15,20 +15,45 @@ DDL nuevo con su propio db/init.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 
 import asyncpg
+
+from libs.ecf_common import multiempresa_ddl
+from libs.ecf_common.empresa import modo_sistema
 
 logger = logging.getLogger(__name__)
 
 # Clave fija del advisory lock (distinta de la de erp_api/inventario_api).
 _LOCK_MIGRACIONES = 7_002_001
 
+# Igual que erp_api: espera máxima por cada lock antes de rendirse y
+# reintentar con espera creciente.
+_LOCK_TIMEOUT = "5s"
+_REINTENTOS = 5
+_ESPERA_INICIAL_SEGUNDOS = 1.0
+_ESPERA_MAXIMA_SEGUNDOS = 30.0
+
 DDL_FACTURAS = """
 -- Vendedor de la factura (configuracion.vendedores de erp_api, sin FK):
 -- metadata de la aplicación, fuera de `datos` (que refleja el XSD del e-CF).
-ALTER TABLE facturacion.facturas ADD COLUMN IF NOT EXISTS vendedor_id uuid;
-CREATE INDEX IF NOT EXISTS facturas_vendedor_idx ON facturacion.facturas (vendedor_id);
+-- Se consulta el catálogo antes: en una base ya migrada no se toma ningún
+-- lock de facturacion.facturas.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'facturacion' AND table_name = 'facturas' AND column_name = 'vendedor_id'
+    ) THEN
+        ALTER TABLE facturacion.facturas ADD COLUMN IF NOT EXISTS vendedor_id uuid;
+    END IF;
+    IF to_regclass('facturacion.facturas_vendedor_idx') IS NULL THEN
+        CREATE INDEX IF NOT EXISTS facturas_vendedor_idx ON facturacion.facturas (vendedor_id);
+    END IF;
+END;
+$$;
 """
 
 # Modo contingencia (ver app.contingencia y docs/dgii/CONTINGENCIA.md). El
@@ -80,7 +105,8 @@ CREATE TABLE IF NOT EXISTS facturacion.contingencia (
     ultimo_exito          timestamptz,
     actualizado_en        timestamptz NOT NULL DEFAULT now()
 );
-INSERT INTO facturacion.contingencia (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+-- Sin columnas en ON CONFLICT: desde la multiempresa la clave es (empresa_id, id).
+INSERT INTO facturacion.contingencia (id) VALUES (1) ON CONFLICT DO NOTHING;
 
 -- Lotes de envío de las facturas en contingencia (A-0001, A-0002...), las
 -- más antiguas primero. `estado`: en_cola -> enviando -> completado, o
@@ -102,7 +128,13 @@ CREATE TABLE IF NOT EXISTS facturacion.lotes_contingencia (
     completado_en  timestamptz,
     actualizado_en timestamptz NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS lotes_contingencia_creado_idx ON facturacion.lotes_contingencia (creado_en DESC);
+DO $$
+BEGIN
+    IF to_regclass('facturacion.lotes_contingencia_creado_idx') IS NULL THEN
+        CREATE INDEX IF NOT EXISTS lotes_contingencia_creado_idx ON facturacion.lotes_contingencia (creado_en DESC);
+    END IF;
+END;
+$$;
 """
 
 # Clave de idempotencia de la creación (POST /facturas): la pone el POS en
@@ -161,12 +193,76 @@ $$;
 """
 
 
-async def aplicar_migraciones(pool: asyncpg.Pool) -> None:
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
-            await conn.execute(DDL_FACTURAS)
-            await conn.execute(DDL_CONTINGENCIA)
-            await conn.execute(DDL_IDEMPOTENCIA)
-            await conn.execute(DDL_FASE7)
-    logger.info("Columnas de 'facturacion.facturas', tablas de contingencia, idempotencia y fase 7 verificadas")
+# Multiempresa (docs/MULTIEMPRESA.md, libs/ecf_common/multiempresa_ddl.py):
+# facturas, auditoría de envíos y contingencia por empresa. La unicidad del
+# e-NCF ya es por emisor (rnc_emisor, ambiente, encf: ver secuencias_encf) y
+# el RNC de cada empresa es único; la clave de idempotencia del POS sigue
+# siendo global (un UUID). `facturacion.envios_dgii` solo existe si la creó
+# db/init/001 (o la carga inicial a Supabase). Mismo DDL en
+# db/init/021_multiempresa.sql.
+DDL_MULTIEMPRESA = """
+SELECT configuracion.kontara_aislar(t.tabla::regclass, t.unicos)
+FROM (VALUES
+    ('facturacion.facturas', ARRAY[]::text[]),
+    ('facturacion.envios_dgii', ARRAY[]::text[]),
+    ('facturacion.contingencia', ARRAY['contingencia_pkey']),
+    ('facturacion.lotes_contingencia', ARRAY[]::text[])
+) AS t (tabla, unicos)
+WHERE to_regclass(t.tabla) IS NOT NULL;
+
+SELECT configuracion.kontara_conceder(ARRAY['facturacion']);
+"""
+
+
+async def _migrar(conn, settings) -> None:
+    async with conn.transaction():
+        await conn.execute(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT}'")
+        # El lock compartido de la multiempresa PRIMERO (antes de tocar tablas).
+        await multiempresa_ddl.tomar_lock(conn)
+        await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
+        await conn.execute(DDL_FACTURAS)
+        await conn.execute(DDL_CONTINGENCIA)
+        await conn.execute(DDL_IDEMPOTENCIA)
+        await conn.execute(DDL_FASE7)
+        await multiempresa_ddl.aplicar(
+            conn,
+            DDL_MULTIEMPRESA,
+            emisor_rnc=settings.emisor_rnc,
+            razon_social=settings.emisor_razon_social,
+            admin_emails=settings.kontara_admin_emails,
+        )
+
+
+async def aplicar_migraciones(
+    pool: asyncpg.Pool,
+    *,
+    reintentos: int = _REINTENTOS,
+    dormir: Callable[[float], Awaitable[None]] = asyncio.sleep,
+) -> None:
+    """Con `lock_timeout`: si una tabla está ocupada (o hay un deadlock) suelta
+    todo y reintenta con espera creciente, igual que erp_api."""
+    from .config import get_settings
+
+    settings = get_settings()
+    espera = _ESPERA_INICIAL_SEGUNDOS
+    for intento in range(1, reintentos + 1):
+        try:
+            with modo_sistema():
+                async with pool.acquire() as conn:
+                    await _migrar(conn, settings)
+            break
+        except (asyncpg.LockNotAvailableError, asyncpg.DeadlockDetectedError) as exc:
+            if intento == reintentos:
+                raise
+            logger.warning(
+                "Migración de facturas-api en espera (intento %s/%s, %s): reintentando en %ss",
+                intento,
+                reintentos,
+                exc.__class__.__name__,
+                espera,
+            )
+            await dormir(espera)
+            espera = min(espera * 2, _ESPERA_MAXIMA_SEGUNDOS)
+    logger.info(
+        "Columnas de 'facturacion.facturas', tablas de contingencia, idempotencia, fase 7 y multiempresa verificadas"
+    )

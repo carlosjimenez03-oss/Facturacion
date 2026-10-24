@@ -4,7 +4,6 @@ pagos a proveedores con retenciones, comprobantes E41/E43 y retenciones del
 mes con su certificado. Contrato con el frontend:
 `frontend/src/lib/comprasApi.ts`. Ver docs/ERP_API.md, sección "Compras".
 """
-import re
 import uuid
 from datetime import date
 from decimal import Decimal
@@ -15,6 +14,7 @@ from fastapi.responses import Response
 
 from libs.ecf_common.compras606 import TIPOS_BIENES_SERVICIOS
 from libs.ecf_common.ecf_recibidos import bytes_xml
+from libs.ecf_common.empresa import razon_social, rnc_emisor
 
 from . import compras_calculos, compras_repository
 from .aprobacion_client import AprobacionComercialError, entregar_acecf_al_emisor, enviar_aprobacion_comercial
@@ -123,9 +123,7 @@ def _enviar(settings: ErpApiSettings):
     return enviar
 
 
-def _entregar(settings: ErpApiSettings):
-    rnc_comprador = re.sub(r"\D", "", settings.emisor_rnc or "")
-
+def _entregar(settings: ErpApiSettings, rnc_comprador: str):
     async def entregar(rnc_emisor: str, encf: str, xml: bytes) -> str:
         return await entregar_acecf_al_emisor(
             settings.consulta_directorio_url, rnc_emisor=rnc_emisor, nombre_archivo=f"{rnc_comprador}{encf}.xml",
@@ -136,15 +134,17 @@ def _entregar(settings: ErpApiSettings):
 
 
 async def _decidir(request: Request, ecf_id: str, settings: ErpApiSettings, *, aprobado: bool, motivo: str | None):
+    # Somos el comprador: la empresa del request (la 1: EMISOR_RNC).
+    rnc_comprador = await rnc_emisor(_pool(request), settings.emisor_rnc)
     return await _llamar(
         compras_repository.decidir_aprobacion,
         _pool(request),
         _uuid(ecf_id),
         aprobado=aprobado,
         motivo=motivo,
-        rnc_comprador=re.sub(r"\D", "", settings.emisor_rnc or ""),
+        rnc_comprador=rnc_comprador,
         enviar=_enviar(settings),
-        entregar=_entregar(settings),
+        entregar=_entregar(settings, rnc_comprador),
         no_encontrado=_ECF_NO_ENCONTRADO,
     )
 
@@ -284,8 +284,8 @@ async def certificado_retencion(
         _pool(request),
         periodo,
         rnc,
-        agente_rnc=re.sub(r"\D", "", settings.emisor_rnc or ""),
-        agente_nombre=settings.emisor_razon_social,
+        agente_rnc=await rnc_emisor(_pool(request), settings.emisor_rnc),
+        agente_nombre=await razon_social(_pool(request), settings.emisor_razon_social),
         no_encontrado="No hay retenciones a ese proveedor en el período",
     )
 

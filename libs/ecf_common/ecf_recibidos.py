@@ -415,7 +415,7 @@ async def registrar_ecf_recibido(pool: asyncpg.Pool | None, xml_bytes: bytes, ro
                         (rnc_emisor, encf, razon_social_emisor, rnc_comprador, tipo_ecf, fecha_emision,
                          fecha_limite_pago, monto_total, itbis_total, xml, firma_valida, firma_detalle)
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-                    ON CONFLICT (rnc_emisor, encf) DO NOTHING
+                    ON CONFLICT DO NOTHING
                     RETURNING id
                     """,
                     campos["rnc_emisor"],

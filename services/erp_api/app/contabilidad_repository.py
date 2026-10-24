@@ -36,6 +36,8 @@ from typing import Any
 
 import asyncpg
 
+from libs.ecf_common.empresa import empresa_actual
+
 from . import contabilidad_calculos as cc
 from . import formatos, impuestos_repository, precalculos
 from .impuestos_repository import ConflictoImpuestosError
@@ -378,7 +380,7 @@ async def actualizar_cuentas_por_defecto(pool: asyncpg.Pool, valores: dict[str, 
                 await conn.execute(
                     """
                     INSERT INTO contabilidad.cuentas_por_defecto (concepto, cuenta_id) VALUES ($1, $2)
-                    ON CONFLICT (concepto) DO UPDATE SET cuenta_id = EXCLUDED.cuenta_id, actualizado_en = now()
+                    ON CONFLICT (empresa_id, concepto) DO UPDATE SET cuenta_id = EXCLUDED.cuenta_id, actualizado_en = now()
                     """,
                     concepto, cuenta_id,
                 )
@@ -1392,17 +1394,18 @@ async def balance_general(pool: asyncpg.Pool, fecha: date) -> dict[str, Any]:
 
 
 # Conteo de documentos por contabilizar / no contabilizables del tablero:
-# (pool, desde, hasta) -> (momento, por contabilizar, no contabilizables). La
+# (pool, empresa, desde, hasta) -> (momento, por contabilizar, no
+# contabilizables): cada empresa los suyos (multiempresa). La
 # simulación completa (`pendientes_de_contabilizar`) lee y arma todos los
 # documentos del rango: el tablero la reutiliza unos segundos en lugar de
 # repetirla en cada carga. `generar_asientos` lo vacía.
-_CONTEOS_PENDIENTES: dict[tuple[int, date, date], tuple[float, int, int]] = {}
+_CONTEOS_PENDIENTES: dict[tuple[int, int, date, date], tuple[float, int, int]] = {}
 _SEGUNDOS_CONTEOS = 60.0
 
 
 async def _conteo_pendientes(pool: asyncpg.Pool, desde: date, hasta: date) -> tuple[int, int]:
     ahora = time.monotonic()
-    clave = (id(pool), desde, hasta)
+    clave = (id(pool), empresa_actual(), desde, hasta)
     guardado = _CONTEOS_PENDIENTES.get(clave)
     if guardado is not None and ahora - guardado[0] < _SEGUNDOS_CONTEOS:
         return guardado[1], guardado[2]

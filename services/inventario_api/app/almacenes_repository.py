@@ -52,6 +52,7 @@ async def listar_almacenes(pool: asyncpg.Pool, *, activo: bool | None = None) ->
         valores.append(activo)
         where = "WHERE a.activo = $1"
     async with pool.acquire() as conn:
+        await stock.asegurar_almacen_principal(conn)
         filas = await conn.fetch(
             f"{_SELECT_ALMACEN} {where} ORDER BY a.es_principal DESC, a.nombre", *valores
         )

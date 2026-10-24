@@ -23,6 +23,12 @@ facturas-api se lo pasa explícito a `recepcion` y `consulta_resultado`
 
 `TokenProviderPorAmbiente` guarda un `TokenProvider` (token de sesión de la
 DGII) por ambiente: el token de TesteCF no sirve en eCF ni al revés.
+
+**Por empresa (multiempresa, docs/MULTIEMPRESA.md).** La fila de
+`configuracion.ambiente_dgii` es de cada empresa (RLS: la consulta solo ve
+la de la empresa del request), así que la caché se guarda por empresa, y
+el token de la DGII por (empresa, ambiente): cada empresa se autentica con
+su propio certificado.
 """
 from __future__ import annotations
 
@@ -30,6 +36,7 @@ import logging
 import time
 from typing import Any
 
+from libs.ecf_common.empresa import empresa_actual
 from libs.ecf_common.environments import APP_ENV_TO_DGII_ENV, DGIIEnvironment, dgii_environment_for
 
 logger = logging.getLogger(__name__)
@@ -73,44 +80,42 @@ async def leer_ambiente_guardado(conn_o_pool: Any) -> str | None:
 
 
 class AmbienteDGII:
-    """Resuelve el ambiente activo de un servicio: el de Configuración (con
-    caché) o, si no hay, `defecto` (su APP_ENV)."""
+    """Resuelve el ambiente activo de un servicio para la empresa en curso:
+    el de Configuración (con caché por empresa) o, si no hay, `defecto` (su
+    APP_ENV)."""
 
     def __init__(self, defecto: str, *, ttl_segundos: float = TTL_SEGUNDOS, reloj=time.monotonic):
         self.defecto = validar_ambiente(defecto)
         self.ttl = ttl_segundos
         self._reloj = reloj
-        self._valor: str | None = None
-        self._origen = "variables"
-        self._vence = 0.0
+        # empresa -> (valor guardado o None, origen, vence)
+        self._cache: dict[int, tuple[str | None, str, float]] = {}
 
     def invalidar(self) -> None:
-        self._vence = 0.0
+        self._cache.clear()
 
     def fijar(self, ambiente: str) -> None:
         """Lo que se acaba de guardar (erp-api), sin esperar a la caché."""
-        self._valor = validar_ambiente(ambiente)
-        self._origen = "configuracion"
-        self._vence = self._reloj() + self.ttl
+        self._cache[empresa_actual()] = (validar_ambiente(ambiente), "configuracion", self._reloj() + self.ttl)
 
     async def actual(self, pool: Any) -> str:
-        if self._reloj() < self._vence:
-            return self._valor or self.defecto
+        empresa = empresa_actual()
+        en_cache = self._cache.get(empresa)
+        if en_cache is not None and self._reloj() < en_cache[2]:
+            return en_cache[0] or self.defecto
         valor: str | None = None
         if pool is not None:
             try:
                 valor = await leer_ambiente_guardado(pool)
             except Exception as exc:  # base caída, sin permiso...: se usa APP_ENV
                 logger.warning("No se pudo leer el ambiente DGII de Configuración (%s): se usa APP_ENV", exc)
-        self._valor = valor
-        self._origen = "configuracion" if valor else "variables"
-        self._vence = self._reloj() + self.ttl
+        self._cache[empresa] = (valor, "configuracion" if valor else "variables", self._reloj() + self.ttl)
         return valor or self.defecto
 
     async def origen(self, pool: Any) -> str:
         """'configuracion' (fila guardada) o 'variables' (APP_ENV)."""
         await self.actual(pool)
-        return self._origen
+        return self._cache[empresa_actual()][1]
 
     async def resolver(self, pool: Any, pedido: str | None = None) -> str:
         """El ambiente pedido explícitamente (p. ej. el de la factura) o, si
@@ -124,27 +129,29 @@ class AmbienteDGII:
 
 
 class TokenProviderPorAmbiente:
-    """Un `TokenProvider` por ambiente DGII, creado al primer uso. Mismo
-    certificado para todos (es el del emisor); lo que cambia es el servicio
-    de Autenticación de la DGII y, con él, el token."""
+    """Un `TokenProvider` por (empresa, ambiente DGII), creado al primer
+    uso. Cada empresa firma la semilla con su certificado (el que carga
+    `signing.cargar_certificado_p12` para la empresa en curso); por ambiente
+    cambia el servicio de Autenticación de la DGII y, con él, el token."""
 
     def __init__(self, certificado_path: str, certificado_password: str, margen_segundos: int = 60):
         self._certificado_path = certificado_path
         self._certificado_password = certificado_password
         self._margen_segundos = margen_segundos
-        self._proveedores: dict[DGIIEnvironment, Any] = {}
+        self._proveedores: dict[tuple[int, DGIIEnvironment], Any] = {}
 
     def para(self, ambiente: DGIIEnvironment):
         from libs.ecf_common.auth.token_provider import TokenProvider
 
-        if ambiente not in self._proveedores:
-            self._proveedores[ambiente] = TokenProvider(
+        clave = (empresa_actual(), ambiente)
+        if clave not in self._proveedores:
+            self._proveedores[clave] = TokenProvider(
                 ambiente=ambiente,
                 certificado_path=self._certificado_path,
                 certificado_password=self._certificado_password,
                 margen_segundos=self._margen_segundos,
             )
-        return self._proveedores[ambiente]
+        return self._proveedores[clave]
 
     async def obtener_token(self, forzar_renovacion: bool = False, *, ambiente: DGIIEnvironment):
         return await self.para(ambiente).obtener_token(forzar_renovacion)

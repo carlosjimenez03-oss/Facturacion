@@ -104,7 +104,11 @@ class UsuarioSesion:
     # Entró por KONTARA_ADMIN_EMAILS sin tener todavía la marca en
     # app_metadata: erp-api se la pone (plataforma.py).
     falta_marca: bool = False
+    # `admin`: administrador de la empresa del request (su rol en
+    # configuracion.empresa_usuarios, ver libs/ecf_common/empresa.py);
+    # `admin_global`: la marca `kontara_admin` / KONTARA_ADMIN_EMAILS.
     admin: bool = False
+    admin_global: bool = False
 
 
 def correos_admin(valor: str | Iterable[str] | None) -> frozenset[str]:
@@ -229,9 +233,14 @@ def token_interno_valido(token: str | None) -> bool:
 
 
 def cabeceras_internas(token: str | None) -> dict[str, str]:
-    """Cabecera para llamar a otro servicio de Kontara por la red interna
-    ({} si KONTARA_TOKEN_INTERNO no está configurado o es muy corto)."""
-    return {CABECERA_INTERNA: token} if token_interno_valido(token) else {}
+    """Cabeceras para llamar a otro servicio de Kontara por la red interna:
+    el token interno ({} si KONTARA_TOKEN_INTERNO no está configurado o es
+    muy corto) y la empresa en curso (`X-Kontara-Empresa`, ver
+    libs/ecf_common/empresa.py)."""
+    from libs.ecf_common.empresa import cabeceras_empresa
+
+    interno = {CABECERA_INTERNA: token} if token_interno_valido(token) else {}
+    return {**interno, **cabeceras_empresa()}
 
 
 def es_llamada_interna(request: Request, token: str | None) -> bool:
@@ -270,6 +279,14 @@ class RevocacionSesiones:
     async def _consultar(self, pool: Any, sesion_id: str) -> bool:
         import asyncpg  # solo aquí: no todos los servicios lo usan
 
+        from libs.ecf_common.empresa import modo_sistema
+
+        # Como el usuario de la base (sin SET ROLE kontara_app, que no ve el
+        # esquema `auth`).
+        with modo_sistema():
+            return await self._consultar_en(pool, sesion_id, asyncpg)
+
+    async def _consultar_en(self, pool: Any, sesion_id: str, asyncpg) -> bool:
         async with pool.acquire() as conn:
             if not self._simple:
                 try:

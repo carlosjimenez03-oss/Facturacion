@@ -126,8 +126,26 @@ def plan_fefo(
 
 # --- Almacenes / lotes ---------------------------------------------------------
 
+# El almacén "Principal" de la empresa 1 lo creó la migración; el de cada
+# empresa nueva se crea al primer uso (multiempresa: el índice único del
+# principal es por empresa, y la política RLS pone la empresa del request).
+_SQL_CREAR_PRINCIPAL = """
+INSERT INTO inventario.almacenes (nombre, es_principal)
+SELECT 'Principal', true
+WHERE NOT EXISTS (SELECT 1 FROM inventario.almacenes WHERE es_principal)
+ON CONFLICT DO NOTHING
+"""
+
+
+async def asegurar_almacen_principal(conn: asyncpg.Connection) -> None:
+    await conn.execute(_SQL_CREAR_PRINCIPAL)
+
+
 async def almacen_principal_id(conn: asyncpg.Connection) -> uuid.UUID:
     almacen_id = await conn.fetchval("SELECT id FROM inventario.almacenes WHERE es_principal")
+    if almacen_id is None:
+        await asegurar_almacen_principal(conn)
+        almacen_id = await conn.fetchval("SELECT id FROM inventario.almacenes WHERE es_principal")
     if almacen_id is None:  # solo si alguien borró la fila a mano
         raise AlmacenNoEncontradoError("No hay almacén principal")
     return almacen_id
@@ -145,6 +163,9 @@ async def obtener_almacen(
     bloqueo = " FOR SHARE" if exigir_activo else ""
     if almacen_id is None:
         fila = await conn.fetchrow(f"SELECT * FROM inventario.almacenes WHERE es_principal{bloqueo}")
+        if fila is None:
+            await asegurar_almacen_principal(conn)
+            fila = await conn.fetchrow(f"SELECT * FROM inventario.almacenes WHERE es_principal{bloqueo}")
     else:
         fila = await conn.fetchrow(f"SELECT * FROM inventario.almacenes WHERE id = $1{bloqueo}", almacen_id)
     if fila is None:

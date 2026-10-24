@@ -137,7 +137,7 @@ async def registrar_compra_606(
                      ncf, ncf_modificado, fecha_comprobante, monto_servicios, monto_bienes, itbis_facturado,
                      impuesto_selectivo_consumo, otros_impuestos, monto_propina_legal)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                ON CONFLICT (rnc_cedula, ncf) DO NOTHING
+                ON CONFLICT DO NOTHING
                 """,
                 periodo_de_fecha(fecha_comprobante),
                 origen,

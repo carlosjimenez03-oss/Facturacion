@@ -7,6 +7,7 @@ from pathlib import Path
 import asyncpg
 import pytest
 
+from libs.ecf_common import multiempresa_ddl
 from services.erp_api.app import migraciones
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -135,21 +136,33 @@ async def test_aplicar_migraciones_toma_el_lock_antes_del_ddl():
     await migraciones.aplicar_migraciones(_FakePool(conn))
 
     assert conn.execute_calls[0][0].startswith("SET LOCAL lock_timeout")
-    assert "pg_advisory_xact_lock" in conn.execute_calls[1][0]
-    assert conn.execute_calls[2][0] == migraciones.DDL_VENTAS
-    assert conn.execute_calls[3][0] == migraciones.DDL_IMPUESTOS
-    assert conn.execute_calls[4][0] == migraciones.DDL_FUNCIONES
-    assert conn.execute_calls[5][0] == migraciones.DDL_COMPRAS
-    assert conn.execute_calls[6][0] == migraciones.DDL_CONTABILIDAD
-    assert conn.execute_calls[7][0] == migraciones.DDL_BANCOS
-    assert conn.execute_calls[8][0] == migraciones.DDL_CONFIGURACION
-    assert conn.execute_calls[9][0] == migraciones.DDL_OPERACION
-    assert conn.execute_calls[10][0] == migraciones.DDL_NOMINA
+    # El lock compartido de la multiempresa ANTES que el propio y que
+    # cualquier tabla (todos los servicios en el mismo orden: sin deadlocks).
+    assert conn.execute_calls[1] == ("SELECT pg_advisory_xact_lock($1)", (multiempresa_ddl.LOCK_MULTIEMPRESA,))
+    assert "pg_advisory_xact_lock" in conn.execute_calls[2][0]
+    assert conn.execute_calls[3][0] == migraciones.DDL_VENTAS
+    assert conn.execute_calls[4][0] == migraciones.DDL_IMPUESTOS
+    assert conn.execute_calls[5][0] == migraciones.DDL_FUNCIONES
+    assert conn.execute_calls[6][0] == migraciones.DDL_COMPRAS
+    assert conn.execute_calls[7][0] == migraciones.DDL_CONTABILIDAD
+    assert conn.execute_calls[8][0] == migraciones.DDL_BANCOS
+    assert conn.execute_calls[9][0] == migraciones.DDL_CONFIGURACION
+    assert conn.execute_calls[10][0] == migraciones.DDL_OPERACION
+    assert conn.execute_calls[11][0] == migraciones.DDL_NOMINA
     # Pagos en línea después de soluciones (necesita soluciones.portal_enlaces
-    # y ventas.cobros); el ambiente de las secuencias, al final.
+    # y ventas.cobros); el ambiente de las secuencias y, al final, la
+    # multiempresa (DDL común con su lock compartido y el de erp-api).
     llamadas = [c[0] for c in conn.execute_calls]
     assert llamadas.index(migraciones.DDL_PAGOS) > llamadas.index(migraciones.DDL_SOLUCIONES)
-    assert conn.execute_calls[-1][0] == migraciones.DDL_AMBIENTE
+    assert llamadas.index(migraciones.DDL_AMBIENTE) < llamadas.index(multiempresa_ddl.DDL_MULTIEMPRESA)
+    assert ("SELECT pg_advisory_xact_lock($1)", (multiempresa_ddl.LOCK_MULTIEMPRESA,)) in conn.execute_calls
+    assert llamadas[-2:] == [multiempresa_ddl.DDL_MULTIEMPRESA, migraciones.DDL_MULTIEMPRESA]
+
+
+def test_021_tiene_el_mismo_ddl_de_multiempresa():
+    archivo = (REPO_ROOT / "db" / "init" / "021_multiempresa.sql").read_text(encoding="utf-8")
+    assert multiempresa_ddl.DDL_MULTIEMPRESA.strip() in archivo
+    assert migraciones.DDL_MULTIEMPRESA.strip() in archivo
 
 
 class _ConexionOcupada(_FakeConnection):

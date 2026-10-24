@@ -31,6 +31,7 @@ from fastapi.responses import JSONResponse, Response
 
 from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
 from libs.ecf_common.db import cerrar_pool, crear_pool
+from libs.ecf_common.empresa import diagnosticar, instalar_empresa
 
 from . import ajustes_repository, almacenes_repository, kardex, lotes_repository, repository
 from .config import InventarioApiSettings, get_settings
@@ -114,6 +115,7 @@ async def lifespan(app: FastAPI):
             "alcanzable -- el catálogo y el kardex viven únicamente en Postgres."
         )
     await aplicar_migraciones(pool)
+    await diagnosticar(pool)
     app.state.db_pool = pool
     yield
     await cerrar_pool(app.state.db_pool)
@@ -121,6 +123,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.state.db_pool = None
+
+# Empresa de cada request (multiempresa, docs/MULTIEMPRESA.md); por dentro
+# de la verificación de sesión (se instala antes) para ver al usuario.
+instalar_empresa(app, settings)
 
 # REQUIRE_AUTH=true: exige la sesión de Supabase Auth (ver docs/AUTH.md).
 instalar_verificacion_sesion(app, settings)

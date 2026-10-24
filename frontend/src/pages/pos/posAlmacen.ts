@@ -14,12 +14,20 @@
 // Nada de esto sale del navegador salvo al sincronizar. Si IndexedDB no está
 // disponible (navegación privada en algunos navegadores) las funciones
 // lanzan y el POS sigue funcionando solo en línea.
+//
+// Multiempresa: una base por empresa ("kontara-pos" la 1, como siempre;
+// "kontara-pos.e<id>" las demás, ver lib/empresaActual.ts claveEmpresa):
+// la cola y el catálogo de una empresa nunca se mezclan con los de otra.
 import type { Secuencia } from "../../lib/configuracionApi";
+import { claveEmpresa } from "../../lib/empresaActual";
 import type { SesionCaja } from "../../lib/solucionesApi";
 import type { Almacen, Producto } from "../../lib/types";
 import type { VentaOffline } from "./posOffline";
 
 const BASE = "kontara-pos";
+
+/** La base de la empresa de esta pestaña (se fija al cargar: cambiar de empresa recarga). */
+const base = () => claveEmpresa(BASE);
 const VERSION = 1;
 const COLA = "cola";
 const DATOS = "datos";
@@ -44,7 +52,7 @@ function abrir(): Promise<IDBDatabase> {
       reject(new Error("Este navegador no permite guardar datos para trabajar sin conexión."));
       return;
     }
-    const peticion = indexedDB.open(BASE, VERSION);
+    const peticion = indexedDB.open(base(), VERSION);
     peticion.onupgradeneeded = () => {
       const db = peticion.result;
       if (!db.objectStoreNames.contains(COLA)) db.createObjectStore(COLA, { keyPath: "clave" });
@@ -140,5 +148,5 @@ export function actualizarCatalogo(parcial: Partial<CatalogoPos>): Promise<void>
 export async function conCandado<T>(fn: () => Promise<T>): Promise<T> {
   const locks = typeof navigator !== "undefined" ? navigator.locks : undefined;
   if (!locks) return fn();
-  return locks.request("kontara-pos-sincronizar", fn) as Promise<T>;
+  return locks.request(`${base()}-sincronizar`, fn) as Promise<T>;
 }

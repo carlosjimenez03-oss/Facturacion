@@ -86,7 +86,9 @@ hace falta publicar el puerto de la base en el servidor.
    Si la contraseña tiene caracteres especiales (`@ : / ? #`), escríbalos
    codificados (`@` → `%40`, `:` → `%3A`, `/` → `%2F`). El modo transacción
    (`supavisor:6543`) también funciona: la aplicación desactiva la caché de
-   sentencias de `asyncpg` automáticamente.
+   sentencias de `asyncpg` automáticamente. Para **varias empresas**
+   (docs/MULTIEMPRESA.md) use el modo sesión (5432): el modo transacción no
+   conserva la empresa de cada conexión y solo deja trabajar con la empresa 1.
 
 Nunca escriba estos valores en el repositorio ni en chats: van solo en la
 pestaña Environment de Dokploy.

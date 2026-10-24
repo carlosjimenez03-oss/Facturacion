@@ -9,6 +9,8 @@ from typing import Any
 
 import asyncpg
 
+from libs.ecf_common.empresa import empresa_actual
+
 from .repository import _fila_a_dict
 
 # Clave del advisory lock que serializa el envío por lotes entre réplicas
@@ -65,7 +67,7 @@ async def registrar_falla(pool: asyncpg.Pool, error: str) -> dict[str, Any]:
             INSERT INTO facturacion.contingencia AS c
                 (id, activa, desde, errores_consecutivos, ultimo_intento, ultimo_error, actualizado_en)
             VALUES (1, true, now(), 1, now(), $1, now())
-            ON CONFLICT (id) DO UPDATE SET
+            ON CONFLICT (empresa_id, id) DO UPDATE SET
                 activa = true,
                 desde = COALESCE(c.desde, now()),
                 errores_consecutivos = c.errores_consecutivos + 1,
@@ -86,7 +88,7 @@ async def registrar_exito(pool: asyncpg.Pool) -> dict[str, Any]:
             """
             INSERT INTO facturacion.contingencia AS c (id, activa, ultimo_intento, ultimo_exito, actualizado_en)
             VALUES (1, false, now(), now(), now())
-            ON CONFLICT (id) DO UPDATE SET
+            ON CONFLICT (empresa_id, id) DO UPDATE SET
                 activa = false, desde = NULL, errores_consecutivos = 0,
                 ultimo_intento = now(), ultimo_exito = now(), actualizado_en = now()
             RETURNING *
@@ -269,9 +271,11 @@ async def candado_envio(pool: asyncpg.Pool):
     """Advisory lock de sesión mientras dura un envío por lotes: rinde True
     si se obtuvo, False si otro proceso ya está enviando."""
     async with pool.acquire() as conn:
-        obtenido = await conn.fetchval("SELECT pg_try_advisory_lock($1)", _LOCK_ENVIO_LOTES)
+        # (clave, empresa): cada empresa envía sus lotes por su cuenta.
+        empresa_id = empresa_actual()
+        obtenido = await conn.fetchval("SELECT pg_try_advisory_lock($1, $2)", _LOCK_ENVIO_LOTES, empresa_id)
         try:
             yield obtenido
         finally:
             if obtenido:
-                await conn.execute("SELECT pg_advisory_unlock($1)", _LOCK_ENVIO_LOTES)
+                await conn.execute("SELECT pg_advisory_unlock($1, $2)", _LOCK_ENVIO_LOTES, empresa_id)

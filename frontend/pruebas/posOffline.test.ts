@@ -8,6 +8,7 @@ import { describe, it } from "node:test";
 import {
   aplicadoPorMetodo,
   clasificarError,
+  deLaEmpresa,
   mensajeSincronizacion,
   nuevaClave,
   nuevaVentaOffline,
@@ -159,6 +160,20 @@ describe("sincronizarCola", () => {
       assert.equal(v.sincronizadaEn, "2026-10-24T12:00:00.000Z");
     }
     assert.deepEqual(s.llamadas.slice(0, 4), [`crear ${a.clave.slice(-2)}`, `xml f-${a.clave.slice(-2)}`, `enviar f-${a.clave.slice(-2)}`, `caja f-${a.clave.slice(-2)}`]);
+  });
+
+  it("multiempresa: solo sincroniza las ventas de la empresa de la pestaña", async () => {
+    const s = servidor();
+    const deLaDos = venta({ empresaId: 2 });
+    const deLaUno = venta({ empresaId: 1 });
+    const antigua = venta(); // de antes de la multiempresa: la 1
+    const r = await sincronizarCola([deLaDos, deLaUno, antigua], { ...s.deps, empresaId: 1 });
+    assert.deepEqual(r.sincronizadas.map((v) => v.clave).sort(), [deLaUno.clave, antigua.clave].sort());
+    assert.ok(!s.llamadas.some((l) => l.endsWith(deLaDos.clave.slice(-2))), "la venta de la empresa 2 no salió");
+    const enLaDos = await sincronizarCola([deLaDos], { ...s.deps, empresaId: 2 });
+    assert.deepEqual(enLaDos.sincronizadas.map((v) => v.clave), [deLaDos.clave]);
+    assert.equal(deLaEmpresa(antigua, 2), false);
+    assert.equal(deLaEmpresa(deLaDos, undefined), true);
   });
 
   it("si la red se cae tras crear la factura, el reintento la reutiliza (una sola factura y un solo e-NCF)", async () => {

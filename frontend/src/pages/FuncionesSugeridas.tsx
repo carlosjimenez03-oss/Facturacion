@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { claveEmpresa } from "../lib/empresaActual";
 import { inventarioApi } from "../lib/inventarioApi";
 import { useFacturas } from "../lib/useFacturas";
 
@@ -14,8 +15,9 @@ interface Paso {
   hecho: boolean | null;
 }
 
-const CLAVE_MANUAL = "kontara.pasosCompletados";
-const CLAVE_OCULTO = "kontara.funcionesSugeridasOcultas";
+// Por empresa (multiempresa): cada empresa nueva tiene sus primeros pasos.
+const CLAVE_MANUAL = claveEmpresa("kontara.pasosCompletados");
+const CLAVE_OCULTO = claveEmpresa("kontara.funcionesSugeridasOcultas");
 
 function leer<T>(clave: string, defecto: T): T {
   try {
