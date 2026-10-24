@@ -38,6 +38,12 @@ import {
 } from "./icons";
 import { MENU_PRINCIPAL, MENU_SOLUCIONES } from "./menu";
 
+// Sin inicio de sesión en el build, nginx no reenvía ninguna empresa (no hay
+// quién verifique la membresía): todo va a la predeterminada, así que no se
+// ofrece cambiar ni agregar. En desarrollo (Vite directo a las APIs, sin
+// nginx) VITE_MULTIEMPRESA_SIN_SESION=true lo permite.
+const SELECCION_DISPONIBLE = AUTH_CONFIGURADA || import.meta.env.VITE_MULTIEMPRESA_SIN_SESION === "true";
+
 type Panel = "nuevo" | "ayuda" | "notif" | "eco" | "apps" | "empresa" | "usuario" | null;
 type Modal = "pos" | "agregar-empresa" | null;
 
@@ -421,7 +427,7 @@ export function Topbar() {
                       type="button"
                       className={`pop-i${actual ? " act" : ""}`}
                       aria-current={actual ? "true" : undefined}
-                      disabled={cambiando}
+                      disabled={cambiando || (!actual && !SELECCION_DISPONIBLE)}
                       onClick={() => (actual || !e ? undefined : void cambiarA(e.id, nombreCorto))}
                     >
                       <span className="co-av">{nombreCorto.charAt(0).toUpperCase()}</span>
@@ -449,16 +455,18 @@ export function Topbar() {
                   </span>
                 </div>
               )}
-              {misEmpresas && !misEmpresas.puede_agregar && (
+              {misEmpresas && (!misEmpresas.puede_agregar || !SELECCION_DISPONIBLE) && (
                 <div className="co-motivo">
-                  {misEmpresas.motivo ?? "Solo un administrador de la empresa puede agregar otras."}
+                  {!SELECCION_DISPONIBLE
+                    ? "Para trabajar con varias empresas active el inicio de sesión (ver docs/AUTH.md): sin él, todas las pantallas usan la empresa predeterminada."
+                    : (misEmpresas.motivo ?? "Solo un administrador de la empresa puede agregar otras.")}
                 </div>
               )}
               <div style={{ padding: "12px 16px 16px" }}>
                 <button
                   type="button"
                   className="btn co-add"
-                  disabled={!misEmpresas?.puede_agregar}
+                  disabled={!misEmpresas?.puede_agregar || !SELECCION_DISPONIBLE}
                   onClick={() => {
                     setPanel(null);
                     setModal("agregar-empresa");

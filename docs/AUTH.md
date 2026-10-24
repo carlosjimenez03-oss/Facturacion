@@ -364,6 +364,18 @@ pasos (Dokploy → Environment → `APP_ENV=test|qa|production` → Deploy).
   estar fuera de la ventana, el envío queda *"Requiere plantilla"* sin más
   reintentos (envíelo a mano desde Kontara Ventas).
 
+## Varias empresas
+
+Con varias empresas (ver [`MULTIEMPRESA.md`](MULTIEMPRESA.md)) el navegador
+manda la empresa elegida en `X-Kontara-Empresa` (y la cookie
+`kontara_empresa` en las descargas). `/auth/verificar` además comprueba que
+el usuario sea miembro de esa empresa: **403** `sin_empresa` si no (nginx lo
+devuelve como JSON), o 204 con `X-Kontara-Empresa` = la verificada, que nginx
+reenvía a las APIs en lugar de la del navegador. Las APIs con `REQUIRE_AUTH`
+vuelven a validar la membresía; las llamadas internas (`X-Kontara-Interno`)
+pasan la empresa explícita. Sin inicio de sesión (`KONTARA_AUTH=off`) se usa
+siempre la empresa predeterminada.
+
 ## Usuarios
 
 Configuración → Usuarios lista, crea (con contraseña) o invita (sin
@@ -373,8 +385,12 @@ con `SUPABASE_SERVICE_ROLE_KEY`. Solo lista y administra los usuarios **de
 Kontara** (`app_metadata.kontara`); los demás del mismo Supabase Auth aparecen
 aparte como *Sin acceso a Kontara*, con **Dar acceso**. Los que se crean o
 invitan desde aquí salen con la marca. Nadie puede desactivarse a sí mismo.
-Todos los usuarios con sesión pueden administrar usuarios (no hay roles
-todavía). Desactivar corta el acceso en ~1 minuto (ver `auth.sessions`
+Con varias empresas la lista es la de los **miembros de la empresa en uso**,
+cada uno con su rol (administrador o usuario) en ella; crear o invitar lo
+agrega a esa empresa (si el correo ya existe, solo lo agrega) y **Quitar** lo
+saca de ella. Administrar usuarios, agregar empresas y cambiar el ambiente
+DGII es de los administradores de la empresa (los usuarios de antes, sin
+membresías, conservan su rol global en la empresa 1). Desactivar corta el acceso en ~1 minuto (ver `auth.sessions`
 arriba). Sin la llave, la pantalla explica cómo hacerlo en Studio.
 
 ## Revertir (rollback)

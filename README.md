@@ -42,6 +42,14 @@ correspondiente de e-CF de la DGII (TesteCF / CerteCF / eCF). Ver el detalle
 completo, variables de entorno, Docker Compose y pipelines de CI/CD en
 [`docs/AMBIENTES.md`](docs/AMBIENTES.md).
 
+## Varias empresas
+
+Una instalación puede administrar varias empresas (emisores), cada una con
+sus datos, su certificado, sus secuencias y su ambiente DGII, aisladas en
+Postgres con Row Level Security; un usuario cambia entre las suyas desde la
+barra superior. Con una sola empresa todo sigue igual. Ver
+[`docs/MULTIEMPRESA.md`](docs/MULTIEMPRESA.md).
+
 ## Estructura
 
 ```
