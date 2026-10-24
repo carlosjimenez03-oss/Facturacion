@@ -5,8 +5,9 @@
 // En las rutas /nomina* AppShell dibuja NominaSidebar en el lugar del menú principal y avisa con
 // NominaSidebarGlobal (./nominaUtil), así que NominaShell ya no repite el menú como columna interna.
 // Fuera de AppShell (sin ese contexto) cada pantalla de Nómina dibuja su menú a la izquierda.
-import { useContext, type ReactNode } from "react";
-import { Link, NavLink } from "react-router-dom";
+import { useContext, useEffect, useState, type ReactNode } from "react";
+import { Link, NavLink, useLocation } from "react-router-dom";
+import { IconMenu } from "../../layout/icons";
 import "../ingresos/ingresos.css";
 import "./nomina.css";
 import { tarjetaPrueba, useSuscripcion } from "../../lib/solucionesApi";
@@ -45,8 +46,13 @@ function IconoVolver() {
 function MenuNomina({ clase }: { clase: string }) {
   const { noLeidos } = useAvisosNomina();
   const prueba = tarjetaPrueba(useSuscripcion());
+  const global = clase === "sb";
+  // En el lugar del menú principal (móvil): cajón con botón de menú, como Sidebar.
+  const { pathname } = useLocation();
+  const [movilAbierto, setMovilAbierto] = useState(false);
+  useEffect(() => setMovilAbierto(false), [pathname]);
   return (
-    <aside className={clase} aria-label="Menú de Nómina">
+    <aside className={global && movilAbierto ? "sb open" : clase} aria-label="Menú de Nómina">
       <div className={clase === "sb" ? "sb-head" : "nm-head"}>
         <Link to="/nomina" className={clase === "sb" ? "sb-logo" : "nm-logo"} aria-label="Nómina · Inicio">
           <LogoNomina />
@@ -58,8 +64,20 @@ function MenuNomina({ clase }: { clase: string }) {
         <Link to="/" className="ib" aria-label="Volver a Facturación" title="Volver a Facturación">
           <IconoVolver />
         </Link>
+        {global && (
+          <button
+            type="button"
+            className="ib sb-burger"
+            onClick={() => setMovilAbierto((m) => !m)}
+            aria-label="Abrir menú"
+            aria-expanded={movilAbierto}
+          >
+            <IconMenu />
+          </button>
+        )}
       </div>
-      <nav className={clase === "sb" ? "sb-nav nm-nav" : "nm-nav"}>
+      {global && <button type="button" className="sb-scrim" onClick={() => setMovilAbierto(false)} aria-label="Cerrar menú" />}
+      <nav className={global ? "sb-nav" : "nm-nav"}>
         {MENU.map((m) => (
           <NavLink key={m.to} to={m.to} end={m.end} className={({ isActive }) => (isActive ? "nv on" : "nv")}>
             <span className="sb-lbl">{m.label}</span>
