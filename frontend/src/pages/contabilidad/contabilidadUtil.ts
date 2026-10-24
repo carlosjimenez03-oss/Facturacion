@@ -42,6 +42,7 @@ export const ORIGENES_ASIENTO: { value: OrigenAsiento; label: string }[] = [
   { value: "transferencia", label: "Transferencia" },
   { value: "proporcionalidad", label: "Proporcionalidad ITBIS" },
   { value: "depreciacion", label: "Depreciación" },
+  { value: "factura_papel", label: "Factura en papel" },
 ];
 
 export const ORIGEN_LABEL = Object.fromEntries(ORIGENES_ASIENTO.map((o) => [o.value, o.label])) as Record<OrigenAsiento, string>;
@@ -123,6 +124,8 @@ export function enlaceCorreccion(d: Pick<DocumentoNoContabilizado, "origen" | "o
       return { to: "/contabilidad/activos", label: "Ver activos fijos" };
     case "proporcionalidad":
       return { to: `/impuestos/precalculo/it1?periodo=${d.origen_id}`, label: "Ver el IT-1" };
+    case "factura_papel":
+      return { to: "/sincronizacion", label: "Ver facturas en papel" };
     default:
       return { to: "/contabilidad/asientos", label: "Ver asientos" };
   }

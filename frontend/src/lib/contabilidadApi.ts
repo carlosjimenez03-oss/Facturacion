@@ -144,7 +144,9 @@ export type OrigenAsiento =
   | "transferencia"
   /** Ajuste mensual del ITBIS adelantado no admitido por proporcionalidad (origen_id = AAAAMM). */
   | "proporcionalidad"
-  | "depreciacion";
+  | "depreciacion"
+  /** Factura en papel (serie B) registrada en el Centro de sincronización durante una contingencia. */
+  | "factura_papel";
 
 export interface LineaAsiento {
   id: string;

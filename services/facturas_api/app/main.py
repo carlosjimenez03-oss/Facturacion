@@ -4,17 +4,21 @@ Backend del frontend React de facturación. Persiste cada factura en
 `facturacion.facturas` (Postgres) a lo largo de su ciclo de vida:
 
     borrador -> generado -> firmado -> enviado -> (aceptado | rechazado | error)
+                                  `-> contingencia -> enviado (en lote, al reconectar)
 
 - POST /facturas/{id}/generar-xml arma el XML a partir de `datos` (ver
   `xml_builder`) y lo valida contra el XSD oficial del `tipo_ecf`.
 - POST /facturas/{id}/firmar produce una VISTA PREVIA firmada (XML-DSig, con
   el certificado configurado en este mismo servicio) que se guarda para
   referencia del usuario -- no es lo que efectivamente se transmite.
-- POST /facturas/{id}/enviar delega la firma real y el envío a la DGII al
-  módulo `recepcion` (POST /ecf, ver services/recepcion), que ya implementa
-  ese flujo (firmar + token + envío + auditoría). Este servicio solo arma el
-  XML sin firmar y registra el resultado (trackId / error) que `recepcion`
-  devuelve.
+- POST /facturas/{id}/enviar firma el XML (o reutiliza la firma ya
+  guardada: la de la representación impresa) y delega el envío a la DGII al
+  módulo `recepcion` (POST /ecf con firmado=true, ver services/recepcion:
+  token + envío + auditoría), que lo envía tal cual; registra el resultado
+  (trackId / error). Si la DGII no responde (sin conexión, timeout, 5xx) la
+  factura queda en 'contingencia' -- firmada, entregable con la leyenda de
+  contingencia -- y se envía sola por lotes al reconectar (ver
+  `app.contingencia`; estado y lotes en GET /contingencia).
 - POST /facturas/{id}/actualizar-estado consulta por trackId el resultado de
   la validación de la DGII (vía `consulta_resultado`) y pasa la factura de
   'enviado' a 'aceptado' o 'rechazado'. Lo mismo ocurre una vez, best-effort,
@@ -32,20 +36,24 @@ import asyncio
 import logging
 import uuid
 from contextlib import asynccontextmanager, suppress
-from decimal import Decimal, InvalidOperation
 
-import httpx
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
-from libs.ecf_common.compras606 import fecha_dgii_a_aaaammdd, registrar_compra_606
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
-from libs.ecf_common.xml_tools import nombre_archivo_ecf
 
-from . import estado_dgii, inventario_client, repository, secuencias_encf
+from . import (
+    contingencia,
+    contingencia_repository,
+    envio,
+    estado_dgii,
+    inventario_client,
+    repository,
+    secuencias_encf,
+)
 from .certificado import estado_certificado
 from .config import FacturasApiSettings, get_settings
 from .consulta_resultado_client import ConsultaResultadoError
@@ -56,11 +64,14 @@ from .representacion_impresa import RepresentacionImpresaError, generar_pdf
 from .schemas import (
     CertificadoEstado,
     EnviarResponse,
+    EstadoContingencia,
     FacturaActualizar,
     FacturaCrear,
     FacturaDetalle,
     FacturaResumen,
     GenerarXmlResponse,
+    LoteContingencia,
+    ReintentoContingencia,
 )
 from .xml_builder import TIPOS_SOPORTADOS, generar_y_validar
 
@@ -266,6 +277,12 @@ async def generar_xml(factura_id: str):
     enviada = factura["estado"] not in ("borrador", "generado", "firmado", "error") or (
         factura["estado"] == "error" and factura.get("track_id")
     )
+    if factura["estado"] == "contingencia":
+        raise HTTPException(
+            status_code=409,
+            detail="La factura se emitió en contingencia (firmada y entregable al comprador); su XML no se puede "
+            "regenerar: se enviará tal cual a la DGII.",
+        )
     if enviada:
         raise HTTPException(
             status_code=409,
@@ -291,6 +308,11 @@ async def firmar_factura(factura_id: str, settings: FacturasApiSettings = Depend
         raise HTTPException(
             status_code=409, detail="Generar el XML primero (POST /facturas/{id}/generar-xml)"
         )
+    if factura.get("xml_firmado") and factura["estado"] not in ("borrador", "generado", "firmado", "error"):
+        # Enviada o en contingencia: su XML firmado es el que tiene (o
+        # tendrá) la DGII y el que se le entregó al comprador -- volver a
+        # firmar podría cambiar el código de seguridad de la RI.
+        return factura
     try:
         credencial = cargar_certificado_p12(settings.certificado_path, settings.certificado_password)
         xml_firmado = firmar_xml(factura["xml_generado"].encode("utf-8"), credencial)
@@ -322,93 +344,29 @@ async def obtener_representacion_impresa(
     )
 
 
-# Tipos de e-CF autoemitidos que también forman parte del Formato 606
-# (Compras de Bienes y Servicios) -- ver docs/dgii/FORMATO_606.md.
-_TIPOS_COMPRAS_606 = frozenset({41, 43, 47})
+# Compatibilidad: los helpers del 606 viven en app.envio (también los usa
+# el envío por lotes de la contingencia).
+_TIPOS_COMPRAS_606 = envio.TIPOS_COMPRAS_606
 
 
-def _rnc_cedula_para_606(tipo_ecf: int, datos: dict, settings: FacturasApiSettings) -> str | None:
-    """A quién le compramos, para el campo "RNC o Cédula" del 606 -- distinto
-    según el tipo (ver docs/dgii/FORMATO_606.md, "RNC/Cédula a reportar por
-    tipo"): tipo 41 (Compras) reporta al proveedor informal (campo
-    `Comprador` de la factura, ya que `Emisor` siempre somos nosotros); 43
-    (Gastos Menores) y 47 (Pagos al Exterior) no tienen una contraparte
-    identificada en su XSD y, por regla explícita del PDF oficial, reportan
-    el RNC del propio encabezado."""
-    if tipo_ecf == 41:
-        return (datos.get("Encabezado", {}).get("Comprador") or {}).get("RNCComprador")
-    return settings.emisor_rnc
-
-
-def _separar_bienes_servicios(datos: dict) -> tuple[Decimal, Decimal]:
-    """Suma DetallesItems.Item por IndicadorBienoServicio (1=Bien, 2=Servicio)
-    -- el Formato 606 exige la proporción Bienes/Servicios por separado y
-    ningún e-CF la trae ya calculada."""
-    servicios = Decimal("0")
-    bienes = Decimal("0")
-    items = (datos.get("DetallesItems") or {}).get("Item") or []
-    if isinstance(items, dict):
-        items = [items]
-    for item in items:
-        try:
-            monto = Decimal(str(item.get("MontoItem") or "0"))
-        except InvalidOperation:
-            continue
-        if str(item.get("IndicadorBienoServicio")) == "2":
-            servicios += monto
-        else:
-            bienes += monto
-    return servicios, bienes
-
-
-async def _registrar_compra_606_autoemitida(
-    pool, factura: dict, encf: str, settings: FacturasApiSettings
-) -> None:
-    """Best-effort: la factura ya se envió exitosamente a la DGII (no se
-    puede deshacer); un fallo aquí solo implica que ese renglón habrá que
-    agregarlo a mano en el Formato 606, nunca debe afectar la respuesta."""
-    try:
-        datos = factura["datos"]
-        fecha_emision = (datos.get("Encabezado", {}).get("Emisor") or {}).get("FechaEmision")
-        fecha_comprobante = fecha_dgii_a_aaaammdd(fecha_emision) if fecha_emision else None
-        if not fecha_comprobante:
-            logger.warning(
-                "Factura %s sin FechaEmision válida, no se registra en compras606", factura["id"]
-            )
-            return
-        rnc_cedula = _rnc_cedula_para_606(factura["tipo_ecf"], datos, settings)
-        if not rnc_cedula:
-            logger.warning(
-                "Factura %s sin RNC/Cédula de contraparte, no se registra en compras606",
-                factura["id"],
-            )
-            return
-        ncf_modificado = (datos.get("InformacionReferencia") or {}).get("NCFModificado")
-        try:
-            itbis_facturado = Decimal(str((datos.get("Encabezado", {}).get("Totales") or {}).get("TotalITBIS") or "0"))
-        except InvalidOperation:
-            itbis_facturado = Decimal("0")
-        servicios, bienes = _separar_bienes_servicios(datos)
-        await registrar_compra_606(
-            pool,
-            origen="auto_emitido",
-            referencia_tipo="factura",
-            referencia_id=str(factura["id"]),
-            rnc_cedula=rnc_cedula,
-            ncf=encf,
-            ncf_modificado=ncf_modificado,
-            fecha_comprobante=fecha_comprobante,
-            monto_servicios=servicios,
-            monto_bienes=bienes,
-            itbis_facturado=itbis_facturado,
-        )
-    except Exception:
-        logger.exception("No se pudo registrar la factura %s en compras606", factura.get("id"))
+def _respuesta_contingencia(factura: dict) -> EnviarResponse:
+    return EnviarResponse(
+        id=uuid.UUID(str(factura["id"])),
+        estado=factura["estado"],
+        track_id=None,
+        error=factura.get("error"),
+        contingencia=True,
+        mensaje=contingencia.MENSAJE_EMITIDA,
+        firmado_en=factura.get("firmado_en"),
+    )
 
 
 @app.post("/facturas/{factura_id}/enviar", response_model=EnviarResponse)
 async def enviar_factura(factura_id: str, settings: FacturasApiSettings = Depends(get_settings)):
-    """Envía el e-CF a la DGII delegando la firma real y el envío al módulo `recepcion`."""
+    """Firma el e-CF (o reutiliza su firma) y lo envía a la DGII vía el
+    módulo `recepcion`. Si no llega por falta de conectividad, la factura
+    queda emitida en contingencia (ver app.contingencia): 200 con
+    `estado = 'contingencia'`, no un error."""
     fid = _parse_id(factura_id)
     factura = await _obtener_o_404(fid)
     if not factura.get("xml_generado"):
@@ -435,67 +393,76 @@ async def enviar_factura(factura_id: str, settings: FacturasApiSettings = Depend
                 status_code=502, detail=f"No se pudo validar el inventario antes de facturar: {exc}"
             ) from exc
 
-    nombre_archivo = nombre_archivo_ecf(factura["rnc_emisor"], encf)
+    # El XML firmado que se envía es el de la representación impresa (y, en
+    # contingencia, el que se le entrega al comprador): se firma y guarda
+    # antes de enviar. Sin certificado aquí, `recepcion` firma (flujo
+    # anterior) y no hay contingencia posible.
+    firmado = True
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            respuesta = await client.post(
-                f"{settings.recepcion_service_url}/ecf",
-                data={"encf": encf},
-                files={"xml": (nombre_archivo, factura["xml_generado"].encode("utf-8"), "text/xml")},
-            )
-    except httpx.HTTPError as exc:
-        logger.error("No se pudo contactar al servicio de recepción: %s", exc)
-        actualizada = await repository.registrar_resultado_envio(
-            _pool(), fid, estado="error", error=f"No se pudo contactar recepcion: {exc}"
-        )
-        raise HTTPException(status_code=502, detail=actualizada["error"]) from exc
+        factura = await envio.asegurar_firma(_pool(), factura, settings)
+    except envio.FirmaNoDisponibleError as exc:
+        logger.warning("facturas_api no puede firmar (%s): recepcion firmará el e-CF", exc)
+        firmado = False
 
-    if respuesta.status_code >= 400:
-        detalle = respuesta.text
-        actualizada = await repository.registrar_resultado_envio(
-            _pool(), fid, estado="error", error=detalle
-        )
-        raise HTTPException(status_code=502, detail=detalle)
+    estado_contingencia = await contingencia.leer_estado_seguro(_pool())
+    if firmado and estado_contingencia and estado_contingencia.get("activa"):
+        disponible, detalle = await contingencia.sondear(settings)
+        if not disponible:
+            error = detalle or "La DGII no responde"
+            await contingencia.registrar_falla_segura(_pool(), error)
+            actualizada = await repository.marcar_contingencia(_pool(), fid, error=error)
+            return _respuesta_contingencia(actualizada)
 
-    cuerpo = respuesta.json()
-    track_id = cuerpo.get("trackId")
+    resultado = await envio.enviar_a_recepcion(settings, factura, firmado=firmado)
+
+    if resultado.sin_conexion:
+        logger.error("El e-CF %s no llegó a la DGII: %s", encf, resultado.error)
+        await contingencia.registrar_falla_segura(_pool(), resultado.error or "La DGII no responde")
+        if firmado:
+            try:
+                actualizada = await repository.marcar_contingencia(_pool(), fid, error=resultado.error)
+            except FacturaNoEncontradaError as exc:
+                # Ya tenía trackId (reenvío de una factura que llegó a la DGII).
+                raise HTTPException(status_code=502, detail=resultado.error) from exc
+            return _respuesta_contingencia(actualizada)
+        actualizada = await repository.registrar_resultado_envio(
+            _pool(), fid, estado="error", error=resultado.error
+        )
+        raise HTTPException(status_code=502, detail=actualizada["error"])
+
+    if resultado.status_code is not None and resultado.status_code >= 400:
+        await repository.registrar_resultado_envio(_pool(), fid, estado="error", error=resultado.error)
+        if resultado.status_code != 500 and estado_contingencia is not None:
+            # La DGII respondió (aunque fuera para rechazarlo): hay conexión.
+            await contingencia.registrar_exito_seguro(_pool())
+        raise HTTPException(status_code=502, detail=resultado.error)
+
+    track_id = resultado.track_id
     actualizada = await repository.registrar_resultado_envio(
         _pool(),
         fid,
         estado="enviado" if track_id else "error",
         track_id=track_id,
-        dgii_respuesta=cuerpo,
-        error=cuerpo.get("error") or cuerpo.get("mensaje"),
+        dgii_respuesta=resultado.cuerpo,
+        error=resultado.error,
     )
 
-    if track_id and items_inventario:
-        # El e-CF ya se envió exitosamente (documento fiscal irreversible) --
-        # un fallo acá NUNCA debe hacer fallar esta respuesta, solo se deja
-        # constancia para poder detectarlo y resolverlo manualmente (ver
-        # repository.registrar_sincronizacion_inventario).
-        try:
-            await inventario_client.registrar_salida_por_factura(
-                settings.inventario_api_url, str(fid), items_inventario, documento=encf
-            )
-            await repository.registrar_sincronizacion_inventario(
-                _pool(), fid, sincronizado=True, error=None
-            )
-        except InventarioApiError as exc:
-            logger.error(
-                "No se pudo registrar la salida de inventario de la factura %s: %s", fid, exc
-            )
-            await repository.registrar_sincronizacion_inventario(
-                _pool(), fid, sincronizado=False, error=str(exc)
-            )
-
-    if track_id and factura["tipo_ecf"] in _TIPOS_COMPRAS_606:
-        await _registrar_compra_606_autoemitida(_pool(), factura, encf, settings)
-
     if track_id:
+        await envio.aplicar_flujo_tras_envio(_pool(), {**factura, **actualizada}, settings)
+        # La DGII respondió: fin de la contingencia, y lo que quedó
+        # pendiente se envía ya en segundo plano (sin esperar la tarea de fondo).
+        if estado_contingencia is not None:
+            await contingencia.registrar_exito_seguro(_pool())
+            if estado_contingencia.get("pendientes"):
+                contingencia.lanzar_envio_pendientes(_pool(), settings, sonda_hecha=True)
         actualizada = await _consultar_resultado_tras_envio(actualizada, settings)
 
     return EnviarResponse(
-        id=fid, estado=actualizada["estado"], track_id=track_id, error=actualizada.get("error")
+        id=fid,
+        estado=actualizada["estado"],
+        track_id=track_id,
+        error=actualizada.get("error"),
+        firmado_en=actualizada.get("firmado_en"),
     )
 
 
@@ -529,6 +496,12 @@ async def actualizar_estado_dgii(factura_id: str, settings: FacturasApiSettings 
     devuelve la factura tal cual, sin consultar."""
     fid = _parse_id(factura_id)
     factura = await _obtener_o_404(fid)
+    if factura["estado"] == "contingencia":
+        raise HTTPException(
+            status_code=409,
+            detail="La factura se emitió en contingencia y todavía no se ha enviado a la DGII: se enviará "
+            "automáticamente al restablecerse la conexión (Centro de sincronización → Reintentar conexión ahora).",
+        )
     if not factura.get("track_id"):
         raise HTTPException(
             status_code=409,
@@ -554,3 +527,57 @@ async def actualizar_estado_dgii(factura_id: str, settings: FacturasApiSettings 
             status_code=502,
             detail=f"No se pudo consultar el estado del comprobante en la DGII; intente de nuevo en unos minutos. ({exc})",
         ) from exc
+
+
+# --- Modo contingencia ---------------------------------------------------------
+
+def _estado_contingencia(estado: dict, lotes: list[dict], settings: FacturasApiSettings) -> dict:
+    return {
+        **estado,
+        "vence_en": contingencia.vencimiento(estado, settings),
+        "horas_limite": settings.contingencia_horas_limite,
+        "lote_tamano": settings.contingencia_lote_tamano,
+        "envio_en_curso": contingencia.envio_en_curso(),
+        "lotes": lotes,
+    }
+
+
+@app.get("/contingencia", response_model=EstadoContingencia)
+async def obtener_contingencia(
+    lotes: int = Query(10, ge=0, le=100), settings: FacturasApiSettings = Depends(get_settings)
+):
+    """Estado del modo contingencia (facturacion.contingencia), lo pendiente
+    de envío y los últimos lotes."""
+    estado = await contingencia_repository.leer_estado(_pool())
+    lista = await contingencia_repository.listar_lotes(_pool(), limite=lotes) if lotes else []
+    return _estado_contingencia(estado, lista, settings)
+
+
+@app.get("/contingencia/lotes", response_model=list[LoteContingencia])
+async def listar_lotes_contingencia(limit: int = Query(20, ge=1, le=200)):
+    return await contingencia_repository.listar_lotes(_pool(), limite=limit)
+
+
+@app.post("/contingencia/reintentar", response_model=ReintentoContingencia)
+async def reintentar_contingencia(settings: FacturasApiSettings = Depends(get_settings)):
+    """"Reintentar conexión ahora": sonda corta y, si la DGII responde y hay
+    pendientes, lanza el envío por lotes en segundo plano (no espera a que
+    termine: el progreso se ve en GET /contingencia)."""
+    disponible, detalle = await contingencia.sondear(settings)
+    lanzado = False
+    if disponible:
+        estado = await contingencia_repository.leer_estado(_pool())
+        if estado["pendientes"]:
+            lanzado = contingencia.lanzar_envio_pendientes(_pool(), settings, sonda_hecha=True) or contingencia.envio_en_curso()
+        else:
+            await contingencia_repository.registrar_exito(_pool())
+    else:
+        await contingencia_repository.registrar_falla(_pool(), detalle or "La DGII no responde")
+    estado = await contingencia_repository.leer_estado(_pool())
+    lista = await contingencia_repository.listar_lotes(_pool(), limite=10)
+    return {
+        "disponible": disponible,
+        "detalle": detalle,
+        "envio_iniciado": lanzado,
+        "estado": _estado_contingencia(estado, lista, settings),
+    }

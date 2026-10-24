@@ -45,6 +45,7 @@ const ESTADO_DGII: Record<string, string> = {
   enviado: "Recibido, en validación",
   rechazado: "Rechazado",
   error: "Error de envío",
+  contingencia: "Emitido en contingencia, pendiente de envío",
 };
 
 const n2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
@@ -432,8 +433,14 @@ export function PosPage() {
       if (!actual.enviada) {
         setProcesando("Enviando a la DGII…");
         const envio = await api.enviar(actual.facturaId);
-        if (!envio.track_id) throw new Error(envio.error || "La DGII no recibió el comprobante. Puede reintentar el envío.");
-        actual = { ...actual, enviada: true, ticket: { ...actual.ticket, estadoDgii: ESTADO_DGII[envio.estado] ?? envio.estado } };
+        // Sin conexión con la DGII la venta sigue: el e-CF quedó firmado en
+        // contingencia, el ticket lleva la leyenda y se envía solo al reconectar.
+        if (!envio.track_id && !envio.contingencia) throw new Error(envio.error || "La DGII no recibió el comprobante. Puede reintentar el envío.");
+        actual = {
+          ...actual,
+          enviada: true,
+          ticket: { ...actual.ticket, estadoDgii: ESTADO_DGII[envio.estado] ?? envio.estado, contingencia: Boolean(envio.contingencia) },
+        };
         setPendiente(actual);
       }
       setProcesando("Registrando en caja…");
@@ -969,6 +976,14 @@ export function PosPage() {
             <div className="al al-s">
               <span>
                 <b>Cambio: RD$ {formatoMonto(ticket.datos.cambio)}</b>
+              </span>
+            </div>
+          )}
+          {ticket.datos.contingencia && (
+            <div className="al al-o" role="status">
+              <span>
+                <b>Emitida en contingencia.</b> La DGII no respondió: entregue el ticket (lleva la leyenda de contingencia); el e-CF se enviará
+                automáticamente al restablecerse la conexión.
               </span>
             </div>
           )}

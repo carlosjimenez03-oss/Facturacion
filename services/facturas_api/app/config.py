@@ -29,6 +29,19 @@ class FacturasApiSettings(EcfBaseSettings):
     # "Actualizar estado DGII" del frontend).
     sincronizar_estado_cada_segundos: int = 120
 
+    # Modo contingencia (ver app.contingencia y docs/dgii/CONTINGENCIA.md).
+    # Timeout del envío a `recepcion` (que a su vez espera a la DGII) y de la
+    # sonda corta con que se comprueba si la DGII volvió antes de enviar.
+    timeout_envio_segundos: float = 60.0
+    timeout_sonda_segundos: float = 5.0
+    # Facturas por lote al enviar lo pendiente de una contingencia (las más
+    # antiguas primero).
+    contingencia_lote_tamano: int = 20
+    # Plazo para enviar a la DGII los e-CF emitidos en contingencia por falta
+    # de conectividad (Decreto 587-24, art. 40; Instructivo de Contingencia de
+    # la DGII): 72 horas desde que se restablece la conexión.
+    contingencia_horas_limite: int = 72
+
 
 @lru_cache
 def get_settings() -> FacturasApiSettings:

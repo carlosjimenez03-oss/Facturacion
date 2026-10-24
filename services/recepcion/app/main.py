@@ -8,6 +8,14 @@ su posterior consulta de estado.
 Cada envío se audita (best-effort) en facturacion.envios_dgii vía
 libs.ecf_common.db — ver el docstring de ese módulo.
 
+Modo contingencia (ver docs/dgii/CONTINGENCIA.md): `facturas_api` firma el
+e-CF él mismo -- el XML firmado es el que se entrega al comprador y el que
+lleva el código de seguridad de la representación impresa -- y lo manda con
+`firmado=true`: aquí se envía tal cual, byte a byte, sin volver a firmarlo.
+Si la DGII no responde (error de conexión, timeout o HTTP 5xx) se responde
+503, para que quien llama lo distinga de un rechazo (502) y lo deje en
+contingencia. `GET /disponibilidad` es la sonda corta de conectividad.
+
 Nota: este servicio NO recibe Facturas de Consumo Electrónicas (tipo 32) con
 monto inferior a RD$250,000.00 — esas se envían por el módulo
 `services/recepcion_rfce` (Recepción de resumen factura de consumo).
@@ -15,13 +23,16 @@ monto inferior a RD$250,000.00 — esas se envían por el módulo
 import logging
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from lxml import etree
 
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
 from libs.ecf_common.auth.token_provider import TokenProvider
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
-from libs.ecf_common.http_client import DGIIServiceError
+from libs.ecf_common.environments import DGIIService, dgii_service_base_url
+from libs.ecf_common.http_client import DGIIAsyncClient, DGIIServiceError
 from libs.ecf_common.xml_tools import nombre_archivo_ecf
 
 from .config import RecepcionSettings, get_settings
@@ -66,17 +77,53 @@ def health(settings: RecepcionSettings = Depends(get_settings)) -> dict:
     }
 
 
+# Timeout de la sonda de GET /disponibilidad: corto a propósito (la usa
+# facturas_api antes de cada envío mientras dura una contingencia).
+_TIMEOUT_SONDA_SEGUNDOS = 4.0
+
+
+def _tiene_firma(xml_bytes: bytes) -> bool:
+    try:
+        raiz = etree.fromstring(xml_bytes)
+    except etree.XMLSyntaxError:
+        return False
+    return raiz.find("{http://www.w3.org/2000/09/xmldsig#}Signature") is not None
+
+
+@app.get("/disponibilidad")
+async def disponibilidad(settings: RecepcionSettings = Depends(get_settings)) -> dict:
+    """Sonda corta: ¿responde el servicio de Recepción de la DGII? Cualquier
+    respuesta HTTP por debajo de 500 (incluido un 404/405 al GET) cuenta como
+    disponible; un error de conexión, un timeout o un 5xx, como no."""
+    url = f"{dgii_service_base_url(DGIIService.RECEPCION_ECF, settings.dgii_environment)}/api/facturaselectronicas"
+    try:
+        async with DGIIAsyncClient(timeout=_TIMEOUT_SONDA_SEGUNDOS) as client:
+            respuesta = await client.get(url)
+    except httpx.HTTPError as exc:
+        return {"disponible": False, "detalle": f"La DGII no responde: {exc.__class__.__name__} {exc}".strip()}
+    if respuesta.status_code >= 500:
+        return {"disponible": False, "detalle": f"La DGII respondió HTTP {respuesta.status_code}"}
+    return {"disponible": True, "detalle": None}
+
+
 @app.post("/ecf", response_model=RecepcionResponse)
 async def enviar_ecf(
     encf: str = Form(..., description="e-NCF del comprobante, p. ej. E310000000001"),
-    xml: UploadFile = File(..., description="XML del e-CF tentativo, sin firmar"),
+    xml: UploadFile = File(..., description="XML del e-CF tentativo, sin firmar (o ya firmado, con firmado=true)"),
+    firmado: bool = Form(False, description="El XML ya viene firmado por el emisor: se envía tal cual"),
     settings: RecepcionSettings = Depends(get_settings),
 ) -> RecepcionResponse:
-    """Firma el e-CF recibido y lo envía a la DGII; retorna el trackId."""
+    """Firma el e-CF recibido (salvo `firmado=true`) y lo envía a la DGII;
+    retorna el trackId."""
     try:
-        credencial = cargar_certificado_p12(settings.certificado_path, settings.certificado_password)
         xml_bytes = await xml.read()
-        xml_firmado = firmar_xml(xml_bytes, credencial)
+        if firmado:
+            if not _tiene_firma(xml_bytes):
+                raise HTTPException(status_code=422, detail="El XML indicado como firmado no trae ds:Signature")
+            xml_firmado = xml_bytes
+        else:
+            credencial = cargar_certificado_p12(settings.certificado_path, settings.certificado_password)
+            xml_firmado = firmar_xml(xml_bytes, credencial)
 
         token = await _token_provider.obtener_token()
         nombre_archivo = nombre_archivo_ecf(settings.emisor_rnc, encf)
@@ -95,7 +142,13 @@ async def enviar_ecf(
         )
         return respuesta
     except DGIIServiceError as exc:
-        logger.error("La DGII rechazó el envío del e-CF %s: %s", encf, exc)
+        indisponible = exc.es_indisponibilidad
+        logger.error(
+            "%s el envío del e-CF %s: %s",
+            "La DGII no está disponible para" if indisponible else "La DGII rechazó",
+            encf,
+            exc,
+        )
         await registrar_envio(
             app.state.db_pool,
             modulo="recepcion",
@@ -104,7 +157,21 @@ async def enviar_ecf(
             encf=encf,
             error=str(exc),
         )
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        raise HTTPException(status_code=503 if indisponible else 502, detail=str(exc)) from exc
+    except httpx.HTTPError as exc:
+        # Sin respuesta de la DGII (conexión rechazada, DNS, timeout) al
+        # pedir el token o al enviar: contingencia, no un rechazo.
+        detalle = f"La DGII no responde: {exc.__class__.__name__} {exc}".strip()
+        logger.error("No se pudo enviar el e-CF %s: %s", encf, detalle)
+        await registrar_envio(
+            app.state.db_pool,
+            modulo="recepcion",
+            ambiente=settings.app_env,
+            rnc_emisor=settings.emisor_rnc,
+            encf=encf,
+            error=detalle,
+        )
+        raise HTTPException(status_code=503, detail=detalle) from exc
     except (FileNotFoundError, ValueError) as exc:
         logger.error("Error de configuración/certificado: %s", exc)
         raise HTTPException(status_code=500, detail=str(exc)) from exc

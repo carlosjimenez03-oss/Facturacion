@@ -123,6 +123,21 @@ async def _cantidad_pendientes_dgii(conn: asyncpg.Connection, desde: date, hasta
     ) or 0
 
 
+async def _facturas_papel_venta(conn: asyncpg.Connection, desde: date, hasta: date) -> list[dict[str, Any]]:
+    """Facturas en papel (serie B, operacion.facturas_papel) de venta con
+    fecha en [desde, hasta), con la forma de un e-CF (formatos.factura_papel_como_ecf)."""
+    filas = await conn.fetch(
+        """
+        SELECT * FROM operacion.facturas_papel
+        WHERE fecha >= $1 AND fecha < $2
+        ORDER BY fecha, ncf
+        """,
+        desde,
+        hasta,
+    )
+    return [f for f in (formatos.factura_papel_como_ecf(dict(fila)) for fila in filas) if f is not None]
+
+
 def _advertencia_pendientes(cantidad: int) -> list[str]:
     if not cantidad:
         return []
@@ -142,10 +157,24 @@ async def formato_607(
     async with pool.acquire() as conn:
         facturas = await _facturas_venta(conn, desde, hasta)
         pendientes = await _cantidad_pendientes_dgii(conn, desde, hasta)
-    filas, totales, advertencias = formatos.armar_607(facturas)
+        papel = await _facturas_papel_venta(conn, desde, hasta)
     encabezado: list[str] = []
     if facturas:
         encabezado.append(formatos.advertencia_ecf_607(emisor_100_electronico))
+    # Las facturas en papel (serie B, emitidas en una contingencia sin
+    # sistema) van una a una en el 607 -- son NCF, no e-CF -- salvo para el
+    # emisor 100 % electrónico (EMISOR_100_ELECTRONICO), que no presenta el
+    # 607: las regulariza con su e-CF de reemplazo (código de modificación 4)
+    # enviado a la DGII.
+    if papel and emisor_100_electronico:
+        encabezado.append(
+            f"{len(papel)} factura(s) en papel (serie B) del período no se incluyen: como emisor 100 % electrónico "
+            "las regulariza enviando a la DGII su e-CF de reemplazo (código de modificación 4) dentro de los 30 "
+            "días siguientes a la salida de la contingencia."
+        )
+    elif papel:
+        facturas = facturas + papel
+    filas, totales, advertencias = formatos.armar_607(facturas)
     if not rnc_emisor:
         encabezado.append("El RNC del emisor no está configurado (EMISOR_RNC): no se puede generar el archivo.")
     return {

@@ -64,11 +64,18 @@ def test_016_soluciones_tiene_el_mismo_ddl_que_migraciones():
     assert migraciones.DDL_SOLUCIONES.strip() in archivo
 
 
+def test_017_contingencia_tiene_el_mismo_ddl_que_migraciones():
+    archivo = (REPO_ROOT / "db" / "init" / "017_contingencia.sql").read_text(encoding="utf-8")
+    assert migraciones.DDL_CONTINGENCIA.strip() in archivo
+    assert "'factura_papel'" in migraciones.DDL_CONTINGENCIA
+
+
 def test_ddl_es_idempotente():
     for ddl in (
         migraciones.DDL_VENTAS, migraciones.DDL_IMPUESTOS, migraciones.DDL_FUNCIONES, migraciones.DDL_COMPRAS,
         migraciones.DDL_CONTABILIDAD, migraciones.DDL_BANCOS, migraciones.DDL_CONFIGURACION,
         migraciones.DDL_OPERACION, migraciones.DDL_NOMINA, migraciones.DDL_SOLUCIONES,
+        migraciones.DDL_CONTINGENCIA,
     ):
         for linea in ddl.splitlines():
             if linea.startswith("CREATE "):

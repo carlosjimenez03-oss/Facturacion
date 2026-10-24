@@ -12,7 +12,8 @@ lugares:
   (la DGII suele validar en ~200 ms, pero puede responder "En Proceso").
 - La tarea de fondo `bucle_sincronizacion`, iniciada en el lifespan, que
   cada `sincronizar_estado_cada_segundos` revisa las facturas que siguen en
-  'enviado'.
+  'enviado'. Antes, en cada vuelta, sondea la DGII y envía por lotes lo que
+  quedó en 'contingencia' (ver `app.contingencia`).
 
 Los tres pueden coincidir sobre la misma factura: la actualización en
 Postgres (`repository.registrar_resultado_consulta`) solo aplica si la fila
@@ -214,20 +215,41 @@ async def sincronizar_inventario_pendiente(pool, settings: FacturasApiSettings) 
     return sincronizadas
 
 
+async def una_vuelta(pool, settings: FacturasApiSettings) -> None:
+    """Una iteración de la tarea de fondo: contingencia (sonda + envío por
+    lotes), resultados de la DGII, lotes y salidas de inventario. Cada parte
+    falla por separado sin impedir las demás."""
+    # Import diferido: app.contingencia usa este módulo para consultar los
+    # resultados de cada lote.
+    from . import contingencia, contingencia_repository
+
+    try:
+        resultado = await contingencia.enviar_pendientes(pool, settings)
+        if resultado.lotes:
+            logger.info("Contingencia: lote(s) %s procesado(s)", ", ".join(resultado.lotes))
+    except Exception:
+        logger.exception("Falló el envío de lo pendiente de contingencia")
+    cambiadas = await sincronizar_pendientes(pool, settings)
+    if cambiadas:
+        logger.info("Sincronización de estados DGII: %s factura(s) actualizada(s)", cambiadas)
+    try:
+        await contingencia_repository.recalcular_lotes(pool)
+    except Exception:
+        logger.exception("No se pudieron recalcular los lotes de contingencia")
+    inventario = await sincronizar_inventario_pendiente(pool, settings)
+    if inventario:
+        logger.info("Salidas de inventario reintentadas: %s factura(s) sincronizada(s)", inventario)
+
+
 async def bucle_sincronizacion(pool, settings: FacturasApiSettings) -> None:
-    """Tarea de fondo: cada `sincronizar_estado_cada_segundos` consulta las
-    facturas pendientes. Cualquier excepción se registra y el bucle sigue;
-    solo termina al cancelarse (apagado del servicio, ver `app.main.lifespan`)."""
+    """Tarea de fondo: cada `sincronizar_estado_cada_segundos` corre
+    `una_vuelta`. Cualquier excepción se registra y el bucle sigue; solo
+    termina al cancelarse (apagado del servicio, ver `app.main.lifespan`)."""
     intervalo = settings.sincronizar_estado_cada_segundos
     logger.info("Sincronización de estados DGII cada %ss", intervalo)
     while True:
         await asyncio.sleep(intervalo)
         try:
-            cambiadas = await sincronizar_pendientes(pool, settings)
-            if cambiadas:
-                logger.info("Sincronización de estados DGII: %s factura(s) actualizada(s)", cambiadas)
-            inventario = await sincronizar_inventario_pendiente(pool, settings)
-            if inventario:
-                logger.info("Salidas de inventario reintentadas: %s factura(s) sincronizada(s)", inventario)
+            await una_vuelta(pool, settings)
         except Exception:
             logger.exception("Falló la sincronización de estados DGII; se reintenta en %ss", intervalo)

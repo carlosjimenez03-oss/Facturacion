@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api, ApiError } from "../lib/api";
+import { MENSAJE_CONTINGENCIA } from "../lib/estados";
 import type { FacturaDetalle } from "../lib/types";
 
 /** Generar XML / vista previa firmada / enviar a la DGII paso a paso --
@@ -68,7 +69,9 @@ export function FacturaAcciones({
       setMensaje(
         resultado.track_id
           ? { texto: `Enviado. Track ID: ${resultado.track_id}`, error: false }
-          : { texto: `Error al enviar: ${resultado.error}`, error: true },
+          : resultado.contingencia
+            ? { texto: resultado.mensaje ?? MENSAJE_CONTINGENCIA, error: false }
+            : { texto: `Error al enviar: ${resultado.error}`, error: true },
       );
       onRecargar();
     } catch (err) {
@@ -109,7 +112,13 @@ export function FacturaAcciones({
           className="btn btn-o btn-sm"
           onClick={generarXml}
           disabled={procesando || yaEnviada}
-          title={yaEnviada ? "La factura ya fue enviada a la DGII: su XML no se puede regenerar" : undefined}
+          title={
+            factura.estado === "contingencia"
+              ? "Emitida en contingencia: su XML firmado ya se entregó y se enviará tal cual"
+              : yaEnviada
+                ? "La factura ya fue enviada a la DGII: su XML no se puede regenerar"
+                : undefined
+          }
         >
           Generar XML
         </button>
@@ -121,8 +130,9 @@ export function FacturaAcciones({
           className="btn btn-p btn-sm"
           onClick={() => setConfirmarEnvio(true)}
           disabled={procesando || !factura.xml_generado || factura.estado === "enviado" || factura.estado === "aceptado"}
+          title={factura.estado === "contingencia" ? "Reintenta ya el envío de esta factura emitida en contingencia" : undefined}
         >
-          Enviar a la DGII
+          {factura.estado === "contingencia" ? "Reintentar envío" : "Enviar a la DGII"}
         </button>
         {factura.xml_firmado && (
           <a className="btn btn-g btn-sm" href={api.representacionImpresaUrl(factura.id)} target="_blank" rel="noopener noreferrer">
@@ -158,7 +168,9 @@ export function FacturaAcciones({
       )}
       {mostrarXml && factura.xml_firmado && (
         <details>
-          <summary className="link" style={{ cursor: "pointer" }}>XML firmado (vista previa)</summary>
+          <summary className="link" style={{ cursor: "pointer" }}>
+            {factura.firmado_en ? "XML firmado (el que se envía a la DGII)" : "XML firmado (vista previa)"}
+          </summary>
           <pre className="mono" style={{ maxHeight: 320, overflow: "auto", background: "#F8FAFC", padding: 12, borderRadius: 8 }}>
             {factura.xml_firmado}
           </pre>

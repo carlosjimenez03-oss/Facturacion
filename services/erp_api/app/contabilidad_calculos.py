@@ -175,7 +175,7 @@ CONCEPTOS: dict[str, tuple[str, str, str]] = {
 
 ORIGENES_AUTOMATICOS = (
     "venta", "nota_credito", "nota_debito", "cobro", "compra", "pago", "movimiento", "transferencia",
-    "proporcionalidad",
+    "proporcionalidad", "factura_papel",
 )
 ORIGENES = ("manual", *ORIGENES_AUTOMATICOS, "depreciacion")
 

@@ -989,7 +989,7 @@ Naturaleza = Literal["deudora", "acreedora"]
 EstadoAsiento = Literal["borrador", "contabilizado", "anulado"]
 OrigenAsiento = Literal[
     "manual", "venta", "nota_credito", "nota_debito", "cobro", "compra", "pago", "movimiento", "transferencia",
-    "proporcionalidad", "depreciacion",
+    "proporcionalidad", "depreciacion", "factura_papel",
 ]
 
 

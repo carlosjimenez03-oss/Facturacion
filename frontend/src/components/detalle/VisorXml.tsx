@@ -42,7 +42,9 @@ export function VisorXml({ factura }: { factura: FacturaDetalle }) {
       </div>
       {actual.id === "firmado" && (
         <p className="hint" style={{ margin: 0, padding: "10px 20px 0" }}>
-          Vista previa firmada con el certificado del emisor. El XML que recibe la DGII se firma de nuevo en el momento del envío.
+          {factura.estado === "borrador" || factura.estado === "generado" || factura.estado === "firmado"
+            ? "Firmado con el certificado del emisor. Es el XML que se envía a la DGII (y el del código de seguridad de la representación impresa), salvo que regenere el XML."
+            : "Firmado con el certificado del emisor: es, byte a byte, el XML que recibe la DGII y el del código de seguridad de la representación impresa."}
         </p>
       )}
       <pre className="xml-pre mono" tabIndex={0} aria-label={actual.label}>

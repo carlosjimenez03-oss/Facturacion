@@ -99,7 +99,8 @@ async def listar_facturas(
     valores.extend([limite, offset])
     query = f"""
         SELECT id, tipo_ecf, ambiente, rnc_emisor, encf, estado,
-               track_id, dgii_estado, dgii_codigo, error, creado_en, actualizado_en
+               track_id, dgii_estado, dgii_codigo, error, creado_en, actualizado_en,
+               firmado_en, emitida_en_contingencia, contingencia_en, lote_id
         FROM facturacion.facturas
         {where}
         ORDER BY creado_en DESC
@@ -166,7 +167,11 @@ async def guardar_xml_generado(
         fila = await conn.fetchrow(
             """
             UPDATE facturacion.facturas
-            SET xml_generado = $2, estado = 'generado', actualizado_en = now()
+            SET xml_generado = $2, estado = 'generado',
+                -- La firma anterior es de otro XML (otra FechaHoraFirma):
+                -- se vuelve a firmar al enviar (ver app.envio.asegurar_firma).
+                xml_firmado = NULL, firmado_en = NULL,
+                actualizado_en = now()
             WHERE id = $1
             RETURNING *
             """,
@@ -185,7 +190,7 @@ async def guardar_xml_firmado(
         fila = await conn.fetchrow(
             """
             UPDATE facturacion.facturas
-            SET xml_firmado = $2,
+            SET xml_firmado = $2, firmado_en = now(),
                 -- Firmar una factura ya enviada (p. ej. para generar su PDF)
                 -- no debe pisar el estado que informó la DGII.
                 estado = CASE WHEN estado IN ('borrador', 'generado', 'firmado') THEN 'firmado' ELSE estado END,
@@ -195,6 +200,54 @@ async def guardar_xml_firmado(
             """,
             factura_id,
             xml_firmado,
+        )
+    if fila is None:
+        raise FacturaNoEncontradaError(str(factura_id))
+    return _fila_a_dict(fila)
+
+
+async def guardar_firma_envio(
+    pool: asyncpg.Pool, factura_id: uuid.UUID, xml_firmado: str
+) -> dict[str, Any]:
+    """Guarda el XML firmado que se va a enviar a la DGII (ver
+    app.envio.asegurar_firma) sin cambiar el estado: si el envío no llega,
+    es el que queda en contingencia y el que lleva la representación impresa."""
+    async with pool.acquire() as conn:
+        fila = await conn.fetchrow(
+            """
+            UPDATE facturacion.facturas
+            SET xml_firmado = $2, firmado_en = now(), actualizado_en = now()
+            WHERE id = $1
+            RETURNING *
+            """,
+            factura_id,
+            xml_firmado,
+        )
+    if fila is None:
+        raise FacturaNoEncontradaError(str(factura_id))
+    return _fila_a_dict(fila)
+
+
+async def marcar_contingencia(
+    pool: asyncpg.Pool, factura_id: uuid.UUID, *, error: str
+) -> dict[str, Any]:
+    """El envío no llegó a la DGII por conectividad: la factura queda
+    'contingencia' (firmada, entregable al comprador con la leyenda,
+    pendiente de envío) y la tarea de fondo la enviará en un lote. Solo
+    desde estados sin envío a la DGII (nunca pisa un trackId)."""
+    async with pool.acquire() as conn:
+        fila = await conn.fetchrow(
+            """
+            UPDATE facturacion.facturas
+            SET estado = 'contingencia', emitida_en_contingencia = true,
+                contingencia_en = COALESCE(contingencia_en, now()), error = $2,
+                intentos_envio = intentos_envio + 1, ultimo_intento_envio = now(), actualizado_en = now()
+            WHERE id = $1 AND track_id IS NULL AND xml_firmado IS NOT NULL
+              AND estado IN ('generado', 'firmado', 'error', 'contingencia')
+            RETURNING *
+            """,
+            factura_id,
+            error,
         )
     if fila is None:
         raise FacturaNoEncontradaError(str(factura_id))
@@ -217,7 +270,8 @@ async def registrar_resultado_envio(
             """
             UPDATE facturacion.facturas
             SET estado = $2, track_id = $3, dgii_estado = $4, dgii_codigo = $5,
-                dgii_respuesta = $6, error = $7, actualizado_en = now()
+                dgii_respuesta = $6, error = $7, intentos_envio = intentos_envio + 1,
+                ultimo_intento_envio = now(), actualizado_en = now()
             WHERE id = $1
             RETURNING *
             """,

@@ -42,7 +42,9 @@ export type EstadoFactura =
   | "enviado"
   | "aceptado"
   | "rechazado"
-  | "error";
+  | "error"
+  /** Firmada y entregable al comprador, pendiente de envío: la DGII no respondió (modo contingencia). */
+  | "contingencia";
 
 export interface ItemInventarioLink {
   numero_linea: string;
@@ -69,6 +71,13 @@ export interface FacturaResumen {
   error: string | null;
   inventario_sincronizado: boolean;
   inventario_error: string | null;
+  /** Cuándo se firmó el XML que se envía (el de la representación impresa). */
+  firmado_en?: string | null;
+  /** Emitida en modo contingencia (se conserva tras enviarse: la RI lleva la leyenda). */
+  emitida_en_contingencia?: boolean;
+  contingencia_en?: string | null;
+  /** Lote de envío de la contingencia (A-0001…). */
+  lote_id?: string | null;
   creado_en: string;
   actualizado_en: string;
 }
@@ -445,6 +454,50 @@ export interface EnviarResponse {
   estado: EstadoFactura;
   track_id: string | null;
   error: string | null;
+  /** true: la DGII no respondió; quedó emitida en contingencia y se enviará sola (`mensaje`). */
+  contingencia?: boolean;
+  mensaje?: string | null;
+  firmado_en?: string | null;
+}
+
+/** Lote de envío de lo pendiente de una contingencia (facturas-api, GET /contingencia). */
+export interface LoteContingenciaApi {
+  id: string;
+  documentos: number;
+  enviados: number;
+  aceptados: number;
+  rechazados: number;
+  pendientes: number;
+  estado: "en_cola" | "enviando" | "interrumpido" | "completado";
+  ultimo_error: string | null;
+  creado_en: string;
+  iniciado_en: string | null;
+  completado_en: string | null;
+}
+
+/** Estado del modo contingencia de facturas-api (GET /contingencia). */
+export interface EstadoContingenciaApi {
+  activa: boolean;
+  desde: string | null;
+  errores_consecutivos: number;
+  ultimo_intento: string | null;
+  ultimo_error: string | null;
+  ultimo_exito: string | null;
+  pendientes: number;
+  monto_pendiente: string;
+  mas_antigua: string | null;
+  vence_en: string | null;
+  horas_limite: number;
+  lote_tamano: number;
+  envio_en_curso: boolean;
+  lotes: LoteContingenciaApi[];
+}
+
+export interface ReintentoContingencia {
+  disponible: boolean;
+  detalle: string | null;
+  envio_iniciado: boolean;
+  estado: EstadoContingenciaApi;
 }
 
 // --- Formato 606 (Compras de Bienes y Servicios) ------------------------
