@@ -1,7 +1,7 @@
 """El DDL que erp_api aplica al arrancar (Supabase) y db/init/007_ventas.sql,
 008_impuestos.sql, 009_fecha_dgii_segura.sql, 010_compras.sql,
 012_bancos_contabilidad.sql, 013_configuracion.sql, 014_operacion.sql y
-015_nomina.sql ... 018_pagos_en_linea.sql (Postgres local) deben ser el mismo."""
+015_nomina.sql ... 019_pagos_en_linea.sql (Postgres local) deben ser el mismo."""
 from pathlib import Path
 
 import asyncpg
@@ -70,8 +70,8 @@ def test_017_contingencia_tiene_el_mismo_ddl_que_migraciones():
     assert "'factura_papel'" in migraciones.DDL_CONTINGENCIA
 
 
-def test_018_pagos_en_linea_tiene_el_mismo_ddl_que_migraciones():
-    archivo = (REPO_ROOT / "db" / "init" / "018_pagos_en_linea.sql").read_text(encoding="utf-8")
+def test_019_pagos_en_linea_tiene_el_mismo_ddl_que_migraciones():
+    archivo = (REPO_ROOT / "db" / "init" / "019_pagos_en_linea.sql").read_text(encoding="utf-8")
     assert migraciones.DDL_PAGOS.strip() in archivo
     # Un cobro por intento aprobado (idempotencia de los retornos del banco).
     assert "pagos_en_linea_cobro_idx" in migraciones.DDL_PAGOS

@@ -1001,7 +1001,7 @@ reglas puras en `app/soluciones_calculos.py`; esquema `soluciones`
 
 Rutas en `app/pagos.py` (repositorio `app/pagos_repository.py`, pasarelas y
 firma en `app/pagos_proveedores.py`); tablas `soluciones.pagos_en_linea` y
-`soluciones.pagos_en_linea_eventos` (`DDL_PAGOS` = `db/init/018_pagos_en_linea.sql`).
+`soluciones.pagos_en_linea_eventos` (`DDL_PAGOS` = `db/init/019_pagos_en_linea.sql`).
 Contrato: `frontend/src/lib/pagosApi.ts`. Detalle, campos de Azul y fuentes:
 [`PAGOS.md`](PAGOS.md).
 

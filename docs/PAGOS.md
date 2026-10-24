@@ -16,7 +16,7 @@ funciones puras), `pagos_repository.py` (intentos, retornos, cobro),
 `pagos.py` (rutas), `pagos_schemas.py`; contrato del frontend
 `frontend/src/lib/pagosApi.ts`. Tablas `soluciones.pagos_en_linea` y
 `soluciones.pagos_en_linea_eventos` (`migraciones.DDL_PAGOS` =
-`db/init/018_pagos_en_linea.sql`).
+`db/init/019_pagos_en_linea.sql`).
 
 ## Flujo
 

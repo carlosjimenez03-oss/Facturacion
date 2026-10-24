@@ -11,7 +11,7 @@ es idempotente (`IF NOT EXISTS` / `CREATE OR REPLACE`), así que correrlo en
 cada arranque es seguro. `db/init/007_ventas.sql`, `008_impuestos.sql`,
 `009_fecha_dgii_segura.sql`, `010_compras.sql`, `012_bancos_contabilidad.sql`,
 `013_configuracion.sql`, `014_operacion.sql`, `015_nomina.sql`,
-`016_soluciones.sql`, `017_contingencia.sql` y `018_pagos_en_linea.sql` contienen
+`016_soluciones.sql`, `017_contingencia.sql` y `019_pagos_en_linea.sql` contienen
 exactamente el mismo DDL para el Postgres local de desarrollo (lo verifica
 tests/test_migraciones.py).
 
@@ -1078,7 +1078,7 @@ $$;
 # Pagos con tarjeta en línea (fase 7): intentos de pago del portal de
 # clientes y su bitácora (ver pagos_repository.py y docs/PAGOS.md). Requiere
 # `soluciones.portal_enlaces` (DDL_SOLUCIONES) y `ventas.cobros`. Mismo DDL en
-# db/init/018_pagos_en_linea.sql.
+# db/init/019_pagos_en_linea.sql.
 DDL_PAGOS = """
 -- Pagos con tarjeta en línea desde el portal de clientes (fase 7, ver
 -- docs/PAGOS.md). Cada intento es una fila: el portal la crea al pulsar
