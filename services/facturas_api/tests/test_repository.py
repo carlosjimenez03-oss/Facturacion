@@ -1,3 +1,4 @@
+import json
 import uuid
 
 import pytest
@@ -245,3 +246,27 @@ async def test_listar_pendientes_de_resultado():
     assert "estado = 'enviado'" in query
     assert "ORDER BY actualizado_en ASC" in query
     assert params == (10, 7)
+
+
+async def test_crear_factura_serializa_almacen_y_lote_de_items_inventario():
+    almacen_id, lote_id = uuid.uuid4(), uuid.uuid4()
+    conn = FakeConnection(fetchrow_result=_fila_factura(items_inventario="[]"))
+    pool = FakePool(conn)
+
+    await repository.crear_factura(
+        pool,
+        tipo_ecf=31,
+        ambiente="test",
+        rnc_emisor="131234567",
+        encf="E310000000001",
+        datos={"Encabezado": {}},
+        items_inventario=[
+            {"numero_linea": "1", "producto_id": uuid.uuid4(), "cantidad": "2", "almacen_id": almacen_id,
+             "lote_id": lote_id},
+            {"numero_linea": "2", "producto_id": uuid.uuid4(), "cantidad": "1", "almacen_id": None, "lote_id": None},
+        ],
+    )
+
+    items = json.loads(conn.queries[0][1][-1])
+    assert items[0]["almacen_id"] == str(almacen_id) and items[0]["lote_id"] == str(lote_id)
+    assert items[1]["almacen_id"] is None

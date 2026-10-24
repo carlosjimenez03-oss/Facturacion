@@ -1,6 +1,8 @@
 """Resultado de la DGII por trackId: POST /facturas/{id}/actualizar-estado,
 la consulta inmediata tras enviar y la tarea de fondo (app.estado_dgii)."""
 import asyncio
+import json
+import uuid
 
 import pytest
 import respx
@@ -447,3 +449,62 @@ def test_interpretar_resultado():
     assert estado_dgii.interpretar_resultado({"codigo": 3}) is None
     assert estado_dgii.interpretar_resultado({"codigo": 0}) is None
     assert estado_dgii.interpretar_resultado({"codigo": None}) is None
+
+
+# --- Reintento de salidas de inventario ---
+
+
+def _sin_inventario(fid: str) -> dict:
+    return {
+        "id": fid,
+        "encf": "E310000000001",
+        "estado": "aceptado",
+        "items_inventario": [{"numero_linea": "1", "producto_id": str(uuid.uuid4()), "cantidad": "2.00"}],
+    }
+
+
+@respx.mock
+async def test_sincronizar_inventario_pendiente_reintenta_y_marca(monkeypatch):
+    ok, falla = str(uuid.uuid4()), str(uuid.uuid4())
+    marcas = []
+
+    async def fake_listar(pool, *, limite):
+        return [_sin_inventario(ok), _sin_inventario(falla)]
+
+    async def fake_marcar(pool, fid, *, sincronizado, error):
+        marcas.append((str(fid), sincronizado, error is None))
+
+    monkeypatch.setattr(repository, "listar_inventario_pendiente", fake_listar)
+    monkeypatch.setattr(repository, "registrar_sincronizacion_inventario", fake_marcar)
+
+    def responder(request):
+        cuerpo = json.loads(request.content)
+        assert cuerpo["documento"] == "E310000000001"
+        return Response(200, json=[]) if cuerpo["factura_id"] == ok else Response(409, json={"detail": "x"})
+
+    respx.post(f"{main.settings.inventario_api_url}/movimientos/salida-por-factura").mock(side_effect=responder)
+
+    sincronizadas = await estado_dgii.sincronizar_inventario_pendiente(object(), main.settings)
+
+    assert sincronizadas == 1
+    assert marcas == [(ok, True, True), (falla, False, False)]
+
+
+@respx.mock
+async def test_sincronizar_inventario_pendiente_corta_si_inventario_no_responde(monkeypatch):
+    marcas = []
+
+    async def fake_listar(pool, *, limite):
+        return [_sin_inventario(str(uuid.uuid4())), _sin_inventario(str(uuid.uuid4()))]
+
+    async def fake_marcar(pool, fid, *, sincronizado, error):
+        marcas.append(sincronizado)
+
+    monkeypatch.setattr(repository, "listar_inventario_pendiente", fake_listar)
+    monkeypatch.setattr(repository, "registrar_sincronizacion_inventario", fake_marcar)
+    respx.post(f"{main.settings.inventario_api_url}/movimientos/salida-por-factura").mock(
+        side_effect=ConnectError("caído")
+    )
+
+    assert await estado_dgii.sincronizar_inventario_pendiente(object(), main.settings) == 0
+    assert marcas == [False]

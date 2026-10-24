@@ -12,11 +12,12 @@ import {
   datosAFormState,
   desglose,
   estadoInicial,
+  INDICADOR_POR_TASA,
   itemsDesdeCotizacion,
   nuevoItem,
   siguienteEncf,
 } from "../lib/buildDatos";
-import type { FormState } from "../lib/buildDatos";
+import type { FormState, ItemFormulario } from "../lib/buildDatos";
 import { inventarioApi } from "../lib/inventarioApi";
 import { formatoMonto, formatoRnc } from "../lib/marca";
 import {
@@ -29,7 +30,7 @@ import {
 } from "../lib/preferencias";
 import type { DatosEmisor } from "../lib/preferencias";
 import { useFacturas } from "../lib/useFacturas";
-import type { FacturaDetalle, ItemFactura, Producto } from "../lib/types";
+import type { Almacen, FacturaDetalle, ItemFactura, Lote, Producto, SugerenciaFefo } from "../lib/types";
 import { FacturaAcciones } from "./FacturaAcciones";
 
 /** Tipos de e-CF de venta (los que muestra el diseño) y los de compra/pago, que se eligen aparte. */
@@ -110,6 +111,11 @@ function porcentajeDescuento(item: ItemFactura): string {
   return String(Math.round((desc / bruto) * 10000) / 100);
 }
 
+/** Cantidades sin ceros sobrantes: "1250.0000" -> "1,250". */
+function cantidadLegible(valor: number | string): string {
+  return Number(valor).toLocaleString("en-US", { maximumFractionDigits: 4 });
+}
+
 function IconoInfo() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" aria-hidden="true">
@@ -177,6 +183,13 @@ export function FacturaForm() {
   const avisoAlSalir = useRef<string | null>(null);
   const compradorDeOriginal = useRef(false);
   const [productos, setProductos] = useState<Producto[]>([]);
+  const [almacenes, setAlmacenes] = useState<Almacen[]>([]);
+  /** Existencia de cada producto en el almacén elegido (null = no se pudo consultar: se usa el total). */
+  const [existencias, setExistencias] = useState<Map<string, number> | null>(null);
+  /** Lotes con existencia por "producto|almacén" (productos que manejan lotes). */
+  const [lotes, setLotes] = useState<Record<string, Lote[]>>({});
+  /** Sugerencia FEFO por "producto|almacén|cantidad" para las líneas sin lote elegido. */
+  const [fefo, setFefo] = useState<Record<string, SugerenciaFefo>>({});
   const [facturaCompleta, setFacturaCompleta] = useState<FacturaDetalle | null>(null);
   const [cargando, setCargando] = useState(editando || Boolean(cotizacionId || copiarId));
   const [procesando, setProcesando] = useState<"" | "borrador" | "emitir">("");
@@ -197,7 +210,59 @@ export function FacturaForm() {
       .listarProductos({ activo: true })
       .then(setProductos)
       .catch(() => setProductos([]));
+    inventarioApi
+      .listarAlmacenes({ activo: true })
+      .then(setAlmacenes)
+      .catch(() => setAlmacenes([]));
   }, []);
+
+  /** Almacén de la factura: el elegido o, si no se eligió, el principal. */
+  const almacenId = form.almacenId || almacenes.find((a) => a.es_principal)?.id || "";
+  const almacen = almacenes.find((a) => a.id === almacenId);
+
+  useEffect(() => {
+    if (!almacenId) return setExistencias(null);
+    inventarioApi
+      .existenciasAlmacen(almacenId, { incluir_cero: true })
+      .then((ex) => setExistencias(new Map(ex.map((e) => [e.producto_id, Number(e.cantidad)]))))
+      .catch(() => setExistencias(null));
+  }, [almacenId]);
+
+  // Lotes del almacén de los productos con lotes que aparecen en las líneas.
+  useEffect(() => {
+    if (!almacenId) return;
+    const faltan = [...new Set(form.items.map((i) => i.productoId))].filter(
+      (pid): pid is string => Boolean(pid) && Boolean(productos.find((p) => p.id === pid)?.maneja_lotes) && !lotes[`${pid}|${almacenId}`],
+    );
+    if (faltan.length === 0) return;
+    setLotes((prev) => ({ ...prev, ...Object.fromEntries(faltan.map((pid) => [`${pid}|${almacenId}`, []])) }));
+    for (const pid of faltan) {
+      inventarioApi
+        .listarLotes({ producto_id: pid, almacen_id: almacenId, con_existencia: true })
+        .then((ls) => setLotes((prev) => ({ ...prev, [`${pid}|${almacenId}`]: ls })))
+        .catch(() => undefined);
+    }
+  }, [form.items, productos, almacenId, lotes]);
+
+  // Sugerencia FEFO (de qué lotes saldría la venta) de las líneas con lotes sin lote elegido.
+  const clavesFefo = form.items
+    .filter((i) => i.productoId && !i.loteId && Number(i.CantidadItem) > 0 && productos.find((p) => p.id === i.productoId)?.maneja_lotes)
+    .map((i) => `${i.productoId}|${almacenId}|${Number(i.CantidadItem)}`)
+    .filter((k) => !fefo[k])
+    .join(",");
+  useEffect(() => {
+    if (!clavesFefo || !almacenId) return;
+    const t = window.setTimeout(() => {
+      for (const clave of clavesFefo.split(",")) {
+        const [producto_id, almacen_id, cantidad] = clave.split("|");
+        inventarioApi
+          .sugerirFefo({ producto_id, almacen_id, cantidad })
+          .then((s) => setFefo((prev) => ({ ...prev, [clave]: s })))
+          .catch(() => undefined);
+      }
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [clavesFefo, almacenId]);
 
   useEffect(() => {
     if (!id) return;
@@ -456,7 +521,7 @@ export function FacturaForm() {
     }
   }
 
-  function actualizarItem(index: number, cambios: Partial<ItemFactura>) {
+  function actualizarItem(index: number, cambios: Partial<ItemFormulario>) {
     setForm((prev) => {
       const items = prev.items.slice();
       items[index] = { ...items[index], ...cambios };
@@ -467,15 +532,34 @@ export function FacturaForm() {
   function elegirProducto(index: number, productoId: string) {
     const producto = productos.find((p) => p.id === productoId);
     if (!producto) {
-      actualizarItem(index, { productoId: undefined, NombreItem: "", IndicadorBienoServicio: "2" });
+      actualizarItem(index, { productoId: undefined, loteId: undefined, NombreItem: "", IndicadorBienoServicio: "2" });
       return;
     }
     actualizarItem(index, {
       productoId: producto.id,
+      loteId: undefined,
       NombreItem: producto.nombre,
       PrecioUnitarioItem: producto.precio_venta,
-      IndicadorBienoServicio: "1",
+      IndicadorBienoServicio: producto.tipo === "servicio" ? "2" : "1",
+      IndicadorFacturacion: INDICADOR_POR_TASA[producto.tasa_itbis] ?? "1",
     });
+  }
+
+  function cambiarAlmacen(id: string) {
+    // los lotes son de cada almacén: al cambiarlo, las líneas vuelven a FEFO
+    setForm((prev) => ({ ...prev, almacenId: id, items: prev.items.map((i) => (i.loteId ? { ...i, loteId: undefined } : i)) }));
+  }
+
+  /** Existencia disponible de una línea en el almacén de la factura (o en su lote); null = sin inventario. */
+  function disponibleDe(item: ItemFormulario): number | null {
+    const producto = productos.find((p) => p.id === item.productoId);
+    if (!producto || producto.tipo === "servicio") return null;
+    if (item.loteId) {
+      const lote = (lotes[`${producto.id}|${almacenId}`] ?? []).find((l) => l.id === item.loteId);
+      if (lote) return Number(lote.existencias.find((e) => e.almacen_id === almacenId)?.cantidad ?? 0);
+    }
+    if (!existencias) return Number(producto.stock_actual);
+    return existencias.get(producto.id) ?? 0;
   }
 
   function cambiarDescuento(index: number, porcentaje: string) {
@@ -536,7 +620,7 @@ export function FacturaForm() {
         : { compradorRnc: "", compradorIdentificadorExtranjero: "", razonSocialComprador: "", correoComprador: "", direccionComprador: "" }),
     };
     const datos = construirDatos(estado, config);
-    const items_inventario = construirItemsInventario(estado.items);
+    const items_inventario = construirItemsInventario(estado.items, almacenId);
     guardarEmisor(emisor);
     guardarVencimientoSecuencia(tipoEcf, form.fechaVencimientoSecuencia);
     if (pideComprador) {
@@ -619,8 +703,8 @@ export function FacturaForm() {
   if (cargando) return <div className="content"><p className="mut">Cargando…</p></div>;
 
   const faltaStock = form.items.some((item) => {
-    const p = productos.find((x) => x.id === item.productoId);
-    return p != null && Number(p.stock_actual) < (Number(item.CantidadItem) || 0);
+    const disponible = disponibleDe(item);
+    return disponible != null && disponible < (Number(item.CantidadItem) || 0);
   });
 
   return (
@@ -986,6 +1070,18 @@ export function FacturaForm() {
                     title={formaPago !== "4" ? "Solo aplica a ventas a crédito" : undefined}
                   />
                 </div>
+                {almacenes.length > 0 && (
+                  <div className="fld">
+                    <label className="lbl" htmlFor="alm">Almacén</label>
+                    <select id="alm" className="inp" value={almacenId} onChange={(e) => cambiarAlmacen(e.target.value)}>
+                      {almacenes.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.nombre}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <div className="fld">
                   <label className="lbl" htmlFor="encf">
                     e-NCF <span className="req">*</span>
@@ -1044,9 +1140,11 @@ export function FacturaForm() {
                 <tbody>
                   {form.items.map((item, idx) => {
                     const producto = productos.find((p) => p.id === item.productoId);
-                    const stock = producto ? Number(producto.stock_actual) : null;
+                    const stock = disponibleDe(item);
                     const cantidad = Number(item.CantidadItem) || 0;
                     const falta = stock != null && stock < cantidad ? cantidad - stock : 0;
+                    const lotesLinea = producto?.maneja_lotes ? (lotes[`${producto.id}|${almacenId}`] ?? []) : [];
+                    const sugerencia = producto?.maneja_lotes && !item.loteId ? fefo[`${producto.id}|${almacenId}|${cantidad}`] : undefined;
                     return (
                       <tr key={idx}>
                         <td>
@@ -1065,7 +1163,33 @@ export function FacturaForm() {
                             ))}
                           </select>
                           {producto ? (
-                            <div className="hint mono" style={{ marginTop: 4 }}>{producto.sku}</div>
+                            <>
+                              <div className="hint mono" style={{ marginTop: 4 }}>{producto.sku}</div>
+                              {producto.maneja_lotes && (
+                                <select
+                                  className="inp inp-sm"
+                                  style={{ marginTop: 6 }}
+                                  value={item.loteId ?? ""}
+                                  onChange={(e) => actualizarItem(idx, { loteId: e.target.value || undefined })}
+                                  aria-label={`Lote de la línea ${idx + 1}`}
+                                >
+                                  <option value="">Lote automático (FEFO)</option>
+                                  {lotesLinea.map((l) => (
+                                    <option key={l.id} value={l.id}>
+                                      {l.numero} · {cantidadLegible(l.existencias.find((e) => e.almacen_id === almacenId)?.cantidad ?? 0)} disp.
+                                      {l.fecha_vencimiento ? ` · vence ${fechaLegible(l.fecha_vencimiento)}` : ""}
+                                      {l.estado === "vencido" ? " · vencido" : l.estado === "bloqueado" ? " · bloqueado" : ""}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
+                              {sugerencia && sugerencia.tomas.length > 0 && (
+                                <div className="hint" style={{ marginTop: 4 }}>
+                                  Sale de {sugerencia.tomas.map((t) => `${t.numero} (${cantidadLegible(t.cantidad)})`).join(" + ")}
+                                  {Number(sugerencia.sin_lote) > 0 ? ` + ${cantidadLegible(sugerencia.sin_lote)} sin lote` : ""}
+                                </div>
+                              )}
+                            </>
                           ) : (
                             <input
                               className="inp inp-sm"
@@ -1083,7 +1207,7 @@ export function FacturaForm() {
                           ) : (
                             <>
                               <span style={{ fontVariantNumeric: "tabular-nums", color: falta ? "#B91C1C" : "#111827", fontWeight: 600 }}>
-                                {formatoMonto(stock).replace(/\.00$/, "")} uds
+                                {cantidadLegible(stock)} {producto?.unidad_medida || "uds"}
                               </span>
                               {falta > 0 && (
                                 <div className="err-t" style={{ fontSize: 12, marginTop: 2 }}>
@@ -1091,7 +1215,7 @@ export function FacturaForm() {
                                     <path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
                                     <path d="M12 9v4M12 17h.01" />
                                   </svg>
-                                  Faltan {formatoMonto(falta).replace(/\.00$/, "")}
+                                  Faltan {cantidadLegible(falta)}
                                 </div>
                               )}
                             </>
@@ -1180,8 +1304,9 @@ export function FacturaForm() {
                     <path d="M3 8l9 5 9-5" />
                   </svg>
                   <span>
-                    <b>Existencia insuficiente.</b> Hay líneas con cantidad mayor a la disponible. Puede guardar el borrador, pero para
-                    emitir debe ajustar la cantidad o registrar la compra de la mercancía.
+                    <b>Existencia insuficiente.</b> Hay líneas con cantidad mayor al disponible
+                    {almacen ? ` en el almacén ${almacen.nombre}` : ""}. Puede guardar el borrador, pero para emitir debe ajustar la cantidad,
+                    elegir otro almacén o registrar la compra de la mercancía.
                   </span>
                 </div>
               </div>

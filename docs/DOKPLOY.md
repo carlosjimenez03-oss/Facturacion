@@ -216,6 +216,18 @@ El módulo de inventario (`inventario-api` + las pantallas "Productos",
   `facturacion.facturas.inventario_sincronizado = false` (y
   `inventario_error` con el detalle) para poder detectarlo y correr la
   sincronización manualmente después.
+- **Despliegue de la Fase 4 de inventario** (almacenes y lotes): la primera
+  vez que arranca, `inventario-api` migra su esquema (una sola vez, anotado
+  en `inventario.schema_version`) y elimina el índice único
+  `movimientos_salida_factura_idx`, del que depende el `inventario-api`
+  anterior para registrar cada salida por factura. **No dejar atendiendo a
+  la vez el contenedor viejo y el nuevo**: el redeploy normal del Compose
+  (detiene el viejo y arranca el nuevo, una réplica) es seguro; no
+  configurar un despliegue rolling/start-first ni escalar `inventario-api`
+  a más de una réplica durante ese despliegue. Volver a la versión anterior
+  exige recrear el índice a mano. Detalle, y cómo recuperar las facturas
+  que hayan quedado con `inventario_sincronizado = false`, en
+  [`docs/INVENTARIO.md`](INVENTARIO.md) ("Despliegue").
 
 ## 7. Receptor Electrónico: exposición pública
 

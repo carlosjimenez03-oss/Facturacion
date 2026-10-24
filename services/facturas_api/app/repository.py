@@ -34,7 +34,16 @@ def _items_inventario_json(items_inventario: list[dict[str, Any]] | None) -> str
         return None
     return json.dumps(
         [
-            {**item, "producto_id": str(item["producto_id"]), "cantidad": str(item["cantidad"])}
+            {
+                **item,
+                "producto_id": str(item["producto_id"]),
+                "cantidad": str(item["cantidad"]),
+                **{
+                    campo: str(item[campo])
+                    for campo in ("almacen_id", "lote_id")
+                    if item.get(campo) is not None
+                },
+            }
             for item in items_inventario
         ]
     )
@@ -304,6 +313,33 @@ async def registrar_resultado_consulta(
             error,
         )
     return _fila_a_dict(fila) if fila is not None else None
+
+
+async def listar_inventario_pendiente(
+    pool: asyncpg.Pool, *, limite: int = 50, dias: int = 90
+) -> list[dict[str, Any]]:
+    """Facturas que llegaron a la DGII (con trackId, no rechazadas) cuya salida
+    de mercancía no se pudo registrar en inventario_api (p. ej. inventario_api
+    caído o reiniciándose durante un despliegue). La tarea de fondo de
+    `app.estado_dgii` las reintenta: la salida por factura es idempotente."""
+    async with pool.acquire() as conn:
+        filas = await conn.fetch(
+            """
+            SELECT id, encf, estado, items_inventario
+            FROM facturacion.facturas
+            WHERE NOT inventario_sincronizado
+              AND track_id IS NOT NULL
+              AND estado IN ('enviado', 'aceptado')
+              AND CASE WHEN jsonb_typeof(items_inventario) = 'array'
+                       THEN jsonb_array_length(items_inventario) > 0 ELSE false END
+              AND actualizado_en >= now() - make_interval(days => $2)
+            ORDER BY actualizado_en ASC
+            LIMIT $1
+            """,
+            limite,
+            dias,
+        )
+    return [_fila_a_dict(fila) for fila in filas]
 
 
 async def listar_pendientes_de_resultado(

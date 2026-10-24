@@ -3,6 +3,13 @@ import type { FacturaDatos, FormaPago, ItemFactura, ItemInventarioLink } from ".
 import type { CotizacionItem, TasaItbis } from "./erpApi";
 import type { TipoEcfConfig } from "./tipoConfig";
 
+/** Línea del formulario de factura: la del e-CF más el lote elegido (metadata de inventario que,
+ * como `productoId`, no va al XML; ver `construirItemsInventario`). */
+export interface ItemFormulario extends ItemFactura {
+  /** Lote del que sale la mercancía; ausente = inventario-api lo toma por FEFO. */
+  loteId?: string;
+}
+
 export interface FormState {
   tipoEcf: string;
   encf: string;
@@ -25,7 +32,9 @@ export interface FormState {
   correoComprador: string;
   direccionComprador: string;
 
-  items: ItemFactura[];
+  items: ItemFormulario[];
+  /** Almacén de donde sale la mercancía (selector "Almacén"); "" = el principal. */
+  almacenId: string;
 
   ncfModificado: string;
   fechaNcfModificado: string;
@@ -54,6 +63,7 @@ export function estadoInicial(tipoEcf: string): FormState {
     correoComprador: "",
     direccionComprador: "",
     items: [nuevoItem(1)],
+    almacenId: "",
     ncfModificado: "",
     fechaNcfModificado: "",
     codigoModificacion: "1",
@@ -173,9 +183,11 @@ export function construirDatos(form: FormState, config: TipoEcfConfig): FacturaD
 /** Arma el payload `items_inventario` (aparte de `datos`, ver el comentario
  * en ItemFactura.productoId) que le dice a facturas_api qué producto del
  * catálogo y qué cantidad descontar de inventario por cada línea, al
- * enviar la factura. Líneas sin producto vinculado se omiten (por ahora
- * las líneas de servicio sin producto del catálogo no descuentan stock). */
-export function construirItemsInventario(items: ItemFactura[]): ItemInventarioLink[] {
+ * enviar la factura, de qué almacén (`almacenId` del formulario; null = el
+ * principal) y de qué lote (null = FEFO si el producto maneja lotes).
+ * Líneas sin producto vinculado se omiten (por ahora las líneas de servicio
+ * sin producto del catálogo no descuentan stock). */
+export function construirItemsInventario(items: ItemFormulario[], almacenId = ""): ItemInventarioLink[] {
   return items
     .map((item, idx) => ({ item, numeroLinea: String(idx + 1) }))
     .filter(({ item }) => Boolean(item.productoId))
@@ -183,6 +195,8 @@ export function construirItemsInventario(items: ItemFactura[]): ItemInventarioLi
       numero_linea: numeroLinea,
       producto_id: item.productoId as string,
       cantidad: decimal2(Number(item.CantidadItem) || 0),
+      almacen_id: almacenId || null,
+      lote_id: item.loteId || null,
     }));
 }
 
@@ -190,7 +204,8 @@ export function construirItemsInventario(items: ItemFactura[]): ItemInventarioLi
  * factura ya guardada, para poder recuperar/editar un borrador.
  * `itemsInventario` (aparte de `datos`, ver ItemFactura.productoId) se
  * vuelve a fusionar en cada línea por NumeroLinea, para que el selector de
- * producto de FacturaForm recupere lo ya elegido. */
+ * producto (y de lote) de FacturaForm recupere lo ya elegido; el almacén es
+ * el mismo para toda la factura. */
 export function datosAFormState(
   tipoEcf: string,
   encf: string,
@@ -202,10 +217,11 @@ export function datosAFormState(
   const comprador = (datos.Encabezado.Comprador ?? {}) as Record<string, unknown>;
   const referencia = (datos.InformacionReferencia ?? {}) as Record<string, unknown>;
   const tablaFormasPago = idDoc.TablaFormasPago as { FormaDePago?: FormaPago[] } | undefined;
-  const productoIdPorLinea = new Map((itemsInventario ?? []).map((link) => [link.numero_linea, link.producto_id]));
-  const items = (datos.DetallesItems.Item.length > 0 ? datos.DetallesItems.Item : [nuevoItem(1)]).map((item) => ({
+  const linkPorLinea = new Map((itemsInventario ?? []).map((link) => [link.numero_linea, link]));
+  const items: ItemFormulario[] = (datos.DetallesItems.Item.length > 0 ? datos.DetallesItems.Item : [nuevoItem(1)]).map((item) => ({
     ...item,
-    productoId: productoIdPorLinea.get(item.NumeroLinea),
+    productoId: linkPorLinea.get(item.NumeroLinea)?.producto_id,
+    loteId: linkPorLinea.get(item.NumeroLinea)?.lote_id ?? undefined,
   }));
 
   return {
@@ -231,6 +247,7 @@ export function datosAFormState(
     correoComprador: (comprador.CorreoComprador as string) ?? "",
     direccionComprador: (comprador.DireccionComprador as string) ?? "",
     items,
+    almacenId: itemsInventario?.find((link) => link.almacen_id)?.almacen_id ?? "",
     ncfModificado: (referencia.NCFModificado as string) ?? "",
     fechaNcfModificado: referencia.FechaNCFModificado ? fechaDeDgii(String(referencia.FechaNCFModificado)) : "",
     codigoModificacion: (referencia.CodigoModificacion as string) ?? "1",
@@ -272,8 +289,8 @@ export function siguienteEncf(facturas: { encf: string | null }[], tipoEcf: stri
   return `${prefijo}${String(mayor + 1).padStart(10, "0")}`;
 }
 
-/** Tasa de ITBIS de una cotización (erp-api) -> IndicadorFacturacion del e-CF. */
-const INDICADOR_POR_TASA: Record<TasaItbis, string> = { "18": "1", "16": "2", "0": "3", exento: "4" };
+/** Tasa de ITBIS de una cotización (erp-api) o de un producto (inventario-api) -> IndicadorFacturacion del e-CF. */
+export const INDICADOR_POR_TASA: Record<TasaItbis, string> = { "18": "1", "16": "2", "0": "3", exento: "4" };
 
 /** Convierte las líneas de una cotización en líneas de factura. El descuento
  * de la cotización es un porcentaje; en el e-CF va como monto (DescuentoMonto). */

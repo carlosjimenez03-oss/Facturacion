@@ -28,6 +28,11 @@ import { FacturaCompraForm } from "./pages/compras/FacturaCompraForm";
 import { FacturasCompraPage } from "./pages/compras/FacturasCompra";
 import { PagosProveedoresPage } from "./pages/compras/Pagos";
 import { RetencionesPage } from "./pages/compras/Retenciones";
+import { AjusteForm } from "./pages/inventario/AjusteForm";
+import { AjustesPage } from "./pages/inventario/Ajustes";
+import { AlmacenesPage } from "./pages/inventario/Almacenes";
+import { KardexPage } from "./pages/inventario/Kardex";
+import { LotesPage } from "./pages/inventario/Lotes";
 import { Inicio } from "./pages/Inicio";
 import { Proximamente } from "./pages/Proximamente";
 
@@ -82,6 +87,12 @@ export default function App() {
         <Route path="/inventario/compras/:id" element={<CompraForm />} />
 
         <Route path="/inventario/movimientos" element={<MovimientosList />} />
+        <Route path="/inventario/kardex" element={<KardexPage />} />
+        <Route path="/inventario/almacenes" element={<AlmacenesPage />} />
+        <Route path="/inventario/lotes" element={<LotesPage />} />
+        <Route path="/inventario/ajustes" element={<AjustesPage />} />
+        <Route path="/inventario/ajustes/nuevo" element={<AjusteForm />} />
+        <Route path="/inventario/ajustes/:id" element={<AjusteForm />} />
 
         <Route path="/impuestos/formatos/:formato" element={<FormatosPage />} />
         <Route path="/impuestos/precalculo/:formulario" element={<PreCalculoPage />} />

@@ -70,10 +70,10 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
     hijos: [
       { label: "Productos", to: "/inventario/productos" },
       { label: "Entradas de mercancía", to: "/inventario/compras" },
-      { label: "Kardex / movimientos", to: "/inventario/movimientos" },
-      { label: "Lotes", to: pendiente("lotes") },
-      { label: "Ajustes", to: pendiente("ajustes") },
-      { label: "Almacenes", to: pendiente("almacenes") },
+      { label: "Kardex", to: "/inventario/kardex" },
+      { label: "Lotes", to: "/inventario/lotes" },
+      { label: "Ajustes", to: "/inventario/ajustes" },
+      { label: "Almacenes", to: "/inventario/almacenes" },
     ],
   },
   {
