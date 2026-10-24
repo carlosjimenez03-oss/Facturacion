@@ -33,6 +33,9 @@ import { AjustesPage } from "./pages/inventario/Ajustes";
 import { AlmacenesPage } from "./pages/inventario/Almacenes";
 import { KardexPage } from "./pages/inventario/Kardex";
 import { LotesPage } from "./pages/inventario/Lotes";
+import { BancosPage } from "./pages/bancos/Bancos";
+import { AsientoForm } from "./pages/contabilidad/AsientoForm";
+import { ContabilidadPage } from "./pages/contabilidad/Contabilidad";
 import { Inicio } from "./pages/Inicio";
 import { Proximamente } from "./pages/Proximamente";
 
@@ -69,6 +72,11 @@ export default function App() {
         <Route path="/compras/e43" element={<ComprobantesE43Page />} />
         <Route path="/compras/pagos" element={<PagosProveedoresPage />} />
         <Route path="/compras/retenciones" element={<RetencionesPage />} />
+
+        <Route path="/bancos/:tab" element={<BancosPage />} />
+        <Route path="/contabilidad/asientos/nuevo" element={<AsientoForm />} />
+        <Route path="/contabilidad/asientos/:id" element={<AsientoForm />} />
+        <Route path="/contabilidad/:tab" element={<ContabilidadPage />} />
 
         <Route path="/contactos" element={<ContactoList />} />
         <Route path="/contactos/nuevo" element={<ContactoForm />} />

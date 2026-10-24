@@ -81,9 +81,9 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
     label: "Bancos",
     icon: <IconBancos />,
     hijos: [
-      { label: "Cuentas bancarias", to: pendiente("cuentas-bancarias") },
-      { label: "Conciliación", to: pendiente("conciliacion") },
-      { label: "Transferencias", to: pendiente("transferencias") },
+      { label: "Cuentas bancarias", to: "/bancos/cuentas" },
+      { label: "Conciliación", to: "/bancos/conciliacion" },
+      { label: "Transferencias", to: "/bancos/transferencias" },
     ],
   },
   {
@@ -91,9 +91,10 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
     label: "Contabilidad",
     icon: <IconContabilidad />,
     hijos: [
-      { label: "Catálogo de cuentas", to: pendiente("catalogo-cuentas") },
-      { label: "Asientos", to: pendiente("asientos") },
-      { label: "Activos fijos", to: pendiente("activos-fijos") },
+      { label: "Catálogo de cuentas", to: "/contabilidad/catalogo" },
+      { label: "Asientos", to: "/contabilidad/asientos" },
+      { label: "Activos fijos", to: "/contabilidad/activos" },
+      { label: "Reportes contables", to: "/contabilidad/reportes" },
     ],
   },
   {
