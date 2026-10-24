@@ -4,8 +4,9 @@ La tabla la crea `db/init/002_facturas.sql` (Postgres local) o la carga
 inicial a Supabase (docs/SUPABASE.md), donde nadie corre db/init después:
 por eso los cambios de esquema de esta tabla se aplican aquí, idempotentes,
 en el lifespan de main.py. `db/init/013_configuracion.sql` repite
-`DDL_FACTURAS` y `db/init/017_contingencia.sql` repite `DDL_CONTINGENCIA`
-para el Postgres local (lo verifica tests/test_migraciones.py).
+`DDL_FACTURAS`, `db/init/017_contingencia.sql` repite `DDL_CONTINGENCIA` y
+`db/init/018_pos_sin_conexion.sql` repite `DDL_IDEMPOTENCIA` para el
+Postgres local (lo verifica tests/test_migraciones.py).
 
 Para cambios futuros: agregar sentencias idempotentes al final del DDL que
 corresponda (`ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`) o un
@@ -103,6 +104,30 @@ CREATE TABLE IF NOT EXISTS facturacion.lotes_contingencia (
 CREATE INDEX IF NOT EXISTS lotes_contingencia_creado_idx ON facturacion.lotes_contingencia (creado_en DESC);
 """
 
+# Clave de idempotencia de la creación (POST /facturas): la pone el POS en
+# cada venta hecha sin conexión con el servidor (un UUID generado en el
+# navegador al cobrar). Al sincronizar, un reintento con la misma clave
+# devuelve la factura ya creada en vez de crear otra (ver
+# secuencias_encf.crear_factura y docs/dgii/CONTINGENCIA.md, "POS sin
+# conexión"). Igual que DDL_CONTINGENCIA: se consulta el catálogo antes de
+# tocar la tabla.
+DDL_IDEMPOTENCIA = """
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'facturacion' AND table_name = 'facturas' AND column_name = 'clave_idempotencia'
+    ) THEN
+        ALTER TABLE facturacion.facturas ADD COLUMN IF NOT EXISTS clave_idempotencia uuid;
+    END IF;
+    IF to_regclass('facturacion.facturas_clave_idempotencia_idx') IS NULL THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS facturas_clave_idempotencia_idx ON facturacion.facturas (clave_idempotencia)
+            WHERE clave_idempotencia IS NOT NULL;
+    END IF;
+END;
+$$;
+"""
+
 
 async def aplicar_migraciones(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
@@ -110,4 +135,5 @@ async def aplicar_migraciones(pool: asyncpg.Pool) -> None:
             await conn.execute("SELECT pg_advisory_xact_lock($1)", _LOCK_MIGRACIONES)
             await conn.execute(DDL_FACTURAS)
             await conn.execute(DDL_CONTINGENCIA)
-    logger.info("Columnas de 'facturacion.facturas' y tablas de contingencia verificadas")
+            await conn.execute(DDL_IDEMPOTENCIA)
+    logger.info("Columnas de 'facturacion.facturas', tablas de contingencia e idempotencia verificadas")

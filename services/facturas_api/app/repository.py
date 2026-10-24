@@ -59,13 +59,14 @@ async def crear_factura(
     datos: dict[str, Any],
     items_inventario: list[dict[str, Any]] | None = None,
     vendedor_id: uuid.UUID | None = None,
+    clave_idempotencia: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     async with pool.acquire() as conn:
         fila = await conn.fetchrow(
             """
             INSERT INTO facturacion.facturas
-                (tipo_ecf, ambiente, rnc_emisor, encf, datos, items_inventario, vendedor_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+                (tipo_ecf, ambiente, rnc_emisor, encf, datos, items_inventario, vendedor_id, clave_idempotencia)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
             RETURNING *
             """,
             tipo_ecf,
@@ -75,8 +76,18 @@ async def crear_factura(
             json.dumps(datos),
             _items_inventario_json(items_inventario),
             vendedor_id,
+            clave_idempotencia,
         )
     return _fila_a_dict(fila)
+
+
+async def obtener_por_clave_idempotencia(pool: asyncpg.Pool, clave: uuid.UUID) -> dict[str, Any] | None:
+    """La factura creada con esa clave de idempotencia (POS sin conexión), o None."""
+    async with pool.acquire() as conn:
+        fila = await conn.fetchrow(
+            "SELECT * FROM facturacion.facturas WHERE clave_idempotencia = $1", clave
+        )
+    return _fila_a_dict(fila) if fila is not None else None
 
 
 async def listar_facturas(

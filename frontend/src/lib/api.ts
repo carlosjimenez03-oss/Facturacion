@@ -53,7 +53,10 @@ export const api = {
 
   obtener: (id: string) => request<FacturaDetalle>(`/facturas/${id}`),
 
-  /** `asignar_encf` (o `encf` null): el servidor toma el siguiente e-NCF de la secuencia de Configuración, sin duplicados (409 si está agotada, vencida o desactivada). */
+  /**
+   * `asignar_encf` (o `encf` null): el servidor toma el siguiente e-NCF de la secuencia de Configuración, sin duplicados (409 si está agotada, vencida o desactivada).
+   * `clave_idempotencia` (UUID del cliente, POS): repetir la creación con la misma clave devuelve la factura ya creada (200) en vez de crear otra.
+   */
   crear: (payload: {
     tipo_ecf: number;
     encf: string | null;
@@ -61,6 +64,7 @@ export const api = {
     datos: FacturaDatos;
     items_inventario?: ItemInventarioLink[];
     vendedor_id?: string | null;
+    clave_idempotencia?: string | null;
   }) =>
     request<FacturaDetalle>("/facturas", {
       method: "POST",

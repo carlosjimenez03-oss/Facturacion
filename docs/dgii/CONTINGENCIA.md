@@ -151,6 +151,74 @@ filtro), el detalle, el formulario, el POS y su ticket (con la leyenda); el
 Centro de sincronización muestra el progreso real por lotes y "Reintentar
 conexión ahora" llama a `POST /contingencia/reintentar` de facturas-api.
 
+## POS sin conexión (el navegador no llega al servidor)
+
+La contingencia de arriba cubre a la DGII caída con nuestro servidor al
+alcance. Si lo que se cae es el internet de la tienda, el navegador no llega
+a facturas-api y el e-CF **no se puede emitir** en ese momento: el e-NCF lo
+asigna el servidor (secuencia bloqueada, ver `secuencias_encf.py`) y el
+navegador nunca lo inventa. El POS sigue vendiendo y emite al reconectar.
+
+**En el navegador** (`frontend/src/pages/pos/`):
+
+- **Service worker** (vite-plugin-pwa, `frontend/vite.config.ts`): guarda el
+  "app shell" del build (index.html, JS, CSS, ícono, manifiesto) para que
+  `/pos` abra sin conexión si ya se visitó. Las páginas se piden primero a
+  la red (en línea todo se comporta como antes) y solo sin red responde la
+  copia; no intercepta `/api*`, `/auth`, `/fe` ni el portal público `/p/`,
+  y no guarda ninguna respuesta de las APIs. nginx sirve `sw.js` sin caché
+  HTTP. El servidor de desarrollo (`npm run dev`) no lo usa.
+- **Catálogo en IndexedDB** (`posAlmacen.ts`, base `kontara-pos`): al cargar
+  en línea el POS guarda productos y precios (con la tasa de ITBIS), la
+  existencia del almacén de la caja, almacenes, secuencias, la sesión de caja
+  abierta (solo sus totales, sin el detalle de las ventas) y los clientes con
+  RNC/cédula (solo RNC y nombre, para «Verificar» sin red; el default sigue
+  siendo consumidor final). El emisor y el vencimiento de la secuencia E31 ya
+  los recordaba `lib/preferencias.ts`. Se renueva al reconectar.
+- **Venta sin conexión**: cada cobro lleva una **clave UUID** generada en el
+  navegador (también en línea). Sin conexión, o si la red se cae a mitad de
+  una venta en línea, la venta va a la cola de IndexedDB con el e-CF ya
+  armado (precios, ITBIS y fecha del cobro, sin e-NCF) y se entrega un
+  **ticket provisional** con la leyenda *"Venta registrada sin conexión — el
+  comprobante fiscal se emitirá al reconectar"* y la referencia de la venta,
+  sin e-NCF ni QR. La existencia en pantalla descuenta lo vendido.
+- **Sincronización** (`posOffline.ts`, `usePosSinConexion.ts`): al volver la
+  conexión (evento `online` o el sondeo cada 10 s de `/api-erp/health`) o con
+  «Sincronizar ahora», la cola se envía **en orden** (la venta más antigua
+  primero, para que los e-NCF sigan el orden de las ventas) por el flujo
+  normal: `POST /facturas` con `asignar_encf` y `clave_idempotencia` →
+  `generar-xml` → `enviar` (que cae en contingencia si la DGII no responde)
+  → registrar en la caja. El progreso se guarda tras cada paso. Sin red a
+  mitad, se detiene y deja lo que falta pendiente; si el servidor rechaza
+  una venta (p. ej. secuencia agotada: *"No se pudo asignar el e-NCF: La
+  secuencia E32 está agotada…"*) esa venta queda en error con el motivo y
+  «Reintentar», y se sigue con la siguiente. Un candado de Web Locks evita
+  que dos pestañas sincronicen a la vez. Las ventas sincronizadas quedan en
+  la lista para reimprimir el ticket con el e-NCF real (y su QR) hasta el
+  cierre.
+- **Caja**: las ventas por registrar suman a la cantidad y el total de la
+  caja en pantalla; se registran en la sesión de caja al sincronizarse. El
+  **cierre está bloqueado** mientras haya ventas sin sincronizar (pendientes
+  o con error) de esa caja. Abrir y cerrar la caja requieren conexión.
+- **Sesión**: el token puede vencer sin red. Antes de sincronizar,
+  `prepararSesion` (`lib/sesion.ts`) lo renueva; si no se puede (refresh
+  token rechazado) la cola queda intacta, la aplicación pide iniciar sesión
+  y `/login` avisa cuántas ventas del POS esperan; al volver al POS se
+  sincronizan.
+
+**En el servidor:**
+
+- facturas-api: columna `facturacion.facturas.clave_idempotencia uuid` con
+  índice único parcial (`migraciones.DDL_IDEMPOTENCIA`, mismo DDL en
+  `db/init/018_pos_sin_conexion.sql`). `POST /facturas` con una clave ya
+  usada devuelve **200 con la factura existente** (201 la primera vez), sin
+  consumir otro e-NCF: un advisory lock por clave, tomado antes de bloquear
+  la secuencia, serializa los reintentos simultáneos. La misma clave con
+  otro tipo de e-CF responde 409.
+- erp-api: `POST /pos/sesiones/{id}/ventas` es idempotente para la misma
+  sesión (devuelve la venta ya registrada, también con la caja ya cerrada);
+  en otra caja, 409.
+
 ## Límites conocidos
 
 - Un timeout después de que la DGII ya recibió el e-CF lo deja en
@@ -161,3 +229,11 @@ conexión ahora" llama a `POST /contingencia/reintentar` de facturas-api.
 - Las facturas en papel no entran todavía al IT-1.
 - La notificación de la contingencia en la Oficina Virtual (solo exigida
   para la serie B) es manual.
+- POS sin conexión: la existencia sin red es la última copia menos lo
+  vendido en este equipo (no ve lo que vendan otras cajas); si al sincronizar
+  no alcanza, el envío lo rechaza por existencia y la venta queda en error.
+  El cierre se bloquea solo en el navegador que tiene la cola (otro equipo
+  podría cerrar esa caja; entonces registrar la venta responde 409 y queda
+  en error con el motivo). La cola vive en ese navegador: borrar los datos
+  del sitio antes de sincronizar pierde esas ventas. La `FechaEmision` del
+  e-CF es la del cobro.

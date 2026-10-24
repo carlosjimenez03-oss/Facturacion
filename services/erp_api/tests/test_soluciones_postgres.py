@@ -280,8 +280,10 @@ async def test_caja_venta_mixta_y_arqueo(pool):
     )
     assert v2["cliente_rnc"] == "131234567" and v2["cambio"] == D("0.00")
 
-    with pytest.raises(ConflictoSolucionesError):  # misma factura dos veces
-        await repo.registrar_venta(pool, sid, factura_id=f1, pagos=[{"metodo": "efectivo", "monto": D("1180")}])
+    # Misma factura dos veces en la misma caja (reintento del POS sin
+    # conexión): devuelve la venta ya registrada, sin duplicarla.
+    otra_vez = await repo.registrar_venta(pool, sid, factura_id=f1, pagos=[{"metodo": "efectivo", "monto": D("1500")}])
+    assert otra_vez["id"] == v1["id"] and otra_vez["cambio"] == D("320.00")
     sin_enviar = await factura(pool, "E320000000032", rnc=None, track=False, estado="generado")
     with pytest.raises(ConflictoSolucionesError):
         await repo.registrar_venta(pool, sid, factura_id=sin_enviar, pagos=[{"metodo": "efectivo", "monto": D("1180")}])
@@ -300,9 +302,17 @@ async def test_caja_venta_mixta_y_arqueo(pool):
     assert cerrada["diferencias"]["efectivo"] == D("-80.00")
     with pytest.raises(ConflictoSolucionesError):
         await repo.registrar_venta(pool, sid, factura_id=corta, pagos=[{"metodo": "efectivo", "monto": D("1180")}])
+    # El reintento de una venta ya registrada sigue respondiendo tras el cierre.
+    assert (await repo.registrar_venta(pool, sid, factura_id=f2, pagos=[]))["id"] == v2["id"]
     assert await repo.sesion_abierta(pool, "Caja principal") is None
     historial = await repo.listar_sesiones(pool)
     assert historial[0]["cantidad_ventas"] == 2 and historial[0]["diferencias"]["efectivo"] == D("-80.00")
+    # En otra caja, la misma factura no.
+    otra = await repo.abrir_sesion(pool, caja="Caja 3", fondo_inicial=D("0"), cajero=None, almacen_id=None)
+    with pytest.raises(ConflictoSolucionesError, match="otra caja"):
+        await repo.registrar_venta(
+            pool, uuid.UUID(otra["id"]), factura_id=f1, pagos=[{"metodo": "efectivo", "monto": D("1180")}]
+        )
 
 
 async def test_caja_registra_una_venta_emitida_en_contingencia(pool):

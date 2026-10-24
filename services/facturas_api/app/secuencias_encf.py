@@ -18,6 +18,14 @@ y queda una venta sin comprobante válido). Ahora:
   con `encf` vacío, la factura queda en borrador sin e-NCF, como antes.
 - Un e-NCF que manda el cliente se sigue aceptando, pero no si ya existe
   otra factura del mismo emisor con ese e-NCF (409).
+- Con `clave_idempotencia` (el UUID que el POS le pone a cada venta hecha
+  sin conexión con el servidor), la creación es idempotente: un reintento
+  con la misma clave -- p. ej. la sincronización que se cortó después de
+  crear la factura pero antes de recibir la respuesta -- no crea otra ni
+  consume otro e-NCF, sino que lanza `FacturaYaCreadaError` con la
+  existente (POST /facturas la devuelve con 200). Un advisory lock por clave
+  serializa dos reintentos simultáneos, y lo respalda el índice único
+  parcial de `clave_idempotencia` (migraciones.DDL_IDEMPOTENCIA).
 - `asegurar_indice_encf_unico` (lifespan de main.py) crea el índice único
   parcial `(rnc_emisor, encf) WHERE encf IS NOT NULL` -- solo si no hay
   duplicados previos: si los hay, lo registra en el log y sigue sin índice
@@ -50,6 +58,20 @@ CREATE UNIQUE INDEX IF NOT EXISTS {INDICE_ENCF_UNICO}
 
 class EncfNoDisponibleError(Exception):
     """No se puede asignar o usar ese e-NCF (el mensaje va al usuario, 409)."""
+
+
+class FacturaYaCreadaError(Exception):
+    """Ya existe la factura de esa clave de idempotencia (un reintento): se
+    devuelve esa en vez de crear otra."""
+
+    def __init__(self, factura: dict[str, Any]):
+        super().__init__(factura["id"])
+        self.factura = factura
+
+
+class ClaveIdempotenciaReusadaError(Exception):
+    """La clave de idempotencia ya es de una factura distinta (otro tipo de
+    e-CF): el cliente reusó una clave que no es de esta venta (409)."""
 
 
 def hoy() -> date:
@@ -167,11 +189,25 @@ async def crear_factura(
     asignar_encf: bool = False,
     items_inventario: list[dict[str, Any]] | None = None,
     vendedor_id: uuid.UUID | None = None,
+    clave_idempotencia: uuid.UUID | None = None,
     dia: date | None = None,
 ) -> dict[str, Any]:
     encf = None if asignar_encf else normalizar_encf(encf)
     async with pool.acquire() as conn:
         async with conn.transaction():
+            if clave_idempotencia is not None:
+                # Antes de bloquear la secuencia: un reintento no consume otro e-NCF.
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtext($1))", f"factura-idempotencia|{clave_idempotencia}"
+                )
+                existente = await repository.obtener_por_clave_idempotencia(_UnaConexion(conn), clave_idempotencia)
+                if existente is not None:
+                    if existente["tipo_ecf"] != tipo_ecf:
+                        raise ClaveIdempotenciaReusadaError(
+                            f"La clave de idempotencia {clave_idempotencia} ya es de otra factura "
+                            f"({existente['encf'] or existente['id']}, tipo {existente['tipo_ecf']})."
+                        )
+                    raise FacturaYaCreadaError(existente)
             if encf is None:
                 secuencia = await _secuencia_bloqueada(conn, tipo_ecf)
                 if secuencia is None and asignar_encf:
@@ -197,6 +233,7 @@ async def crear_factura(
                     datos=datos,
                     items_inventario=items_inventario,
                     vendedor_id=vendedor_id,
+                    clave_idempotencia=clave_idempotencia,
                 )
             except asyncpg.UniqueViolationError as exc:
                 raise EncfNoDisponibleError(f"El e-NCF {encf} ya está usado en otra factura.") from exc
