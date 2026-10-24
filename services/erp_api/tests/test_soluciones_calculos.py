@@ -5,7 +5,9 @@ import json
 from datetime import date
 from decimal import Decimal
 
+import httpx
 import pytest
+import respx
 
 from libs.ecf_common.auth.signing import firmar_xml
 from libs.ecf_common.environments import DGIIEnvironment
@@ -208,7 +210,7 @@ async def test_entregar_pendientes_registra_exito_y_error(monkeypatch):
         assert canales == ["correo", "whatsapp"]
         return envios
 
-    async def registrar(pool, envio_id, *, error):
+    async def registrar(pool, envio_id, *, error, definitivo=False):
         registrados[envio_id] = error
 
     async def whatsapp_ok(settings, tel, texto):
@@ -225,3 +227,65 @@ async def test_entregar_pendientes_registra_exito_y_error(monkeypatch):
     s = SolucionesSettings(smtp_host="h", smtp_remitente="r@r.do", whatsapp_token="t", whatsapp_phone_number_id="1")
     assert await soluciones_tareas.entregar_pendientes(object(), s) == {"enviados": 1, "errores": 1}
     assert registrados == {"a": None, "b": "SMTP: 550 buzón inexistente"}
+
+
+async def test_whatsapp_fuera_de_ventana_queda_requiere_plantilla_sin_reintentos(monkeypatch):
+    envios = [{"id": "a", "canal": "whatsapp", "destino": "18095550101", "mensaje": "Hola", "asunto": "x",
+               "automatizacion": "cobranza", "factura_id": None, "encf": None}]
+    registrados = {}
+
+    async def cola(pool, canales):
+        return envios
+
+    async def registrar(pool, envio_id, *, error, definitivo=False):
+        registrados[envio_id] = (error, definitivo)
+
+    monkeypatch.setattr(soluciones_tareas.repo, "envios_por_entregar", cola)
+    monkeypatch.setattr(soluciones_tareas.repo, "registrar_entrega", registrar)
+    _sin_configuracion(monkeypatch)
+    s = SolucionesSettings(whatsapp_token="t", whatsapp_phone_number_id="1")
+    with respx.mock:
+        respx.post("https://graph.facebook.com/v20.0/1/messages").mock(return_value=httpx.Response(
+            400, json={"error": {"code": 131047, "message": "Re-engagement message"}}
+        ))
+        assert await soluciones_tareas.entregar_pendientes(object(), s) == {"enviados": 0, "errores": 1}
+    error, definitivo = registrados["a"]
+    assert error.startswith("Requiere plantilla") and definitivo is True
+
+
+async def test_whatsapp_con_plantilla_manda_template_con_el_texto():
+    s = SolucionesSettings(whatsapp_token="t", whatsapp_phone_number_id="1", whatsapp_plantilla="recordatorio_kontara")
+    with respx.mock:
+        ruta = respx.post("https://graph.facebook.com/v20.0/1/messages").mock(
+            return_value=httpx.Response(200, json={"messages": [{"id": "wamid.1"}]})
+        )
+        await soluciones_canales.enviar_whatsapp(s, "18095550101", "Hola, Ana.\n\nSu factura   vence hoy.\t—Caribe")
+    cuerpo = json.loads(ruta.calls[0].request.content)
+    assert cuerpo["type"] == "template"
+    assert cuerpo["template"]["name"] == "recordatorio_kontara"
+    assert cuerpo["template"]["language"] == {"code": "es"}
+    # Meta no admite saltos de línea ni tabulaciones en un parámetro.
+    assert cuerpo["template"]["components"][0]["parameters"][0]["text"] == "Hola, Ana. · Su factura vence hoy. —Caribe"
+
+
+async def test_whatsapp_con_plantilla_un_error_se_reintenta_normal():
+    s = SolucionesSettings(whatsapp_token="t", whatsapp_phone_number_id="1", whatsapp_plantilla="recordatorio_kontara")
+    with respx.mock:
+        respx.post("https://graph.facebook.com/v20.0/1/messages").mock(return_value=httpx.Response(
+            400, json={"error": {"code": 131047, "message": "x"}}
+        ))
+        with pytest.raises(CanalError) as exc:
+            await soluciones_canales.enviar_whatsapp(s, "18095550101", "Hola")
+    assert not isinstance(exc.value, soluciones_canales.RequierePlantillaError)
+
+
+async def test_representacion_impresa_manda_la_cabecera_interna():
+    s = SolucionesSettings(kontara_token_interno="token-interno-de-prueba-con-32-caracteres!")
+    with respx.mock:
+        firmar = respx.post("http://facturas-api:8000/facturas/f1/firmar").mock(return_value=httpx.Response(200, json={}))
+        pdf = respx.get("http://facturas-api:8000/facturas/f1/representacion-impresa").mock(
+            return_value=httpx.Response(200, content=b"%PDF")
+        )
+        assert await soluciones_canales.representacion_impresa(s, "f1", firmada=False) == b"%PDF"
+    for ruta in (firmar, pdf):
+        assert ruta.calls[0].request.headers["x-kontara-interno"] == "token-interno-de-prueba-con-32-caracteres!"

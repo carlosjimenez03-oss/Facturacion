@@ -1,5 +1,7 @@
 from functools import lru_cache
 
+from pydantic import field_validator, model_validator
+
 from libs.ecf_common.settings import EcfBaseSettings, load_settings
 
 
@@ -39,6 +41,24 @@ class ErpApiSettings(EcfBaseSettings):
     supabase_url: str = "http://api-gw:8000"
     supabase_service_role_key: str = ""
     supabase_timeout_segundos: float = 10.0
+
+    # ERP_REQUIRE_AUTH: REQUIRE_AUTH propio de erp-api (None = el de
+    # REQUIRE_AUTH). El compose lo enciende solo cuando existe
+    # SUPABASE_JWT_SECRET: erp-api está en la red `supabase` (Studio...) y
+    # nadie de adentro lo llama. Quedan abiertos /health, /auth/verificar
+    # (se valida solo) y el portal público /portal/publico/* (main.py).
+    erp_require_auth: bool | None = None
+
+    @field_validator("erp_require_auth", mode="before")
+    @classmethod
+    def _vacio_es_none(cls, valor):
+        return None if isinstance(valor, str) and not valor.strip() else valor
+
+    @model_validator(mode="after")
+    def _aplicar_erp_require_auth(self):
+        if self.erp_require_auth is not None:
+            self.require_auth = self.erp_require_auth
+        return self
 
     # facturas-api por la red interna: el envío automático por correo le pide
     # el PDF de cada factura aceptada. Cada cuántos segundos corre esa tarea

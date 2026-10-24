@@ -18,6 +18,7 @@
 .aviso-auth b{font-weight:650}
 .aviso-auth code{font-size:12px}
 .aviso-auth .btn{margin-left:auto}
+.aviso-auth-rojo{background:#FEF2F2;border-bottom-color:#FECACA;color:#991B1B}
 
 /* --- Configuración --- */
 .cfg{display:flex;flex-wrap:wrap;gap:24px;align-items:flex-start}

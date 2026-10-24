@@ -1,6 +1,7 @@
 """Plataforma (fase 6) de erp-api: GET /auth/verificar (auth_request de
 nginx), usuarios de Supabase Auth (API admin de GoTrue, mockeada con respx)
 y GET /estado-servicios (healthchecks mockeados)."""
+import json
 import time
 
 import httpx
@@ -9,8 +10,8 @@ import pytest
 import respx
 from fastapi.testclient import TestClient
 
-from services.erp_api.app import estado_servicios, main
-from services.erp_api.app.config import get_settings
+from services.erp_api.app import estado_servicios, main, plataforma
+from services.erp_api.app.config import ErpApiSettings, get_settings
 
 SECRETO = "super-secret-jwt-token-with-at-least-32-characters-long"
 SERVICE_KEY = "service-role-key-de-prueba"
@@ -21,9 +22,12 @@ OTRO = "22222222-2222-2222-2222-222222222222"
 
 def token(secreto: str = SECRETO, **cambios) -> str:
     claims = {"sub": YO, "email": "yo@empresa.do", "aud": "authenticated", "role": "authenticated",
-              "exp": int(time.time()) + 3600}
+              "exp": int(time.time()) + 3600, "app_metadata": {"provider": "email", "kontara": True}}
     claims.update(cambios)
-    return jwt.encode(claims, secreto, algorithm="HS256")
+    return jwt.encode({k: v for k, v in claims.items() if v is not None}, secreto, algorithm="HS256")
+
+
+PDF = "/api/facturas/0b6d2f0e-1c3a-4c1e-9a55-1f0f3c2d4e5f/representacion-impresa"
 
 
 @pytest.fixture
@@ -41,6 +45,8 @@ def client(monkeypatch):
     monkeypatch.setattr(s, "supabase_jwt_secret", SECRETO)
     monkeypatch.setattr(s, "supabase_url", GW)
     monkeypatch.setattr(s, "supabase_service_role_key", SERVICE_KEY)
+    monkeypatch.setattr(s, "kontara_admin_emails", "")
+    plataforma._MARCADOS.clear()
     with TestClient(main.app) as c:
         yield c
 
@@ -78,9 +84,82 @@ def test_verificar_con_bearer_valido_204(client):
     assert r.headers["cache-control"] == "no-store"
 
 
-def test_verificar_con_cookie_valida_204(client):
+def test_verificar_cookie_solo_en_descargas_get(client):
+    """nginx manda el método y la ruta originales (X-Original-*): la cookie
+    vale para abrir el PDF/XML, nunca para un POST (CSRF) ni otras rutas."""
     client.cookies.set("kontara_sesion", token())
-    assert client.get("/auth/verificar").status_code == 204
+    descarga = {"X-Original-Method": "GET", "X-Original-URI": PDF}
+    assert client.get("/auth/verificar", headers=descarga).status_code == 204
+    xml = {"X-Original-Method": "GET", "X-Original-URI": "/api-erp/compras/bandeja/0b6d2f0e-1c3a-4c1e-9a55-1f0f3c2d4e5f/xml"}
+    assert client.get("/auth/verificar", headers=xml).status_code == 204
+    assert client.get("/auth/verificar", headers={**descarga, "X-Original-Method": "POST"}).status_code == 401
+    otra = {"X-Original-Method": "GET", "X-Original-URI": "/api-erp/configuracion/usuarios"}
+    assert client.get("/auth/verificar", headers=otra).status_code == 401
+    # Sin cabeceras de nginx (llamada directa): tampoco.
+    assert client.get("/auth/verificar").status_code == 401
+    # Con Authorization, cualquier método.
+    post = {"X-Original-Method": "POST", "X-Original-URI": "/api/facturas", "Authorization": f"Bearer {token()}"}
+    assert client.get("/auth/verificar", headers=post).status_code == 204
+
+
+def test_verificar_usuario_sin_acceso_a_kontara_401(client):
+    r = client.get("/auth/verificar", headers={"Authorization": f"Bearer {token(app_metadata={'provider': 'email'})}"})
+    assert r.status_code == 401
+    assert "no tiene acceso a Kontara" in r.json()["detail"]
+    anonimo = token(is_anonymous=True)
+    assert client.get("/auth/verificar", headers={"Authorization": f"Bearer {anonimo}"}).status_code == 401
+
+
+@respx.mock
+def test_verificar_admin_por_correo_entra_y_se_marca_una_vez(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "kontara_admin_emails", "Yo@Empresa.do")
+    marca = respx.put(f"{GW}/auth/v1/admin/users/{YO}").mock(
+        return_value=httpx.Response(200, json={"id": YO, "email": "yo@empresa.do",
+                                               "app_metadata": {"kontara": True, "kontara_admin": True}})
+    )
+    sin_marca = token(app_metadata={"provider": "email"})
+    for _ in range(3):
+        assert client.get("/auth/verificar", headers={"Authorization": f"Bearer {sin_marca}"}).status_code == 204
+    assert marca.call_count == 1
+    assert json.loads(marca.calls[0].request.content) == {"app_metadata": {"kontara": True, "kontara_admin": True}}
+
+
+@respx.mock
+def test_verificar_admin_por_correo_si_gotrue_falla_reintenta(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "kontara_admin_emails", "yo@empresa.do")
+    marca = respx.put(f"{GW}/auth/v1/admin/users/{YO}").mock(return_value=httpx.Response(500, json={"msg": "caído"}))
+    sin_marca = token(app_metadata=None)
+    assert client.get("/auth/verificar", headers={"Authorization": f"Bearer {sin_marca}"}).status_code == 204
+    assert client.get("/auth/verificar", headers={"Authorization": f"Bearer {sin_marca}"}).status_code == 204
+    assert marca.call_count == 2
+
+
+def test_verificar_sesion_cerrada_401(client, monkeypatch):
+    async def cerrada(pool, usuario):
+        return False
+
+    monkeypatch.setattr(plataforma.REVOCACION, "vigente", cerrada)
+    r = client.get("/auth/verificar", headers={"Authorization": f"Bearer {token(session_id='x')}"})
+    assert r.status_code == 401 and "cerró" in r.json()["detail"]
+
+
+@pytest.mark.parametrize(
+    ("entorno", "esperado"),
+    [
+        ({}, False),
+        ({"ERP_REQUIRE_AUTH": ""}, False),
+        ({"ERP_REQUIRE_AUTH": "true"}, True),
+        ({"REQUIRE_AUTH": "true"}, True),
+        ({"REQUIRE_AUTH": "true", "ERP_REQUIRE_AUTH": "false"}, False),
+        ({"REQUIRE_AUTH": "false", "ERP_REQUIRE_AUTH": "true"}, True),
+    ],
+)
+def test_erp_require_auth(monkeypatch, entorno, esperado):
+    monkeypatch.delenv("REQUIRE_AUTH", raising=False)
+    monkeypatch.delenv("ERP_REQUIRE_AUTH", raising=False)
+    for clave, valor in entorno.items():
+        monkeypatch.setenv(clave, valor)
+    assert ErpApiSettings().require_auth is esperado
 
 
 @pytest.mark.parametrize(
@@ -98,17 +177,20 @@ def test_verificar_tokens_invalidos_401(client, malo):
 
 
 def test_verificar_sin_secreto_falla_cerrado(client, monkeypatch):
+    # 503 (no 401): nginx no deja pasar nada y el frontend lo muestra en rojo.
     monkeypatch.setattr(get_settings(), "supabase_jwt_secret", "")
     r = client.get("/auth/verificar", headers={"Authorization": f"Bearer {token()}"})
-    assert r.status_code == 401
+    assert r.status_code == 503
     assert "SUPABASE_JWT_SECRET" in r.json()["detail"]
+    assert client.get("/auth/verificar").status_code == 503
 
 
 # --- Usuarios (GoTrue admin) ---------------------------------------------------------
 
 def _gotrue_user(id_=OTRO, email="ana@empresa.do", **cambios) -> dict:
     u = {"id": id_, "email": email, "created_at": "2026-10-01T12:00:00Z", "last_sign_in_at": None,
-         "email_confirmed_at": "2026-10-01T12:00:00Z", "banned_until": None, "invited_at": None}
+         "email_confirmed_at": "2026-10-01T12:00:00Z", "banned_until": None, "invited_at": None,
+         "app_metadata": {"provider": "email", "kontara": True}}
     u.update(cambios)
     return u
 
@@ -118,14 +200,18 @@ def test_listar_usuarios(client):
     ruta = respx.get(f"{GW}/auth/v1/admin/users").mock(
         return_value=httpx.Response(200, json={"users": [
             _gotrue_user(), _gotrue_user(YO, "yo@empresa.do", banned_until="2126-01-01T00:00:00Z"),
+            _gotrue_user("33333333-3333-3333-3333-333333333333", "ajeno@otra.do", app_metadata={"provider": "email"}),
         ]})
     )
     r = client.get("/configuracion/usuarios")
     assert r.status_code == 200
     cuerpo = r.json()
     assert cuerpo["configurado"] is True
+    # Solo los de Kontara; los demás del mismo GoTrue, aparte y "sin acceso".
     assert [u["correo"] for u in cuerpo["usuarios"]] == ["ana@empresa.do", "yo@empresa.do"]
     assert cuerpo["usuarios"][1]["activo"] is False
+    assert all(u["acceso"] for u in cuerpo["usuarios"])
+    assert [(u["correo"], u["acceso"]) for u in cuerpo["sin_acceso"]] == [("ajeno@otra.do", False)]
     enviado = ruta.calls[0].request
     assert enviado.headers["apikey"] == SERVICE_KEY
     assert enviado.headers["authorization"] == f"Bearer {SERVICE_KEY}"
@@ -146,21 +232,45 @@ def test_crear_usuario_con_contrasena(client):
     ruta = respx.post(f"{GW}/auth/v1/admin/users").mock(return_value=httpx.Response(200, json=_gotrue_user()))
     r = client.post("/configuracion/usuarios", json={"correo": "Ana@Empresa.do", "contrasena": "clave-segura-1"})
     assert r.status_code == 201
-    import json
     assert json.loads(ruta.calls[0].request.content) == {
         "email": "ana@empresa.do", "password": "clave-segura-1", "email_confirm": True,
+        "app_metadata": {"kontara": True},
     }
+    assert r.json()["acceso"] is True
 
 
 @respx.mock
 def test_invitar_usuario_sin_contrasena(client):
-    ruta = respx.post(f"{GW}/auth/v1/invite").mock(
-        return_value=httpx.Response(200, json=_gotrue_user(invited_at="2026-10-24T00:00:00Z", email_confirmed_at=None))
+    invitado = _gotrue_user(invited_at="2026-10-24T00:00:00Z", email_confirmed_at=None, app_metadata={"provider": "email"})
+    ruta = respx.post(f"{GW}/auth/v1/invite").mock(return_value=httpx.Response(200, json=invitado))
+    # /invite no recibe app_metadata: la marca se pone justo después.
+    marca = respx.put(f"{GW}/auth/v1/admin/users/{OTRO}").mock(
+        return_value=httpx.Response(200, json={**invitado, "app_metadata": {"provider": "email", "kontara": True}})
     )
     r = client.post("/configuracion/usuarios", json={"correo": "ana@empresa.do"})
     assert r.status_code == 201
-    assert r.json()["invitado"] is True
+    assert r.json()["invitado"] is True and r.json()["acceso"] is True
     assert ruta.called
+    assert json.loads(marca.calls[0].request.content) == {"app_metadata": {"kontara": True}}
+
+
+@respx.mock
+def test_dar_acceso_a_usuario_existente(client):
+    marca = respx.put(f"{GW}/auth/v1/admin/users/{OTRO}").mock(return_value=httpx.Response(200, json=_gotrue_user()))
+    r = client.post(f"/configuracion/usuarios/{OTRO}/acceso")
+    assert r.status_code == 200 and r.json()["acceso"] is True
+    assert json.loads(marca.calls[0].request.content) == {"app_metadata": {"kontara": True}}
+
+
+@respx.mock
+def test_no_se_activa_ni_desactiva_a_quien_no_es_de_kontara(client):
+    respx.get(f"{GW}/auth/v1/admin/users/{OTRO}").mock(
+        return_value=httpx.Response(200, json=_gotrue_user(app_metadata={"provider": "email"}))
+    )
+    cambio = respx.put(f"{GW}/auth/v1/admin/users/{OTRO}")
+    assert client.post(f"/configuracion/usuarios/{OTRO}/activar").status_code == 404
+    assert client.post(f"/configuracion/usuarios/{OTRO}/desactivar").status_code == 404
+    assert not cambio.called
 
 
 @respx.mock
@@ -175,6 +285,7 @@ def test_error_de_gotrue_se_traduce(client):
 
 @respx.mock
 def test_desactivar_y_activar_usuario(client):
+    respx.get(f"{GW}/auth/v1/admin/users/{OTRO}").mock(return_value=httpx.Response(200, json=_gotrue_user()))
     ruta = respx.put(f"{GW}/auth/v1/admin/users/{OTRO}").mock(
         return_value=httpx.Response(200, json=_gotrue_user(banned_until="2126-01-01T00:00:00Z"))
     )

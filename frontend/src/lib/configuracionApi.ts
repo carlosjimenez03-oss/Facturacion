@@ -110,11 +110,17 @@ export interface Usuario {
   confirmado: boolean;
   activo: boolean;
   invitado: boolean;
+  /** app_metadata.kontara: puede entrar a Kontara. */
+  acceso: boolean;
+  admin: boolean;
 }
 
 export interface Usuarios {
   configurado: boolean;
+  /** Solo los que tienen acceso a Kontara. */
   usuarios: Usuario[];
+  /** Los demás usuarios del mismo Supabase Auth (no pueden entrar). */
+  sin_acceso: Usuario[];
   mensaje: string | null;
 }
 
@@ -158,6 +164,9 @@ export interface WhatsappConfig {
   plantilla: string;
   idioma: string;
   envio_automatico: boolean;
+  /** Plantilla aprobada en Meta (cuerpo con {{1}}) para los mensajes de Kontara Ventas; vacía = texto libre (solo 24 h). */
+  plantilla_mensajes: string;
+  idioma_mensajes: string;
   token_configurado: boolean;
   conectado: boolean;
 }
@@ -214,6 +223,7 @@ export const configuracionApi = {
     request<Usuario>("/configuracion/usuarios", json("POST", { correo, contrasena: contrasena || null })),
   desactivarUsuario: (id: string) => request<Usuario>(`/configuracion/usuarios/${id}/desactivar`, { method: "POST" }),
   activarUsuario: (id: string) => request<Usuario>(`/configuracion/usuarios/${id}/activar`, { method: "POST" }),
+  darAccesoUsuario: (id: string) => request<Usuario>(`/configuracion/usuarios/${id}/acceso`, { method: "POST" }),
 
   inventario: () => request<{ metodo: "promedio" | "peps" }>("/configuracion/inventario"),
   guardarInventario: (metodo: "promedio" | "peps") => request<{ metodo: string }>("/configuracion/inventario", json("PUT", { metodo })),

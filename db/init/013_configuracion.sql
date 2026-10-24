@@ -74,12 +74,14 @@ CREATE TABLE IF NOT EXISTS configuracion.preferencias (
 );
 
 -- Envíos automáticos de comprobantes al cliente (uno por canal y factura).
+-- Se reclaman antes de enviar ('pendiente'); un error se reintenta hasta
+-- `intentos` = 5 a partir de `proximo_intento` (configuracion_envio.py).
 CREATE TABLE IF NOT EXISTS configuracion.envios (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     canal       text NOT NULL CHECK (canal IN ('correo', 'whatsapp')),
     factura_id  uuid,              -- facturacion.facturas.id (sin FK); NULL = envío de prueba
     destino     text NOT NULL,
-    estado      text NOT NULL CHECK (estado IN ('enviado', 'error')),
+    estado      text NOT NULL CHECK (estado IN ('pendiente', 'enviado', 'error')),
     error       text,
     enviado_en  timestamptz NOT NULL DEFAULT now()
 );
@@ -87,6 +89,22 @@ CREATE TABLE IF NOT EXISTS configuracion.envios (
 CREATE UNIQUE INDEX IF NOT EXISTS envios_canal_factura_idx ON configuracion.envios (canal, factura_id)
     WHERE factura_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS envios_enviado_en_idx ON configuracion.envios (enviado_en DESC);
+
+ALTER TABLE configuracion.envios ADD COLUMN IF NOT EXISTS intentos integer NOT NULL DEFAULT 1;
+ALTER TABLE configuracion.envios ADD COLUMN IF NOT EXISTS proximo_intento timestamptz;
+-- Bases creadas antes: el CHECK de `estado` no tenía 'pendiente'.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conrelid = 'configuracion.envios'::regclass AND conname = 'envios_estado_check'
+          AND pg_get_constraintdef(oid) LIKE '%pendiente%'
+    ) THEN
+        ALTER TABLE configuracion.envios DROP CONSTRAINT IF EXISTS envios_estado_check;
+        ALTER TABLE configuracion.envios ADD CONSTRAINT envios_estado_check
+            CHECK (estado IN ('pendiente', 'enviado', 'error'));
+    END IF;
+END $$;
 
 -- facturas_api: DDL_FACTURAS
 -- Vendedor de la factura (configuracion.vendedores de erp_api, sin FK):

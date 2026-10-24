@@ -285,6 +285,47 @@ def test_prestaciones_mas_de_cinco_anios_y_renuncia():
         calc.prestaciones(D("47660"), date(2026, 6, 1), date(2026, 5, 1), P2026)
 
 
+@pytest.mark.parametrize(
+    ("ingreso", "salida", "dias"),
+    [
+        (date(2026, 8, 1), date(2026, 10, 31), "0"),  # 2 meses y 30 días: menos de 3 meses
+        (date(2026, 7, 1), date(2026, 10, 1), "6"),  # 3 meses (ordinal 1o)
+        (date(2026, 4, 1), date(2026, 9, 30), "6"),  # 5 meses y 29 días
+        (date(2026, 4, 1), date(2026, 10, 1), "13"),  # 6 meses (ordinal 2o)
+        (date(2025, 10, 2), date(2026, 10, 1), "13"),  # 11 meses y 29 días
+        (date(2025, 10, 1), date(2026, 10, 1), "21.00"),  # 1 año
+        # 14 meses: la fracción (2 meses) no pasa de 3 meses -> solo el año.
+        (date(2025, 8, 1), date(2026, 10, 1), "21.00"),
+        # 15 meses exactos: la fracción es 3 meses, no "mayor de tres meses".
+        (date(2025, 7, 1), date(2026, 10, 1), "21.00"),
+        # 15 meses y 1 día: fracción mayor de 3 meses -> + 6 días.
+        (date(2025, 7, 1), date(2026, 10, 2), "27.00"),
+        # 16 meses: + 6 días (no 21 × 16/12 = 28).
+        (date(2025, 6, 1), date(2026, 10, 1), "27.00"),
+        # 18 meses: fracción de 6 meses -> + 13 días.
+        (date(2025, 4, 1), date(2026, 10, 1), "34.00"),
+        (date(2024, 11, 1), date(2026, 10, 1), "34.00"),  # 23 meses
+        (date(2021, 6, 1), date(2026, 10, 1), "121.00"),  # 5 años y 4 meses: 23 × 5 + 6
+        (date(2016, 1, 1), date(2026, 10, 1), "243.00"),  # 10 años y 9 meses: 23 × 10 + 13
+    ],
+)
+def test_cesantia_articulo_80_fraccion_de_anio(ingreso, salida, dias):
+    """Código de Trabajo, art. 80: la fracción de año MAYOR de tres meses se
+    paga según los ordinales 1o (6 días) y 2o (13 días), no en proporción."""
+    assert calc.prestaciones(D("47660"), ingreso, salida, P2026).dias_cesantia == D(dias)
+
+
+def test_cesantia_dias_extra_al_fin_de_mes():
+    def extra(ingreso, salida):
+        return calc._dias_extra(ingreso, salida, calc.meses_servicio(ingreso, salida))
+
+    # Ingreso el 31: el "aniversario" de febrero es el 28 (no se pasa de mes).
+    assert extra(date(2025, 10, 31), date(2026, 2, 28)) == 28  # 3 meses (31/1) + 28 días
+    assert extra(date(2025, 10, 31), date(2026, 3, 1)) == 1  # 4 meses (28/2) + 1 día
+    assert extra(date(2025, 7, 1), date(2026, 10, 2)) == 1
+    assert extra(date(2025, 7, 1), date(2026, 10, 1)) == 0
+
+
 def test_cedula_valida():
     assert calc.cedula_valida("00113918205")
     assert not calc.cedula_valida("00113918204")

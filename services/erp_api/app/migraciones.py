@@ -939,6 +939,14 @@ CREATE TABLE IF NOT EXISTS soluciones.portal_enlaces (
 
 CREATE INDEX IF NOT EXISTS portal_enlaces_cliente_idx ON soluciones.portal_enlaces (cliente_id);
 
+-- RNC/cédula del cliente AL CREAR el enlace: el portal muestra las facturas
+-- de esa identificación aunque luego se edite el RNC del contacto. Los
+-- enlaces anteriores toman el RNC actual del cliente (una sola vez).
+ALTER TABLE soluciones.portal_enlaces ADD COLUMN IF NOT EXISTS rnc text;
+UPDATE soluciones.portal_enlaces e SET rnc = c.rnc
+FROM ventas.clientes c
+WHERE c.id = e.cliente_id AND e.rnc IS NULL AND c.rnc IS NOT NULL;
+
 -- Datos para pagar por transferencia que ve el cliente en el portal (una
 -- sola fila, id = 1).
 CREATE TABLE IF NOT EXISTS soluciones.portal_config (

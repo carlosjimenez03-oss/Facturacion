@@ -8,6 +8,7 @@ import {
   type EmpresaPayload,
   type EnvioConfig,
   type Secuencia,
+  type Usuario,
   type Usuarios,
   type Vendedor,
 } from "../../lib/configuracionApi";
@@ -298,7 +299,7 @@ export function SeccionCertificado({ refSeccion, avisar }: { refSeccion: RefSecc
           {cert && !cert.carga_disponible && (
             <div className="al al-w">
               <span>
-                Para cargar certificados desde aquí falta configurar <code>CERTIFICADOS_CLAVE</code> en Dokploy (ver <code>docs/AUTH.md</code>).
+                Para cargar certificados desde aquí falta configurar <code>CERTIFICADOS_CLAVE</code> (32 caracteres o más) en Dokploy (ver <code>docs/AUTH.md</code>).
               </span>
             </div>
           )}
@@ -618,7 +619,7 @@ export function SeccionEnvio({ refSeccion, avisar, empresa }: { refSeccion: RefS
   const [cfg, setCfg] = useState<EnvioConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [correo, setCorreo] = useState({ host: "", puerto: 587, seguridad: "starttls" as "starttls" | "ssl" | "ninguna", usuario: "", contrasena: "", remitente: "", cco: "", adjuntar_xml: true, envio_automatico: false });
-  const [wa, setWa] = useState({ phone_number_id: "", numero: "", token: "", plantilla: "hello_world", idioma: "en_US", envio_automatico: false });
+  const [wa, setWa] = useState({ phone_number_id: "", numero: "", token: "", plantilla: "hello_world", idioma: "en_US", envio_automatico: false, plantilla_mensajes: "", idioma_mensajes: "es" });
   const [pruebaWa, setPruebaWa] = useState("");
   const [ocupado, setOcupado] = useState("");
 
@@ -670,7 +671,7 @@ export function SeccionEnvio({ refSeccion, avisar, empresa }: { refSeccion: RefS
       {cfg && !cfg.cifrado_disponible && (
         <div className="al al-w" style={{ margin: "16px 16px 0" }}>
           <span>
-            Para guardar la contraseña SMTP y el token de WhatsApp configure <code>CERTIFICADOS_CLAVE</code> en Dokploy (se guardan cifrados).
+            Para guardar la contraseña SMTP y el token de WhatsApp configure <code>CERTIFICADOS_CLAVE</code> (32 caracteres o más) en Dokploy (se guardan cifrados).
           </span>
         </div>
       )}
@@ -697,6 +698,25 @@ export function SeccionEnvio({ refSeccion, avisar, empresa }: { refSeccion: RefS
                   El envío automático por WhatsApp necesita una plantilla con documento aprobada por Meta; mientras tanto solo se envía por correo.
                 </span>
               )}
+              <div className="fld">
+                <label className="lbl" htmlFor="wa-plantilla">Plantilla para mensajes (Kontara Ventas)</label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    id="wa-plantilla"
+                    className="inp mono"
+                    value={wa.plantilla_mensajes}
+                    onChange={(e) => setWa({ ...wa, plantilla_mensajes: e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "") })}
+                    placeholder="recordatorio_kontara"
+                  />
+                  <button type="button" className="btn btn-o btn-sm" disabled={ocupado === "wa"} onClick={() => void guardarWa()}>
+                    Guardar
+                  </button>
+                </div>
+                <span className="hint">
+                  Plantilla aprobada en Meta con un parámetro {"{{1}}"} en el cuerpo: lleva el texto de cada recordatorio. Sin ella, Meta solo entrega
+                  los mensajes dentro de las 24 h de conversación con el cliente; los demás quedan «Requiere plantilla» para enviarlos a mano.
+                </span>
+              </div>
               <div className="wa-msg">
                 Hola. Le compartimos su factura <b>E310000000131</b> por RD$ 1,284,560.00. PDF adjunto. — {nombre}
               </div>
@@ -992,6 +1012,16 @@ export function SeccionUsuarios({ refSeccion, avisar }: { refSeccion: RefSeccion
     }
   }
 
+  async function darAcceso(u: Usuario) {
+    try {
+      await configuracionApi.darAccesoUsuario(u.id);
+      await cargar();
+      avisar(`${u.correo} ya tiene acceso`, { detalle: "Entra desde su próximo inicio de sesión." });
+    } catch (err) {
+      avisar("No se pudo dar acceso", { detalle: mensajeError(err), error: true });
+    }
+  }
+
   return (
     <Tarjeta
       id="usuarios"
@@ -1019,6 +1049,10 @@ export function SeccionUsuarios({ refSeccion, avisar }: { refSeccion: RefSeccion
             <li>Abra Supabase Studio (por ejemplo <code>https://supa.acentosdeco.lat</code>).</li>
             <li>
               <b>Authentication → Users → Add user → Create new user</b>: correo y contraseña, con <i>Auto Confirm User</i> marcado.
+            </li>
+            <li>
+              Dele acceso a Kontara: en el usuario → <b>Edit raw app_metadata</b>, agregue <code>"kontara": true</code> (o ponga su correo en{" "}
+              <code>KONTARA_ADMIN_EMAILS</code>, ver <code>docs/AUTH.md</code>).
             </li>
             <li>Para quitar el acceso: en la misma lista, menú del usuario → <b>Ban user</b> (o <b>Delete user</b>).</li>
           </ol>
@@ -1085,6 +1119,33 @@ export function SeccionUsuarios({ refSeccion, avisar }: { refSeccion: RefSeccion
         </div>
       )}
       {datos?.configurado && datos.usuarios.length === 0 && <p className="pad mut">No hay usuarios.</p>}
+      {datos?.configurado && datos.sin_acceso.length > 0 && (
+        <div className="card-b stack-sm" style={{ borderTop: "1px solid #E5E7EB" }}>
+          <span className="hint">
+            <b>Sin acceso a Kontara</b> ({datos.sin_acceso.length}): existen en Supabase Auth pero no pueden entrar a la aplicación hasta que les dé
+            acceso.
+          </span>
+          <div className="tw">
+            <table className="tbl" style={{ minWidth: 520 }}>
+              <tbody>
+                {datos.sin_acceso.map((u) => (
+                  <tr key={u.id}>
+                    <td className="mut">{u.correo}</td>
+                    <td>
+                      <span className="bd b-borr nodot">Sin acceso</span>
+                    </td>
+                    <td className="right">
+                      <button type="button" className="btn btn-g btn-sm" onClick={() => void darAcceso(u)}>
+                        Dar acceso
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </Tarjeta>
   );
 }

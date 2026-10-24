@@ -12,6 +12,7 @@ import { useNavigate } from "react-router-dom";
 import { IconPos } from "../../layout/icons";
 import { api } from "../../lib/api";
 import { configuracionApi, publicarEmpresa } from "../../lib/configuracionApi";
+import type { Secuencia } from "../../lib/configuracionApi";
 import { construirDatos, construirItemsInventario, desglose, siguienteEncf } from "../../lib/buildDatos";
 import { erpApi } from "../../lib/erpApi";
 import { inventarioApi } from "../../lib/inventarioApi";
@@ -51,8 +52,19 @@ const n2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 /** Venta a medio emitir (falló un paso): se reintenta sin crear otro e-CF. */
 interface VentaPendiente {
   facturaId: string;
+  /** El XML se generó y validó contra el XSD: el reintento no lo envía sin esto. */
+  xmlValido: boolean;
   enviada: boolean;
   ticket: DatosTicket;
+}
+
+/** Secuencia que no deja emitir (igual que `secuenciaBloquea` de Nueva factura). */
+function secuenciaBloqueada(s: Secuencia | undefined): string | null {
+  if (!s?.configurada) return null;
+  if (s.estado === "inactiva") return `La secuencia ${s.prefijo} está desactivada: actívela en Configuración → Secuencias autorizadas.`;
+  if (s.estado === "vencida") return `La secuencia ${s.prefijo} está vencida: registre la nueva en Configuración → Secuencias autorizadas.`;
+  if (s.estado === "agotada") return `La secuencia ${s.prefijo} está agotada: registre una nueva en Configuración → Secuencias autorizadas.`;
+  return null;
 }
 
 function Promo({ onProbar, onSeguir }: { onProbar: () => void; onSeguir: () => void }) {
@@ -138,6 +150,7 @@ export function PosPage() {
   const [config, setConfig] = useState(false);
   const [emisor, setEmisor] = useState<DatosEmisor>(leerEmisor);
   const [vence, setVence] = useState({ "31": leerVencimientoSecuencia("31"), "32": "" });
+  const [secuencias, setSecuencias] = useState<Secuencia[]>([]);
   const [cerrar, setCerrar] = useState(false);
   const [contado, setContado] = useState<MontosPorMetodo>({ efectivo: "", tarjeta: "", transferencia: "" });
   const [notasCierre, setNotasCierre] = useState("");
@@ -180,6 +193,7 @@ export function PosPage() {
     configuracionApi
       .secuencias()
       .then((l) => {
+        setSecuencias(l);
         const e31 = l.find((x) => x.tipo_ecf === 31 && x.configurada);
         if (e31?.fecha_vencimiento) setVence((v) => ({ ...v, "31": e31.fecha_vencimiento ?? v["31"] }));
       })
@@ -297,6 +311,8 @@ export function PosPage() {
 
   function problemaVenta(): string | null {
     if (carrito.length === 0) return "Agregue al menos un producto.";
+    const bloqueo = secuenciaBloqueada(secuencias.find((s) => String(s.tipo_ecf) === tipoEcf));
+    if (bloqueo) return bloqueo;
     if (!emisor.rnc || !emisor.razonSocial || !emisor.direccion) return "Complete los datos del emisor en «Configurar caja».";
     if (configParaTipo(tipoEcf).requiereFechaVencimientoSecuencia && !vence[tipoEcf])
       return `Indique hasta cuándo está autorizada la secuencia E${tipoEcf} en «Configurar caja».`;
@@ -349,17 +365,19 @@ export function PosPage() {
     try {
       if (!actual) {
         setProcesando("Generando el e-CF…");
-        // Siguiente e-NCF: el de la secuencia de Configuración si va por delante de los ya usados.
-        const [facturas, secuencias] = await Promise.all([
-          api.listar({ tipo_ecf: Number(tipoEcf) }),
-          configuracionApi.secuencias().catch(() => []),
-        ]);
-        const local = siguienteEncf(facturas, tipoEcf);
-        const deSecuencia = secuencias.find((x) => String(x.tipo_ecf) === tipoEcf && x.configurada)?.siguiente_encf;
-        const encf = deSecuencia && deSecuencia > local ? deSecuencia : local;
+        // Con la secuencia registrada en Configuración el e-NCF lo asigna el
+        // servidor al crear (sin duplicados entre cajas); se vuelve a mirar
+        // su estado por si cambió desde que se abrió la caja.
+        const lista = await configuracionApi.secuencias().catch(() => secuencias);
+        setSecuencias(lista);
+        const secuencia = lista.find((x) => String(x.tipo_ecf) === tipoEcf && x.configurada);
+        const bloqueo = secuenciaBloqueada(secuencia);
+        if (bloqueo) throw new Error(bloqueo);
+        // Sin secuencia registrada: el mayor ya usado de este tipo + 1 (el servidor rechaza un duplicado).
+        const encfLocal = secuencia ? "" : siguienteEncf(await api.listar({ tipo_ecf: Number(tipoEcf) }), tipoEcf);
         const form = formularioVenta({
           tipoEcf,
-          encf,
+          encf: encfLocal,
           vencimientoSecuencia: vence[tipoEcf],
           emisor,
           cliente,
@@ -371,12 +389,15 @@ export function PosPage() {
         const datos = construirDatos(form, configParaTipo(tipoEcf));
         const creada = await api.crear({
           tipo_ecf: Number(tipoEcf),
-          encf,
+          encf: secuencia ? null : encfLocal,
+          asignar_encf: Boolean(secuencia),
           datos,
           items_inventario: construirItemsInventario(form.items, almacenCaja),
         });
+        const encf = creada.encf ?? encfLocal;
         actual = {
           facturaId: creada.id,
+          xmlValido: false,
           enviada: false,
           ticket: {
             facturaId: creada.id,
@@ -395,11 +416,18 @@ export function PosPage() {
           },
         };
         setPendiente(actual);
-        const xml = await api.generarXml(creada.id);
+      }
+      // También en el reintento: nunca se envía un e-CF cuyo XML no pasó el XSD
+      // (p. ej. si la red falló justo al generarlo).
+      if (!actual.enviada && !actual.xmlValido) {
+        setProcesando("Validando el e-CF…");
+        const xml = await api.generarXml(actual.facturaId);
         if (xml.errores.length > 0) {
           setErroresXml(xml.errores);
           throw new Error("La DGII no aceptaría este comprobante. Corrija lo indicado o cancele la venta.");
         }
+        actual = { ...actual, xmlValido: true };
+        setPendiente(actual);
       }
       if (!actual.enviada) {
         setProcesando("Enviando a la DGII…");

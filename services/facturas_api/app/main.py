@@ -45,7 +45,7 @@ from libs.ecf_common.compras606 import fecha_dgii_a_aaaammdd, registrar_compra_6
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
 from libs.ecf_common.xml_tools import nombre_archivo_ecf
 
-from . import estado_dgii, inventario_client, repository
+from . import estado_dgii, inventario_client, repository, secuencias_encf
 from .certificado import estado_certificado
 from .config import FacturasApiSettings, get_settings
 from .consulta_resultado_client import ConsultaResultadoError
@@ -108,6 +108,8 @@ async def lifespan(app: FastAPI):
         await aplicar_migraciones(pool)
     except Exception:
         logger.exception("No se pudieron aplicar las migraciones de facturacion.facturas")
+    # Índice único (rnc_emisor, encf): solo si no hay duplicados (nunca falla).
+    await secuencias_encf.asegurar_indice_encf_unico(pool)
 
     # Tarea de fondo que lleva a 'aceptado'/'rechazado' las facturas que
     # siguen en 'enviado' (ver app.estado_dgii). Con 0 queda desactivada --
@@ -172,16 +174,22 @@ async def crear_factura(payload: FacturaCrear, settings: FacturasApiSettings = D
             status_code=422,
             detail=f"tipo_ecf debe ser uno de {sorted(TIPOS_SOPORTADOS)}",
         )
-    factura = await repository.crear_factura(
-        _pool(),
-        tipo_ecf=payload.tipo_ecf,
-        ambiente=settings.app_env,
-        rnc_emisor=settings.emisor_rnc,
-        encf=payload.encf,
-        datos=payload.datos,
-        items_inventario=[item.model_dump() for item in payload.items_inventario or []] or None,
-        vendedor_id=payload.vendedor_id,
-    )
+    # El e-NCF lo asigna el servidor (secuencia bloqueada, sin duplicados):
+    # ver app/secuencias_encf.py.
+    try:
+        factura = await secuencias_encf.crear_factura(
+            _pool(),
+            tipo_ecf=payload.tipo_ecf,
+            ambiente=settings.app_env,
+            rnc_emisor=settings.emisor_rnc,
+            encf=payload.encf,
+            asignar_encf=payload.asignar_encf,
+            datos=payload.datos,
+            items_inventario=[item.model_dump() for item in payload.items_inventario or []] or None,
+            vendedor_id=payload.vendedor_id,
+        )
+    except secuencias_encf.EncfNoDisponibleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return factura
 
 
@@ -214,6 +222,10 @@ async def actualizar_factura(factura_id: str, payload: FacturaActualizar):
             status_code=409,
             detail=f"Solo se pueden editar facturas en estado 'borrador' (estado actual: {actual['estado']})",
         )
+    try:
+        await secuencias_encf.validar_encf_para_actualizar(_pool(), fid, actual["rnc_emisor"], payload.encf)
+    except secuencias_encf.EncfNoDisponibleError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return await repository.actualizar_datos(
         _pool(),
         fid,

@@ -479,6 +479,8 @@ export function FacturaForm() {
     return deSecuencia && deSecuencia > local ? deSecuencia : local;
   }, [facturas, tipoEcf, secuencia]);
   const secuenciaBloquea = secuencia && (secuencia.estado === "vencida" || secuencia.estado === "agotada" || secuencia.estado === "inactiva");
+  /** Factura nueva con secuencia registrada: el e-NCF lo asigna facturas-api al guardar (el de aquí es solo el próximo previsto). */
+  const asignaServidor = !editando && !idGuardado && Boolean(secuencia) && !encfManual;
 
   // También se reaplica cuando algo deja el e-NCF vacío (p. ej. ?copiar=, que copia los datos con e-NCF nuevo).
   useEffect(() => {
@@ -635,10 +637,10 @@ export function FacturaForm() {
 
   function validar(): string | null {
     if (!emisor.rnc || !emisor.razonSocial || !emisor.direccion) return "Complete los datos del emisor (RNC, razón social y dirección).";
-    if (!form.encf || form.encf.length !== 13) return "El e-NCF debe tener 13 caracteres (por ejemplo E310000000001).";
+    if (!asignaServidor && (!form.encf || form.encf.length !== 13)) return "El e-NCF debe tener 13 caracteres (por ejemplo E310000000001).";
     if (secuenciaBloquea && !editando)
       return `La secuencia E${tipoEcf} está ${secuencia?.estado === "inactiva" ? "desactivada" : secuencia?.estado}: actualícela en Configuración → Secuencias autorizadas.`;
-    if (secuencia?.hasta != null && Number(form.encf.slice(3)) > secuencia.hasta)
+    if (!asignaServidor && secuencia?.hasta != null && Number(form.encf.slice(3)) > secuencia.hasta)
       return `El e-NCF ${form.encf} está fuera del rango autorizado (hasta ${secuencia.prefijo}${String(secuencia.hasta).padStart(10, "0")}).`;
     if (config.requiereFechaVencimientoSecuencia && !form.fechaVencimientoSecuencia)
       return "Indique hasta cuándo está autorizada la secuencia de este tipo de comprobante.";
@@ -688,12 +690,18 @@ export function FacturaForm() {
     }
     const creada = await api.crear({
       tipo_ecf: Number(tipoEcf),
-      encf: form.encf || null,
+      encf: asignaServidor ? null : form.encf || null,
+      asignar_encf: asignaServidor,
       datos,
       items_inventario,
       vendedor_id: vendedorId || null,
     });
     setIdGuardado(creada.id);
+    // El e-NCF que asignó el servidor (puede no ser el previsto si otra caja emitió antes).
+    if (creada.encf) {
+      setEncfManual(true);
+      setForm((prev) => ({ ...prev, encf: creada.encf ?? prev.encf }));
+    }
     void registrarContacto();
     return creada.id;
   }
@@ -1178,7 +1186,13 @@ export function FacturaForm() {
                       set("encf", e.target.value.toUpperCase());
                     }}
                     maxLength={13}
+                    aria-describedby={asignaServidor ? "encf-ayuda" : undefined}
                   />
+                  {asignaServidor && (
+                    <span id="encf-ayuda" className="hint">
+                      Próximo previsto: se asigna al guardar, sin repetirse aunque otra caja emita a la vez.
+                    </span>
+                  )}
                 </div>
                 <div className="fld">
                   <label className="lbl" htmlFor="vend">Vendedor</label>

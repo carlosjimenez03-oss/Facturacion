@@ -1,32 +1,102 @@
 """Rutas de plataforma de erp-api (fase 6): verificación de la sesión para
 el `auth_request` de nginx y "Estado de las soluciones". Ver docs/AUTH.md.
 """
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import JSONResponse
 
-from libs.ecf_common.auth.sesion_supabase import SesionInvalidaError, respuesta_sin_sesion, usuario_de_request
+from libs.ecf_common.auth.sesion_supabase import (
+    SIN_ACCESO,
+    RevocacionSesiones,
+    SesionInvalidaError,
+    UsuarioSesion,
+    respuesta_sin_sesion,
+    usuario_de_request,
+)
 
+from . import gotrue_admin
 from .config import ErpApiSettings, get_settings
 from .configuracion_schemas import EstadoServicios
 from .estado_servicios import estado_de_servicios
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["plataforma"])
 
+# Sesiones cerradas o usuarios desactivados antes de que venza su token
+# (auth.sessions de Supabase, caché de 60 s). La comparten /auth/verificar y
+# el middleware ERP_REQUIRE_AUTH (main.py).
+REVOCACION = RevocacionSesiones()
 
-@router.get("/auth/verificar", status_code=204, responses={401: {"description": "Sin sesión válida"}})
+# Usuarios de KONTARA_ADMIN_EMAILS a los que ya se les puso la marca en este
+# proceso (para no llamar a GoTrue en cada request).
+_MARCADOS: set[str] = set()
+
+
+async def marcar_acceso_si_falta(settings: ErpApiSettings, usuario: UsuarioSesion) -> None:
+    """Entró por KONTARA_ADMIN_EMAILS sin `app_metadata.kontara`: se la pone
+    (con `kontara_admin`) por la API admin de GoTrue, para que siga entrando
+    aunque luego se quite de la variable. Best-effort: si GoTrue no responde
+    se reintenta en el próximo request."""
+    if not usuario.falta_marca or usuario.id in _MARCADOS or not gotrue_admin.configurado(settings):
+        return
+    _MARCADOS.add(usuario.id)
+    try:
+        await gotrue_admin.dar_acceso(settings, usuario.id, admin=True)
+        logger.info("Acceso a Kontara marcado en app_metadata de %s (KONTARA_ADMIN_EMAILS)", usuario.correo)
+    except gotrue_admin.GoTrueError as exc:
+        _MARCADOS.discard(usuario.id)
+        logger.warning("No se pudo marcar el acceso de %s en GoTrue: %s", usuario.correo, exc)
+
+
+def _sin_sesion(motivo: str, codigo: str | None) -> Response:
+    """401 con el motivo. `X-Kontara-Motivo` (un código fijo, ASCII) lo lee
+    nginx (`auth_request_set`) para que su propio 401 diga lo mismo, p. ej.
+    "Su usuario no tiene acceso a Kontara" en vez de "Inicie sesión"."""
+    respuesta = respuesta_sin_sesion(motivo)
+    if codigo:
+        respuesta.headers["X-Kontara-Motivo"] = codigo
+    return respuesta
+
+
+@router.get(
+    "/auth/verificar",
+    status_code=204,
+    responses={401: {"description": "Sin sesión válida"}, 503: {"description": "Sin SUPABASE_JWT_SECRET"}},
+)
 async def verificar_sesion(request: Request, settings: ErpApiSettings = Depends(get_settings)):
-    """204 si el request trae un `access_token` válido de Supabase Auth
-    (cabecera `Authorization: Bearer` o cookie `kontara_sesion`), 401 si no.
+    """204 si el request trae un `access_token` válido de Supabase Auth de un
+    usuario con acceso a Kontara, 401 si no.
 
     nginx (frontend/nginx.conf, `auth_request`) lo consulta antes de reenviar
-    cada `/api*`. Sin `SUPABASE_JWT_SECRET` responde siempre 401 (no hay con
-    qué validar): nginx solo activa `auth_request` cuando esa variable
-    existe, así que en ese caso nadie llega aquí."""
+    cada `/api*`, con el método y la ruta originales en `X-Original-Method` /
+    `X-Original-URI`: la cookie `kontara_sesion` solo vale para GET/HEAD de
+    las descargas (PDF, XML); todo lo demás necesita `Authorization: Bearer`.
+
+    Sin `SUPABASE_JWT_SECRET` responde 503 (no hay con qué validar): nginx lo
+    trata como error y no deja pasar nada, y el frontend lo muestra en rojo
+    (no es el 401 que espera)."""
+    if not settings.supabase_jwt_secret:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "SUPABASE_JWT_SECRET no está configurado en erp-api: no se puede validar la sesión"},
+            headers={"Cache-Control": "no-store"},
+        )
     try:
-        usuario = usuario_de_request(request, settings.supabase_jwt_secret)
+        usuario = usuario_de_request(
+            request,
+            settings.supabase_jwt_secret,
+            admins=settings.kontara_admin_emails,
+            metodo=request.headers.get("x-original-method"),
+            ruta=request.headers.get("x-original-uri"),
+        )
     except SesionInvalidaError as exc:
-        return respuesta_sin_sesion(str(exc))
+        return _sin_sesion(str(exc), "sin_acceso" if str(exc) == SIN_ACCESO else None)
+    if not await REVOCACION.vigente(request.app.state.db_pool, usuario):
+        return _sin_sesion("La sesión se cerró: inicie sesión de nuevo", "sesion_cerrada")
+    await marcar_acceso_si_falta(settings, usuario)
     return Response(
         status_code=204,
         headers={"X-Usuario-Id": usuario.id, "Cache-Control": "no-store"},

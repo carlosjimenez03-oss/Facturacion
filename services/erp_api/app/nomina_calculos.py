@@ -383,18 +383,49 @@ def _dias_preaviso(meses: int) -> int:
     return 0
 
 
-def _dias_cesantia(meses: int) -> Decimal:
-    """Código de Trabajo, art. 80: 6 días (3 a 6 meses), 13 días (6 meses a
-    un año), 21 días por año (1 a 5 años) y 23 días por año (más de 5). La
-    fracción de año se toma en proporción a los meses (estimación)."""
-    if meses < 3:
-        return _CERO
-    if meses < 6:
-        return Decimal("6")
-    if meses < 12:
+def _dias_extra(fecha_ingreso: date, fecha: date, meses: int) -> int:
+    """Días que pasan de los `meses` completos de servicio."""
+    total = fecha_ingreso.month - 1 + meses
+    anio, mes = fecha_ingreso.year + total // 12, total % 12 + 1
+    aniversario = date(anio, mes, min(fecha_ingreso.day, calendar.monthrange(anio, mes)[1]))
+    return max((fecha - aniversario).days, 0)
+
+
+def _dias_cesantia_menos_de_un_anio(meses: int) -> Decimal:
+    """Art. 80, ordinales 1o y 2o: 6 días "no menor de tres meses ni mayor
+    de seis"; 13 días "no menor de seis meses ni mayor de un año". Los seis
+    meses justos caen en los dos ordinales: se aplica el de 13 días (más
+    favorable al trabajador, Principio VIII del Código de Trabajo)."""
+    if meses >= 6:
         return Decimal("13")
+    if meses >= 3:
+        return Decimal("6")
+    return _CERO
+
+
+def _dias_cesantia(meses: int, dias_extra: int = 0) -> Decimal:
+    """Código de Trabajo, art. 80 (auxilio de cesantía):
+
+    1o. 3 a 6 meses: 6 días de salario ordinario.
+    2o. 6 meses a 1 año: 13 días.
+    3o. 1 a 5 años: 21 días por cada año de servicio.
+    4o. 5 años o más: 23 días por cada año de servicio.
+
+    "Toda fracción de un año, mayor de tres meses, acumulada al tiempo de
+    servicio prestado, en los casos de los ordinales 3o. y 4o., se pagará de
+    acuerdo con lo establecido en los ordinales 1o. y 2o.": la fracción NO es
+    proporcional; suma 6 días si pasa de 3 meses (hasta 6) y 13 si llega a 6
+    meses o más. Exactamente 3 meses de fracción no es "mayor de tres meses"
+    (hacen falta días de más). `meses` son meses completos y `dias_extra` los
+    días que pasan de ellos."""
+    if meses < 12:
+        return _dias_cesantia_menos_de_un_anio(meses)
+    anios, fraccion = divmod(meses, 12)
     por_anio = Decimal("23") if meses >= 60 else Decimal("21")
-    return (por_anio * Decimal(meses) / _DOCE).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    dias = por_anio * anios
+    if fraccion > 3 or (fraccion == 3 and dias_extra > 0):
+        dias += _dias_cesantia_menos_de_un_anio(fraccion)
+    return dias.quantize(Decimal("0.01"))
 
 
 def prestaciones(
@@ -408,7 +439,7 @@ def prestaciones(
     meses = meses_servicio(fecha_ingreso, fecha_salida)
     diario = salario_diario(salario_mensual, p)
     d_preaviso = _dias_preaviso(meses) if desahucio else 0
-    d_cesantia = _dias_cesantia(meses) if desahucio else _CERO
+    d_cesantia = _dias_cesantia(meses, _dias_extra(fecha_ingreso, fecha_salida, meses)) if desahucio else _CERO
     d_vac = dias_vacaciones(fecha_ingreso, fecha_salida)
     preaviso = redondear(diario * d_preaviso)
     cesantia = redondear(diario * d_cesantia)

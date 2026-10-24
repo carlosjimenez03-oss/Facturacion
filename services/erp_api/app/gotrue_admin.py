@@ -1,6 +1,10 @@
 """Cliente de la API admin de GoTrue (Supabase Auth) para la pantalla
 Configuración → Usuarios: listar, crear, invitar y desactivar usuarios.
 
+Solo cuentan como usuarios de Kontara los que tienen `app_metadata.kontara
+= true` (ver libs/ecf_common/auth/sesion_supabase.py): se la ponen aquí al
+crearlos o invitarlos, o "Dar acceso" a uno que ya existía en GoTrue.
+
 Llama al gateway de Supabase por la red interna (`SUPABASE_URL`, por
 defecto http://api-gw:8000) con la `SUPABASE_SERVICE_ROLE_KEY` como
 `apikey` y `Authorization`. Esa llave salta todas las reglas de Supabase:
@@ -12,6 +16,8 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+
+from libs.ecf_common.auth.sesion_supabase import MARCA_ACCESO, MARCA_ADMIN
 
 from .config import ErpApiSettings
 
@@ -77,6 +83,7 @@ def _fecha(valor: str | None) -> datetime | None:
 def usuario_desde_gotrue(u: dict[str, Any], ahora: datetime | None = None) -> dict[str, Any]:
     ahora = ahora or datetime.now(timezone.utc)
     baneado_hasta = _fecha(u.get("banned_until"))
+    metadatos = u.get("app_metadata") if isinstance(u.get("app_metadata"), dict) else {}
     return {
         "id": u["id"],
         "correo": u.get("email"),
@@ -85,6 +92,8 @@ def usuario_desde_gotrue(u: dict[str, Any], ahora: datetime | None = None) -> di
         "confirmado": bool(u.get("email_confirmed_at") or u.get("confirmed_at")),
         "activo": not (baneado_hasta and baneado_hasta > ahora),
         "invitado": bool(u.get("invited_at")) and not u.get("last_sign_in_at"),
+        "acceso": metadatos.get(MARCA_ACCESO) is True,
+        "admin": metadatos.get(MARCA_ADMIN) is True,
     }
 
 
@@ -94,15 +103,33 @@ async def listar_usuarios(settings: ErpApiSettings) -> list[dict[str, Any]]:
     return sorted((usuario_desde_gotrue(u) for u in usuarios), key=lambda u: (u["correo"] or "").lower())
 
 
+async def obtener_usuario(settings: ErpApiSettings, usuario_id: str) -> dict[str, Any]:
+    return usuario_desde_gotrue(await _llamar(settings, "GET", f"/admin/users/{usuario_id}"))
+
+
 async def crear_usuario(settings: ErpApiSettings, correo: str, contrasena: str) -> dict[str, Any]:
     u = await _llamar(
-        settings, "POST", "/admin/users", json={"email": correo, "password": contrasena, "email_confirm": True}
+        settings,
+        "POST",
+        "/admin/users",
+        json={"email": correo, "password": contrasena, "email_confirm": True, "app_metadata": {MARCA_ACCESO: True}},
     )
     return usuario_desde_gotrue(u)
 
 
 async def invitar_usuario(settings: ErpApiSettings, correo: str) -> dict[str, Any]:
+    # /invite no recibe app_metadata: la marca se pone justo después.
     u = await _llamar(settings, "POST", "/invite", json={"email": correo})
+    return await dar_acceso(settings, u["id"])
+
+
+async def dar_acceso(settings: ErpApiSettings, usuario_id: str, *, admin: bool = False) -> dict[str, Any]:
+    """Marca `app_metadata.kontara` (GoTrue fusiona app_metadata, no la
+    reemplaza). Vale desde el próximo token del usuario (al renovarse)."""
+    metadatos: dict[str, Any] = {MARCA_ACCESO: True}
+    if admin:
+        metadatos[MARCA_ADMIN] = True
+    u = await _llamar(settings, "PUT", f"/admin/users/{usuario_id}", json={"app_metadata": metadatos})
     return usuario_desde_gotrue(u)
 
 

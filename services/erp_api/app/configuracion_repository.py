@@ -1,11 +1,12 @@
 """Acceso a Postgres del esquema `configuracion` (empresa, secuencias e-NCF
 y vendedores) y el cálculo del estado de cada secuencia.
 
-El siguiente e-NCF de cada tipo NO se reserva aquí: facturas_api sigue
-recibiendo el e-NCF que manda el formulario. Lo que hace este módulo es
-proponerlo -- el mayor entre `desde`, `proximo` y el último e-NCF ya
-guardado en `facturacion.facturas` (que solo se LEE) + 1 -- y avisar cuando
-la secuencia está agotada, vencida o por agotarse/vencer.
+El siguiente e-NCF de cada tipo NO se reserva aquí: lo asigna facturas_api
+al crear la factura, con la fila de la secuencia bloqueada
+(services/facturas_api/app/secuencias_encf.py, misma regla). Lo que hace
+este módulo es mostrarlo -- el mayor entre `desde`, `proximo` y el último
+e-NCF ya guardado en `facturacion.facturas` (que solo se LEE) + 1 -- y
+avisar cuando la secuencia está agotada, vencida o por agotarse/vencer.
 """
 from __future__ import annotations
 

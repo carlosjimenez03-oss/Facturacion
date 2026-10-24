@@ -22,6 +22,7 @@ from typing import Any
 import asyncpg
 import httpx
 
+from libs.ecf_common.auth.sesion_supabase import cabeceras_internas
 from libs.ecf_common.settings import EcfBaseSettings, load_settings
 
 from . import configuracion_envio as envio
@@ -42,11 +43,16 @@ class SolucionesSettings(EcfBaseSettings):
     smtp_starttls: bool = True
 
     # WhatsApp Cloud API (opcional; respaldo de Configuración). Ojo: fuera de la ventana de 24 h de
-    # conversación, Meta exige plantillas aprobadas; un texto libre fuera de
-    # esa ventana lo rechaza y el envío queda en 'error' con su motivo.
+    # conversación, Meta solo entrega plantillas aprobadas. Con
+    # WHATSAPP_PLANTILLA (o "Plantilla para mensajes" en Configuración) cada
+    # mensaje va como esa plantilla, con el texto en su parámetro {{1}}; sin
+    # ella va como texto libre y, si Meta lo rechaza por estar fuera de la
+    # ventana, el envío queda en 'error' "requiere plantilla" SIN reintentos.
     whatsapp_token: str = ""
     whatsapp_phone_number_id: str = ""
     whatsapp_api_url: str = "https://graph.facebook.com/v20.0"
+    whatsapp_plantilla: str = ""
+    whatsapp_idioma: str = "es"
 
     # Tarea de fondo de Kontara Ventas: cada cuántas horas revisa qué
     # envíos generar (los duplicados los evita `clave_unica`).
@@ -62,6 +68,21 @@ def get_soluciones_settings() -> SolucionesSettings:
 
 class CanalError(Exception):
     """El canal no entregó el mensaje; el motivo queda en el envío."""
+
+
+class RequierePlantillaError(CanalError):
+    """Meta no entrega texto libre fuera de la ventana de 24 h: reintentar no
+    sirve (el envío queda en 'error' sin más intentos)."""
+
+
+# Códigos de error de Meta por mensaje fuera de la ventana de 24 h
+# ("Re-engagement message"; 470 es el código anterior de la misma regla).
+_CODIGOS_FUERA_DE_VENTANA = frozenset({131047, 470})
+REQUIERE_PLANTILLA = (
+    "Requiere plantilla: Meta solo entrega mensajes de texto dentro de las 24 h de conversación con el "
+    "cliente. Configure una plantilla aprobada en Configuración → WhatsApp y correo («Plantilla para "
+    "mensajes») o envíelo a mano."
+)
 
 
 class FacturasApiError(Exception):
@@ -115,7 +136,13 @@ class CanalesEnvio:
         except envio.EnvioError as exc:
             raise CanalError(f"WhatsApp: {exc}") from exc
         await _post_whatsapp(
-            envio.META_GRAPH_URL, self.whatsapp["phone_number_id"], token, envio.numero_whatsapp(telefono), texto
+            envio.META_GRAPH_URL,
+            self.whatsapp["phone_number_id"],
+            token,
+            envio.numero_whatsapp(telefono),
+            texto,
+            plantilla=self.whatsapp.get("plantilla_mensajes") or "",
+            idioma=self.whatsapp.get("idioma_mensajes") or "es",
         )
 
 
@@ -165,22 +192,62 @@ async def enviar_correo(
 
 async def enviar_whatsapp(settings: SolucionesSettings, telefono: str, texto: str) -> None:
     await _post_whatsapp(
-        settings.whatsapp_api_url, settings.whatsapp_phone_number_id, settings.whatsapp_token, telefono, texto
+        settings.whatsapp_api_url,
+        settings.whatsapp_phone_number_id,
+        settings.whatsapp_token,
+        telefono,
+        texto,
+        plantilla=settings.whatsapp_plantilla,
+        idioma=settings.whatsapp_idioma,
     )
 
 
-async def _post_whatsapp(api_url: str, phone_number_id: str, token: str, telefono: str, texto: str) -> None:
+def parametro_plantilla(texto: str) -> str:
+    """Meta no admite saltos de línea, tabulaciones ni más de 4 espacios
+    seguidos en un parámetro de plantilla (y hasta 1024 caracteres)."""
+    lineas = [" ".join(linea.split()) for linea in texto.splitlines()]
+    return " · ".join(linea for linea in lineas if linea)[:1024]
+
+
+def cuerpo_whatsapp(telefono: str, texto: str, plantilla: str = "", idioma: str = "es") -> dict[str, Any]:
+    if plantilla:
+        return {
+            "messaging_product": "whatsapp",
+            "to": telefono,
+            "type": "template",
+            "template": {
+                "name": plantilla,
+                "language": {"code": idioma or "es"},
+                "components": [{"type": "body", "parameters": [{"type": "text", "text": parametro_plantilla(texto)}]}],
+            },
+        }
+    return {"messaging_product": "whatsapp", "to": telefono, "type": "text", "text": {"body": texto}}
+
+
+def _codigo_error_meta(respuesta: httpx.Response) -> int | None:
+    try:
+        codigo = respuesta.json().get("error", {}).get("code")
+    except (ValueError, AttributeError):
+        return None
+    return codigo if isinstance(codigo, int) else None
+
+
+async def _post_whatsapp(
+    api_url: str, phone_number_id: str, token: str, telefono: str, texto: str, *, plantilla: str = "", idioma: str = "es"
+) -> None:
     url = f"{api_url.rstrip('/')}/{phone_number_id}/messages"
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             respuesta = await client.post(
                 url,
                 headers={"Authorization": f"Bearer {token}"},
-                json={"messaging_product": "whatsapp", "to": telefono, "type": "text", "text": {"body": texto}},
+                json=cuerpo_whatsapp(telefono, texto, plantilla, idioma),
             )
     except httpx.HTTPError as exc:
         raise CanalError(f"WhatsApp: {exc}") from exc
     if respuesta.status_code >= 400:
+        if not plantilla and _codigo_error_meta(respuesta) in _CODIGOS_FUERA_DE_VENTANA:
+            raise RequierePlantillaError(REQUIERE_PLANTILLA)
         raise CanalError(f"WhatsApp {respuesta.status_code}: {respuesta.text[:300]}")
 
 
@@ -190,7 +257,10 @@ async def representacion_impresa(settings: SolucionesSettings, factura_id: str, 
     (POST /firmar no cambia el estado de una factura ya enviada)."""
     base = settings.facturas_api_url.rstrip("/")
     try:
-        async with httpx.AsyncClient(timeout=settings.facturas_api_timeout_segundos) as client:
+        # Llamada interna: pasa el REQUIRE_AUTH de facturas-api sin sesión.
+        async with httpx.AsyncClient(
+            timeout=settings.facturas_api_timeout_segundos, headers=cabeceras_internas(settings.kontara_token_interno)
+        ) as client:
             if not firmada:
                 r = await client.post(f"{base}/facturas/{factura_id}/firmar")
                 if r.status_code >= 400:

@@ -131,6 +131,24 @@ def test_portal_publico_devuelve_facturas_y_saldo(client, monkeypatch):
     assert r.json()["facturas"][0]["estado_pago"] == "vencida"
 
 
+def test_vista_previa_ya_no_esta_en_la_ruta_publica(client, monkeypatch):
+    """`?vista_previa=true` en la ruta pública dejaba mirar sin contar el
+    acceso: ahora se ignora; la vista previa del usuario es /portal/vista-previa
+    (fuera de /portal/publico/, así que nginx y ERP_REQUIRE_AUTH piden sesión)."""
+    registros = []
+
+    async def portal(pool, token, *, empresa_configurada="", registrar_acceso=True):
+        registros.append(registrar_acceso)
+        raise NoEncontradoError("x")
+
+    monkeypatch.setattr(repo, "portal_publico", portal)
+    client.get(f"/portal/publico/{TOKEN}?vista_previa=true")
+    client.get(f"/portal/vista-previa/{TOKEN}")
+    assert registros == [True, False]
+    assert not main.RUTA_PORTAL_PUBLICO.startswith("/portal/vista-previa")
+    assert not f"/portal/vista-previa/{TOKEN}".startswith(main.RUTA_PORTAL_PUBLICO)
+
+
 def test_pdf_del_portal_solo_para_facturas_del_cliente(client, monkeypatch):
     fid = str(uuid.uuid4())
     llamadas = []

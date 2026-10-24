@@ -37,6 +37,9 @@ class ItemInventario(BaseModel):
 class FacturaCrear(BaseModel):
     tipo_ecf: int = Field(..., description=f"Tipo de e-CF: {sorted(TIPOS_SOPORTADOS)}")
     encf: str | None = Field(None, description="e-NCF asignado (rango autorizado por la DGII)")
+    # True (o `encf` vacío) = el servidor toma el siguiente de la secuencia
+    # de Configuración, sin duplicados (ver app/secuencias_encf.py).
+    asignar_encf: bool = Field(False, description="Asignar el siguiente e-NCF de la secuencia configurada")
     datos: dict[str, Any] = Field(..., description="Estructura del e-CF (Encabezado, DetallesItems, ...)")
     items_inventario: list[ItemInventario] | None = Field(
         None, description="Vínculo de cada línea con un producto del catálogo (ver ItemInventario)"

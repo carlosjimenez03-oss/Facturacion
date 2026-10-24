@@ -165,9 +165,16 @@ async def _gotrue(funcion, *args):
 
 @router.get("/usuarios", response_model=Usuarios)
 async def listar_usuarios(settings: ErpApiSettings = Depends(get_settings)):
+    """Usuarios de Kontara (`app_metadata.kontara`) y, aparte, los demás del
+    mismo Supabase Auth, que no pueden entrar hasta que se les dé acceso."""
     if not gotrue_admin.configurado(settings):
         return {"configurado": False, "usuarios": [], "mensaje": _USUARIOS_NO_CONFIGURADO}
-    return {"configurado": True, "usuarios": await _gotrue(gotrue_admin.listar_usuarios, settings)}
+    todos = await _gotrue(gotrue_admin.listar_usuarios, settings)
+    return {
+        "configurado": True,
+        "usuarios": [u for u in todos if u["acceso"]],
+        "sin_acceso": [u for u in todos if not u["acceso"]],
+    }
 
 
 @router.post("/usuarios", response_model=Usuario, status_code=201)
@@ -180,25 +187,47 @@ async def crear_usuario(payload: UsuarioPayload, settings: ErpApiSettings = Depe
     return await _gotrue(gotrue_admin.invitar_usuario, settings, correo)
 
 
-def _no_es_uno_mismo(request: Request, settings: ErpApiSettings, usuario_id: str) -> None:
+def _usuario_actual(request: Request, settings: ErpApiSettings):
+    """El usuario con sesión, o None si el inicio de sesión no está configurado."""
     try:
-        actual = usuario_de_request(request, settings.supabase_jwt_secret)
+        return usuario_de_request(request, settings.supabase_jwt_secret, admins=settings.kontara_admin_emails)
     except SesionInvalidaError:
-        return
-    if actual.id == usuario_id:
+        return None
+
+
+def _no_es_uno_mismo(request: Request, settings: ErpApiSettings, usuario_id: str) -> None:
+    actual = _usuario_actual(request, settings)
+    if actual is not None and actual.id == usuario_id:
         raise HTTPException(status_code=409, detail="No puede desactivar su propio usuario")
+
+
+async def _de_kontara(settings: ErpApiSettings, usuario_id: str) -> None:
+    """Activar/desactivar solo aplica a usuarios con acceso a Kontara."""
+    usuario = await _gotrue(gotrue_admin.obtener_usuario, settings, usuario_id)
+    if not usuario["acceso"]:
+        raise HTTPException(status_code=404, detail="Ese usuario no tiene acceso a Kontara: use «Dar acceso»")
 
 
 @router.post("/usuarios/{usuario_id}/desactivar", response_model=Usuario)
 async def desactivar_usuario(request: Request, usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
     usuario_id = str(_uuid(usuario_id))
     _no_es_uno_mismo(request, settings, usuario_id)
+    await _de_kontara(settings, usuario_id)
     return await _gotrue(gotrue_admin.cambiar_activo, settings, usuario_id, False)
 
 
 @router.post("/usuarios/{usuario_id}/activar", response_model=Usuario)
 async def activar_usuario(usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
-    return await _gotrue(gotrue_admin.cambiar_activo, settings, str(_uuid(usuario_id)), True)
+    usuario_id = str(_uuid(usuario_id))
+    await _de_kontara(settings, usuario_id)
+    return await _gotrue(gotrue_admin.cambiar_activo, settings, usuario_id, True)
+
+
+@router.post("/usuarios/{usuario_id}/acceso", response_model=Usuario)
+async def dar_acceso_usuario(usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
+    """Da acceso a Kontara a un usuario que ya existía en Supabase Auth
+    (`app_metadata.kontara = true`). Entra desde su próximo inicio de sesión."""
+    return await _gotrue(gotrue_admin.dar_acceso, settings, str(_uuid(usuario_id)))
 
 
 # --- Certificado digital ---------------------------------------------------------
@@ -230,10 +259,11 @@ async def cargar_certificado(
     empresa) y lo deja como certificado activo para TODOS los servicios que
     firman (volumen compartido, cambio atómico). El anterior sigue en uso
     hasta que este pasa todas las validaciones."""
-    if not certificado_activo.cifrado_disponible():
+    motivo = certificado_activo.motivo_sin_cifrado()
+    if motivo:
         raise HTTPException(
             status_code=503,
-            detail="Para cargar certificados desde aquí configure CERTIFICADOS_CLAVE en Dokploy (ver docs/AUTH.md).",
+            detail=f"Para cargar certificados desde aquí configure CERTIFICADOS_CLAVE en Dokploy: {motivo} (ver docs/AUTH.md).",
         )
     nombre = (archivo.filename or "certificado.p12").replace("\\", "/").rsplit("/", 1)[-1][:120]
     if not nombre.lower().endswith((".p12", ".pfx")):
@@ -249,7 +279,13 @@ async def cargar_certificado(
     if datos["estado"] == "vencido":
         raise HTTPException(status_code=422, detail=f"El certificado venció el {datos['vence']:%d/%m/%Y}")
     rnc = _rnc_empresa(settings, await repo.obtener_empresa(_pool(request)))
-    if rnc and not certificado_activo.pertenece_al_rnc(cert, rnc):
+    if not rnc:
+        # Sin RNC no hay cómo comprobar que el certificado es de la empresa.
+        raise HTTPException(
+            status_code=422,
+            detail="Registre primero el RNC de la empresa (Configuración → Empresa) o EMISOR_RNC en Dokploy",
+        )
+    if not certificado_activo.pertenece_al_rnc(cert, rnc):
         raise HTTPException(
             status_code=422,
             detail=f"El certificado no pertenece al RNC {rnc} de la empresa (titular: {datos['titular']})",
@@ -310,7 +346,20 @@ async def guardar_correo(request: Request, payload: CorreoPayload):
 
 
 @router.post("/envio/correo/prueba", response_model=PruebaResultado)
-async def probar_correo(request: Request, payload: PruebaPayload):
+async def probar_correo(request: Request, payload: PruebaPayload, settings: ErpApiSettings = Depends(get_settings)):
+    """El correo de prueba va al usuario con sesión (su correo del token):
+    así el servidor SMTP de la empresa no sirve para escribirle a cualquiera.
+    Un administrador (`app_metadata.kontara_admin` o KONTARA_ADMIN_EMAILS)
+    puede indicar otra dirección. Sin inicio de sesión configurado, la que
+    se indique."""
+    actual = _usuario_actual(request, settings)
+    if actual is not None:
+        propio = (actual.correo or "").strip().lower()
+        if payload.destino.strip().lower() != propio and not actual.admin:
+            raise HTTPException(
+                status_code=403,
+                detail=f"El correo de prueba solo se envía a su propio correo ({actual.correo or 'sin correo'})",
+            )
     config = await envio.leer_preferencia(_pool(request), "correo", envio.CORREO_POR_DEFECTO)
     empresa = await repo.obtener_empresa(_pool(request)) or {}
     nombre = empresa.get("nombre_comercial") or empresa.get("razon_social") or "Kontara"

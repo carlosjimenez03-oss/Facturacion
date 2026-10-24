@@ -334,9 +334,9 @@ export const solucionesApi = {
     request<{ enviado: boolean }>("/portal/enviar-correo", { method: "POST", body: json(payload) }),
 
   // Portal público (sin sesión)
-  /** `vistaPrevia`: lo abre el usuario desde la pantalla del portal (no cuenta como acceso del cliente). */
+  /** `vistaPrevia`: lo abre el usuario desde la pantalla del portal (ruta con sesión; no cuenta como acceso del cliente). */
   portalPublico: (token: string, vistaPrevia = false) =>
-    request<PortalPublico>(`/portal/publico/${encodeURIComponent(token)}${vistaPrevia ? "?vista_previa=true" : ""}`),
+    request<PortalPublico>(`/portal/${vistaPrevia ? "vista-previa" : "publico"}/${encodeURIComponent(token)}`),
   portalPdfUrl: (token: string, facturaId: string) => `${ERP_API_URL}/portal/publico/${encodeURIComponent(token)}/facturas/${facturaId}/pdf`,
   portalXmlUrl: (token: string, facturaId: string) => `${ERP_API_URL}/portal/publico/${encodeURIComponent(token)}/facturas/${facturaId}/xml`,
 

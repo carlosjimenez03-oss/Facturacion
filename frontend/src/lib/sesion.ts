@@ -8,7 +8,15 @@
 // responde 401, lo renueva una vez y reintenta; si aun así falla, cierra la
 // sesión (la guarda de rutas lleva a /login). La cookie `kontara_sesion`
 // lleva el mismo token para los enlaces que abre el navegador sin fetch
-// (PDF de la factura, XML de la bandeja): nginx la acepta igual.
+// (PDF de la factura, XML de la bandeja): nginx la acepta SOLO para esas
+// descargas (GET); todo lo demás exige la cabecera Authorization, que un
+// sitio ajeno no puede poner (CSRF).
+//
+// El token vive en localStorage (no en una cookie HttpOnly): un XSS en esta
+// aplicación podría leerlo hasta que venza (1 h, o ~1 min después de cerrar
+// la sesión si erp-api ve auth.sessions). Es el mismo modelo de supabase-js
+// y a cambio no hay CSRF (el token no viaja solo). React escapa todo el
+// contenido; no inserte HTML sin sanear. Ver docs/AUTH.md.
 //
 // Sin VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY en el build, el inicio de
 // sesión queda apagado (AUTH_CONFIGURADA = false) y todo funciona como antes.
@@ -186,14 +194,58 @@ function sesionDe(r: RespuestaToken, recuperacion = false): Sesion {
   return { access_token: r.access_token, refresh_token: r.refresh_token, expira, usuario: usuarioDe(r.user), recuperacion };
 }
 
+// erp-api por el proxy de nginx (mismo valor que erpApi.ts, sin importarlo:
+// erpApi.ts importa este módulo).
+const ERP_API_URL = ((import.meta.env.VITE_ERP_API_URL as string | undefined) ?? "http://localhost:8019").replace(/\/+$/, "");
+
+/** null si erp-api acepta el token; si no, el motivo (p. ej. usuario sin acceso a Kontara). */
+async function motivoRechazo(token: string): Promise<string | null> {
+  try {
+    const r = await fetch(`${ERP_API_URL}/auth/verificar`, { headers: { Authorization: `Bearer ${token}` }, credentials: "omit" });
+    if (r.status !== 401) return null;
+    const cuerpo = await r.json().catch(() => ({}));
+    return typeof cuerpo.detail === "string" ? cuerpo.detail : "Su usuario no tiene acceso a Kontara.";
+  } catch {
+    return null; // sin red: lo dirán las APIs
+  }
+}
+
 export async function iniciarSesion(email: string, password: string): Promise<Sesion> {
   const r = await gotrue<RespuestaToken>("/token?grant_type=password", {
     method: "POST",
     body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
   });
+  // Un usuario del mismo Supabase Auth sin app_metadata.kontara no entra:
+  // se le dice por qué en vez de volver a /login sin explicación.
+  const rechazo = await motivoRechazo(r.access_token);
+  if (rechazo) {
+    await gotrue<void>("/logout?scope=local", { method: "POST", token: r.access_token }).catch(() => undefined);
+    throw new AuthError(403, rechazo);
+  }
   const nueva = sesionDe(r);
   guardar(nueva);
   return nueva;
+}
+
+/**
+ * Con el inicio de sesión configurado, las APIs NO deben responder sin
+ * token: pide /api-erp/health sin sesión y espera el 401 de nginx (erp-api
+ * deja /health abierto, así que solo nginx puede negarlo). Si llega otra
+ * cosa (200 = nginx abierto, 5xx = sin SUPABASE_JWT_SECRET en nginx o en
+ * erp-api) la aplicación muestra un aviso rojo. null = sin red (no se sabe).
+ */
+let comprobacion: Promise<boolean | null> | null = null;
+
+export function apisProtegidas(): Promise<boolean | null> {
+  if (!AUTH_CONFIGURADA) return Promise.resolve(true);
+  // Una sola vez por carga de la página (la piden el login y el AppShell).
+  comprobacion ??= fetch(`${ERP_API_URL}/health`, { credentials: "omit", cache: "no-store" })
+    .then((r) => r.status === 401)
+    .catch(() => {
+      comprobacion = null; // sin red: se vuelve a intentar la próxima vez
+      return null;
+    });
+  return comprobacion;
 }
 
 let renovando: Promise<Sesion | null> | null = null;

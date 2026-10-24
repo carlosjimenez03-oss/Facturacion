@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from libs.ecf_common.tests.test_certificado_activo import crear_p12
-from services.facturas_api.app import main, repository
+from services.facturas_api.app import main, repository, secuencias_encf
 from services.facturas_api.app.config import get_settings
 
 AHORA = datetime(2026, 10, 24, tzinfo=timezone.utc)
@@ -52,7 +52,11 @@ def test_crear_y_actualizar_con_vendedor(client, monkeypatch):
         recibido["actualizar"] = kw["vendedor_id"]
         return _factura(id=str(fid), vendedor_id=kw["vendedor_id"])
 
-    monkeypatch.setattr(repository, "crear_factura", fake_crear)
+    async def fake_validar(pool, fid, rnc, encf):
+        recibido["validar"] = encf
+
+    monkeypatch.setattr(secuencias_encf, "crear_factura", fake_crear)
+    monkeypatch.setattr(secuencias_encf, "validar_encf_para_actualizar", fake_validar)
     monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
     monkeypatch.setattr(repository, "actualizar_datos", fake_actualizar)
 
@@ -65,7 +69,26 @@ def test_crear_y_actualizar_con_vendedor(client, monkeypatch):
     r = client.put(f"/facturas/{fid}", json={"encf": "E310000000001", "datos": {}, "vendedor_id": None})
     assert r.status_code == 200
     assert recibido["actualizar"] is None
+    assert recibido["validar"] == "E310000000001"
     assert client.post("/facturas", json={"tipo_ecf": 31, "datos": {}, "vendedor_id": "no-uuid"}).status_code == 422
+
+
+def test_actualizar_con_e_ncf_de_otra_factura_409(client, monkeypatch):
+    async def fake_obtener(pool, fid):
+        return _factura(id=str(fid))
+
+    async def fake_validar(pool, fid, rnc, encf):
+        raise secuencias_encf.EncfNoDisponibleError(f"El e-NCF {encf} ya está usado en otra factura")
+
+    async def no_debe(pool, fid, **kw):
+        raise AssertionError("no debe actualizar")
+
+    monkeypatch.setattr(repository, "obtener_factura", fake_obtener)
+    monkeypatch.setattr(secuencias_encf, "validar_encf_para_actualizar", fake_validar)
+    monkeypatch.setattr(repository, "actualizar_datos", no_debe)
+    r = client.put(f"/facturas/{uuid.uuid4()}", json={"encf": "E310000000007", "datos": {}})
+    assert r.status_code == 409
+    assert "ya está usado" in r.json()["detail"]
 
 
 def test_certificado_no_configurado(client, monkeypatch, tmp_path):

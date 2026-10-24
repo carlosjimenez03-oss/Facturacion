@@ -130,11 +130,17 @@ class Usuario(BaseModel):
     confirmado: bool = False
     activo: bool = True
     invitado: bool = False
+    # app_metadata.kontara: puede entrar a Kontara (los demás usuarios del
+    # mismo GoTrue se listan aparte, "sin acceso").
+    acceso: bool = False
+    admin: bool = False
 
 
 class Usuarios(BaseModel):
     configurado: bool
     usuarios: list[Usuario] = []
+    # Usuarios del mismo Supabase Auth SIN acceso a Kontara (no entran).
+    sin_acceso: list[Usuario] = []
     mensaje: str | None = None
 
 
@@ -230,6 +236,10 @@ class WhatsappPayload(_Entrada):
     plantilla: str = Field("hello_world", max_length=120)
     idioma: str = Field("en_US", max_length=20)
     envio_automatico: bool = False
+    # Plantilla aprobada en Meta (cuerpo con un parámetro {{1}}) para los
+    # mensajes de Kontara Ventas fuera de la ventana de 24 h. Vacía = texto libre.
+    plantilla_mensajes: str = Field("", max_length=120, pattern=r"^[a-z0-9_]*$")
+    idioma_mensajes: str = Field("es", max_length=20)
 
 
 class WhatsappConfig(BaseModel):
@@ -238,6 +248,8 @@ class WhatsappConfig(BaseModel):
     plantilla: str
     idioma: str
     envio_automatico: bool
+    plantilla_mensajes: str = ""
+    idioma_mensajes: str = "es"
     token_configurado: bool
     conectado: bool
 

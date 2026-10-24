@@ -8,7 +8,10 @@ usuario (contraseña, vigencia, RNC) y lo deja en un volumen compartido
 (`CERTIFICADO_ACTIVO_PATH`, por defecto /app/certs-activos/activo.json):
 un único JSON con el .p12 en base64 y la contraseña CIFRADA (Fernet) con
 una llave derivada de `CERTIFICADOS_CLAVE` (variable de entorno, nunca en
-la base ni en el volumen). Se escribe en un archivo temporal y se cambia
+la base ni en el volumen; 32+ caracteres) con scrypt y una sal al azar por
+secreto, guardada junto al cifrado (`v2:<sal>:<fernet>`). Los secretos del
+formato anterior (llave = sha256 de la clave, sin sal) se siguen leyendo y
+se vuelven a cifrar con scrypt la próxima vez que se guardan. Se escribe en un archivo temporal y se cambia
 con `os.replace` (atómico): un servicio que lee mientras tanto ve el
 certificado anterior completo o el nuevo completo, nunca uno a medias.
 
@@ -26,14 +29,16 @@ import logging
 import os
 import tempfile
 from datetime import datetime, timezone
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
+from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.primitives.serialization import pkcs12
 from cryptography.x509 import Certificate
-from cryptography.x509.oid import NameOID
+from cryptography.x509.oid import NameOID, ObjectIdentifier
 
 logger = logging.getLogger(__name__)
 
@@ -54,27 +59,81 @@ def ruta_activo() -> Path:
     return Path(os.environ.get("CERTIFICADO_ACTIVO_PATH") or RUTA_POR_DEFECTO)
 
 
-def _fernet() -> Fernet:
+LARGO_MINIMO_CLAVE = 32
+_PREFIJO_V2 = "v2:"
+# scrypt: 32 MiB y ~0,1 s por derivación; se cachea por (clave, sal).
+_SCRYPT_N, _SCRYPT_R, _SCRYPT_P = 2**15, 8, 1
+
+
+def _clave() -> str:
     clave = os.environ.get("CERTIFICADOS_CLAVE", "")
     if not clave:
         raise CifradoNoConfiguradoError("CERTIFICADOS_CLAVE no está configurada")
-    # Cualquier texto largo sirve: se deriva una llave Fernet de 32 bytes.
+    return clave
+
+
+def motivo_sin_cifrado() -> str | None:
+    """Por qué no se pueden guardar secretos nuevos (None = sí se puede)."""
+    clave = os.environ.get("CERTIFICADOS_CLAVE", "")
+    if not clave:
+        return "CERTIFICADOS_CLAVE no está configurada"
+    if len(clave) < LARGO_MINIMO_CLAVE:
+        return (
+            f"CERTIFICADOS_CLAVE es muy corta ({len(clave)} caracteres): use al menos {LARGO_MINIMO_CLAVE} "
+            "(p. ej. `openssl rand -base64 48`)"
+        )
+    return None
+
+
+@lru_cache(maxsize=64)
+def _fernet_scrypt(clave: str, sal: bytes) -> Fernet:
+    llave = Scrypt(salt=sal, length=32, n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P).derive(clave.encode("utf-8"))
+    return Fernet(base64.urlsafe_b64encode(llave))
+
+
+def _fernet_antiguo(clave: str) -> Fernet:
+    # Formato anterior (fase 6 inicial): sha256 de la clave, sin sal.
     return Fernet(base64.urlsafe_b64encode(hashlib.sha256(clave.encode("utf-8")).digest()))
 
 
 def cifrado_disponible() -> bool:
-    return bool(os.environ.get("CERTIFICADOS_CLAVE"))
+    return motivo_sin_cifrado() is None
 
 
 def cifrar(texto: str) -> str:
-    return _fernet().encrypt(texto.encode("utf-8")).decode("ascii")
+    motivo = motivo_sin_cifrado()
+    if motivo:
+        raise CifradoNoConfiguradoError(motivo)
+    sal = os.urandom(16)
+    token = _fernet_scrypt(_clave(), sal).encrypt(texto.encode("utf-8")).decode("ascii")
+    return f"{_PREFIJO_V2}{base64.urlsafe_b64encode(sal).decode('ascii')}:{token}"
+
+
+def es_formato_antiguo(token: str) -> bool:
+    return not token.startswith(_PREFIJO_V2)
 
 
 def descifrar(token: str) -> str:
+    """Lee los dos formatos. Una clave corta todavía descifra lo que se
+    guardó con ella (para no perder el certificado al actualizar), pero ya
+    no cifra nada nuevo."""
+    clave = _clave()
     try:
-        return _fernet().decrypt(token.encode("ascii")).decode("utf-8")
-    except InvalidToken as exc:
+        if es_formato_antiguo(token):
+            return _fernet_antiguo(clave).decrypt(token.encode("ascii")).decode("utf-8")
+        sal_b64, _, cifrado = token[len(_PREFIJO_V2):].partition(":")
+        sal = base64.urlsafe_b64decode(sal_b64.encode("ascii"))
+        return _fernet_scrypt(clave, sal).decrypt(cifrado.encode("ascii")).decode("utf-8")
+    except (InvalidToken, ValueError) as exc:
         raise CifradoNoConfiguradoError("No se pudo descifrar: CERTIFICADOS_CLAVE cambió") from exc
+
+
+def recifrar_si_antiguo(token: str) -> str:
+    """El secreto en el formato nuevo (scrypt con sal) si está en el viejo y
+    hay una clave válida; si no, tal cual."""
+    if not es_formato_antiguo(token) or not cifrado_disponible():
+        return token
+    return cifrar(descifrar(token))
 
 
 def abrir_p12(p12_bytes: bytes, password: str) -> tuple[RSAPrivateKey, Certificate]:
@@ -144,14 +203,27 @@ def _attr(nombre, oid) -> str | None:
     return str(valores[0].value) if valores else None
 
 
+# organizationIdentifier (2.5.4.97): algunos emisores ponen ahí el RNC.
+_OID_ORGANIZATION_IDENTIFIER = ObjectIdentifier("2.5.4.97")
+_CAMPOS_RNC = (NameOID.SERIAL_NUMBER, NameOID.ORGANIZATIONAL_UNIT_NAME, _OID_ORGANIZATION_IDENTIFIER)
+
+
 def digitos_del_sujeto(cert: Certificate) -> list[str]:
-    """Todos los números que aparecen en el Subject (SN, organizationIdentifier, ...)."""
-    return ["".join(c for c in str(a.value) if c.isdigit()) for a in cert.subject]
+    """Los números de los campos del Subject donde va el RNC o la cédula:
+    serialNumber, OU y organizationIdentifier (p. ej. "IDCDO-131897542" ->
+    "131897542")."""
+    return [
+        "".join(c for c in str(a.value) if c.isdigit())
+        for oid in _CAMPOS_RNC
+        for a in cert.subject.get_attributes_for_oid(oid)
+    ]
 
 
 def pertenece_al_rnc(cert: Certificate, rnc: str) -> bool:
+    """El RNC debe ser EXACTAMENTE uno de esos números (no basta con que
+    aparezca dentro de otro más largo, p. ej. un teléfono o una cédula)."""
     rnc = "".join(c for c in rnc if c.isdigit())
-    return bool(rnc) and any(rnc in d for d in digitos_del_sujeto(cert))
+    return bool(rnc) and rnc in digitos_del_sujeto(cert)
 
 
 def datos_certificado(cert: Certificate, ahora: datetime | None = None) -> dict[str, Any]:

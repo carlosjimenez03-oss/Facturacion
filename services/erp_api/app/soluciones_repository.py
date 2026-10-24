@@ -181,7 +181,7 @@ async def listar_solicitudes_plan(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 # --- Portal de clientes ---------------------------------------------------------
 
 _SELECT_ENLACES = """
-    SELECT e.id, e.cliente_id, c.nombre AS cliente_nombre, c.rnc AS cliente_rnc,
+    SELECT e.id, e.cliente_id, c.nombre AS cliente_nombre, COALESCE(e.rnc, c.rnc) AS cliente_rnc,
            c.correo AS cliente_correo, c.telefono AS cliente_telefono,
            e.metodos_pago, e.expira_en, e.revocado_en, e.ultimo_acceso_en, e.accesos, e.creado_en,
            CASE WHEN e.revocado_en IS NOT NULL THEN 'revocado'
@@ -218,14 +218,15 @@ async def crear_enlace(
             )
         nuevo_id = await conn.fetchval(
             """
-            INSERT INTO soluciones.portal_enlaces (cliente_id, token_hash, metodos_pago, expira_en)
-            VALUES ($1, $2, $3, now() + make_interval(days => $4))
+            INSERT INTO soluciones.portal_enlaces (cliente_id, token_hash, metodos_pago, expira_en, rnc)
+            VALUES ($1, $2, $3, now() + make_interval(days => $4), $5)
             RETURNING id
             """,
             cliente_id,
             token_hash,
             metodos,
             dias_validez,
+            cliente["rnc"],
         )
         fila = await conn.fetchrow(f"{_SELECT_ENLACES} WHERE e.id = $1", nuevo_id)
     return _fila_enlace(fila) | {"token": token}
@@ -286,7 +287,7 @@ async def _enlace_vigente(conn: asyncpg.Connection, token: str) -> asyncpg.Recor
         raise NoEncontradoError("Enlace no válido")
     fila = await conn.fetchrow(
         """
-        SELECT e.id, e.metodos_pago, e.expira_en, c.id AS cliente_id, c.nombre, c.rnc
+        SELECT e.id, e.metodos_pago, e.expira_en, c.id AS cliente_id, c.nombre, COALESCE(e.rnc, c.rnc) AS rnc
         FROM soluciones.portal_enlaces e
         JOIN ventas.clientes c ON c.id = e.cliente_id
         WHERE e.token_hash = $1 AND e.revocado_en IS NULL AND e.expira_en > now()
@@ -748,12 +749,15 @@ async def envios_por_entregar(pool: asyncpg.Pool, canales: list[str]) -> list[di
     return [_fila_envio(f) for f in filas]
 
 
-async def registrar_entrega(pool: asyncpg.Pool, envio_id: str, *, error: str | None) -> None:
+async def registrar_entrega(pool: asyncpg.Pool, envio_id: str, *, error: str | None, definitivo: bool = False) -> None:
+    """`definitivo`: el error no se arregla reintentando (p. ej. WhatsApp
+    fuera de la ventana de 24 h sin plantilla): se agotan los intentos para
+    que la tarea no lo vuelva a mandar en cada ciclo."""
     async with pool.acquire() as conn:
         await conn.execute(
             """
             UPDATE soluciones.envios
-            SET intentos = intentos + 1,
+            SET intentos = CASE WHEN $3 THEN greatest(intentos + 1, $4) ELSE intentos + 1 END,
                 estado = CASE WHEN $2::text IS NULL THEN 'enviado' ELSE 'error' END,
                 error = $2::text,
                 enviado_en = CASE WHEN $2::text IS NULL THEN now() ELSE enviado_en END
@@ -761,6 +765,8 @@ async def registrar_entrega(pool: asyncpg.Pool, envio_id: str, *, error: str | N
             """,
             uuid.UUID(envio_id),
             error,
+            definitivo,
+            _MAX_INTENTOS,
         )
 
 

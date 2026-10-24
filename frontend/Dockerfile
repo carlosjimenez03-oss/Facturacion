@@ -52,12 +52,20 @@ ENV VITE_SUPABASE_URL=${VITE_SUPABASE_URL}
 ARG VITE_SUPABASE_ANON_KEY=
 ENV VITE_SUPABASE_ANON_KEY=${VITE_SUPABASE_ANON_KEY}
 RUN npm run build
+# Marca "el frontend pide inicio de sesión": con ella, 40-kontara-sesion.sh
+# no deja /api* abierto si falta KONTARA_AUTH (falla cerrado, ver docs/AUTH.md).
+RUN mkdir -p /app/marcas \
+    && if [ -n "$VITE_SUPABASE_URL" ] && [ -n "$VITE_SUPABASE_ANON_KEY" ]; then \
+         echo "VITE_SUPABASE_URL=$VITE_SUPABASE_URL" > /app/marcas/login-configurado; \
+       fi
 
 FROM nginx:1.27-alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/conf.d/default.conf
-# Genera al arrancar /etc/nginx/kontara/{sesion,supabase}.conf a partir de
-# KONTARA_AUTH y SUPABASE_GATEWAY_URL (ver docs/AUTH.md).
+COPY --from=build /app/marcas/ /etc/kontara/
+# Genera al arrancar /etc/nginx/kontara/{sesion,supabase,ip_real}.conf a
+# partir de KONTARA_AUTH, la marca de arriba, SUPABASE_GATEWAY_URL y
+# KONTARA_PROXY_CONFIABLE (ver docs/AUTH.md).
 COPY docker/40-kontara-sesion.sh /docker-entrypoint.d/40-kontara-sesion.sh
 RUN chmod +x /docker-entrypoint.d/40-kontara-sesion.sh
 ENV KONTARA_AUTH="" \

@@ -243,17 +243,31 @@ async def enviar_correo_portal(request: Request, payload: CorreoPayload):
 _ENLACE_NO_VALIDO = "Enlace no válido, vencido o revocado"
 
 
-@router.get("/portal/publico/{token}", response_model=PortalPublico)
-async def portal_publico(request: Request, token: str, vista_previa: bool = False):
+async def _portal(request: Request, token: str, *, registrar_acceso: bool) -> dict:
     try:
         return await repo.portal_publico(
             _pool(request),
             token,
             empresa_configurada=get_settings().emisor_razon_social,
-            registrar_acceso=not vista_previa,
+            registrar_acceso=registrar_acceso,
         )
     except NoEncontradoError as exc:
         raise HTTPException(status_code=404, detail=_ENLACE_NO_VALIDO) from exc
+
+
+@router.get("/portal/publico/{token}", response_model=PortalPublico)
+async def portal_publico(request: Request, token: str):
+    """Lo que ve el cliente (sin sesión). Cada apertura cuenta como acceso."""
+    return await _portal(request, token, registrar_acceso=True)
+
+
+@router.get("/portal/vista-previa/{token}", response_model=PortalPublico)
+async def portal_vista_previa(request: Request, token: str):
+    """Lo mismo, abierto por el usuario desde Portal de clientes: pide
+    sesión (no está bajo /portal/publico/) y no cuenta como acceso del
+    cliente. Antes era `?vista_previa=true` en la ruta pública, y cualquiera
+    con el enlace podía mirar sin dejar rastro."""
+    return await _portal(request, token, registrar_acceso=False)
 
 
 async def _factura_publica(request: Request, token: str, factura_id: str) -> dict:

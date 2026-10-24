@@ -4,6 +4,7 @@ import { AUTH_CONFIGURADA } from "../lib/sesion";
 import { NominaSidebar } from "../pages/nomina/NominaShell";
 import { esRutaNomina, NominaSidebarGlobal } from "../pages/nomina/nominaUtil";
 import "../pages/plataforma/plataforma.css";
+import { AvisoProteccion } from "./AvisoProteccion";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 
@@ -55,6 +56,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       {nomina ? <NominaSidebar /> : <Sidebar />}
       <div className="main">
         <AvisoSinInicioSesion />
+        <AvisoProteccion />
         <Topbar />
         <main className="page">
           <NominaSidebarGlobal.Provider value={nomina}>{children}</NominaSidebarGlobal.Provider>

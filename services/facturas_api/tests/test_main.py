@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from httpx import ConnectError, Response
 
 from services.facturas_api.app import main
-from services.facturas_api.app import repository
+from services.facturas_api.app import repository, secuencias_encf
 
 
 async def _sin_espera(segundos):
@@ -108,9 +108,10 @@ def test_crear_factura_ok(client, monkeypatch):
 
     async def fake_crear(pool, **kwargs):
         assert kwargs["tipo_ecf"] == 31
+        assert kwargs["encf"] == "E310000000001" and kwargs["asignar_encf"] is False
         return creada
 
-    monkeypatch.setattr(repository, "crear_factura", fake_crear)
+    monkeypatch.setattr(secuencias_encf, "crear_factura", fake_crear)
 
     response = client.post(
         "/facturas",
@@ -119,6 +120,20 @@ def test_crear_factura_ok(client, monkeypatch):
 
     assert response.status_code == 201
     assert response.json()["id"] == creada["id"]
+
+
+def test_crear_factura_e_ncf_no_disponible_409(client, monkeypatch):
+    recibido = {}
+
+    async def fake_crear(pool, **kwargs):
+        recibido.update(kwargs)
+        raise secuencias_encf.EncfNoDisponibleError("La secuencia E31 está agotada")
+
+    monkeypatch.setattr(secuencias_encf, "crear_factura", fake_crear)
+    r = client.post("/facturas", json={"tipo_ecf": 31, "asignar_encf": True, "datos": {}})
+    assert r.status_code == 409
+    assert r.json()["detail"] == "La secuencia E31 está agotada"
+    assert recibido["asignar_encf"] is True and recibido["encf"] is None
 
 
 def test_obtener_factura_404(client, monkeypatch):
@@ -627,7 +642,7 @@ def test_crear_factura_serializa_datetime_reales(client, monkeypatch):
     async def fake_crear(pool, **kwargs):
         return creada
 
-    monkeypatch.setattr(repository, "crear_factura", fake_crear)
+    monkeypatch.setattr(secuencias_encf, "crear_factura", fake_crear)
 
     response = client.post(
         "/facturas",

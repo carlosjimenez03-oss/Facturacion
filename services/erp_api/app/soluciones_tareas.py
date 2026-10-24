@@ -20,6 +20,7 @@ from .config import get_settings
 from .soluciones_canales import (
     CanalError,
     FacturasApiError,
+    RequierePlantillaError,
     SolucionesSettings,
     canales_de_envio,
     representacion_impresa,
@@ -39,6 +40,7 @@ async def entregar_pendientes(pool: asyncpg.Pool, settings: SolucionesSettings) 
     resumen = {"enviados": 0, "errores": 0}
     for envio in await repo.envios_por_entregar(pool, canales):
         error = None
+        definitivo = False
         try:
             if envio["canal"] == "whatsapp":
                 await salida.enviar_whatsapp(envio["destino"], envio["mensaje"])
@@ -52,9 +54,12 @@ async def entregar_pendientes(pool: asyncpg.Pool, settings: SolucionesSettings) 
                     except FacturasApiError as exc:
                         raise CanalError(f"No se pudo adjuntar la representación impresa: {exc}") from exc
                 await salida.enviar_correo(envio["destino"], envio["asunto"], envio["mensaje"], adjunto)
+        except RequierePlantillaError as exc:
+            # Fuera de la ventana de 24 h de WhatsApp: reintentar no sirve.
+            error, definitivo = str(exc), True
         except CanalError as exc:
             error = str(exc)
-        await repo.registrar_entrega(pool, envio["id"], error=error)
+        await repo.registrar_entrega(pool, envio["id"], error=error, definitivo=definitivo)
         resumen["errores" if error else "enviados"] += 1
     return resumen
 

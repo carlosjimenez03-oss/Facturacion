@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { AvisoProteccion } from "../../layout/AvisoProteccion";
 import { Logo } from "../../layout/icons";
 import { MARCA } from "../../lib/marca";
 import { AUTH_CONFIGURADA, AuthError, cambiarContrasena, capturarSesionDeUrl, iniciarSesion, recuperarContrasena } from "../../lib/sesion";
@@ -70,6 +71,7 @@ export function Login() {
 
   return (
     <div className="login">
+      <AvisoProteccion estilo={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 10 }} />
       <form className="login-card" onSubmit={enviar} noValidate>
         <div className="login-marca">
           <Logo />

@@ -953,11 +953,18 @@ Rutas en `app/configuracion.py` (prefijo `/configuracion`) y
 | `GET/POST /configuracion/usuarios`, `POST /configuracion/usuarios/{id}/desactivar\|activar` | Usuarios de Supabase Auth por la API admin de GoTrue (`SUPABASE_SERVICE_ROLE_KEY`) |
 | `GET/PUT /configuracion/inventario` | Método de valuación (preferencia; el costo sigue siendo promedio ponderado) |
 | `GET /configuracion/envio`, `PUT /configuracion/envio/correo\|whatsapp`, `DELETE /configuracion/envio/whatsapp`, `POST …/prueba` | SMTP y WhatsApp Cloud API (secretos cifrados con `CERTIFICADOS_CLAVE`) |
-| `GET /auth/verificar` | 204/401: sesión válida (lo consulta nginx con `auth_request`) |
+| `GET /auth/verificar` | 204/401: sesión válida de un usuario con acceso a Kontara (lo consulta nginx con `auth_request`; la cookie solo vale en GET de descargas) |
+| `POST /configuracion/usuarios/{id}/acceso` | Da acceso a Kontara (`app_metadata.kontara`) a un usuario que ya existía en Supabase Auth |
 | `GET /estado-servicios` | `/health` de cada servicio por la red interna (2,5 s cada uno), base de datos y Supabase Auth |
 
-El e-NCF no se reserva aquí: facturas_api sigue recibiendo el que manda el
-formulario, que lo propone a partir de esta información.
+El e-NCF lo asigna facturas_api al crear la factura (`POST /facturas` con
+`asignar_encf: true` o sin `encf`): toma el siguiente de esta secuencia con la
+fila bloqueada (`SELECT … FOR UPDATE`), así dos cajas a la vez nunca reciben el
+mismo, y responde 409 si la secuencia está desactivada, vencida o agotada. Un
+e-NCF que mande el cliente se acepta si ninguna otra factura del emisor lo
+tiene (índice único `(rnc_emisor, encf)`). Ver
+`services/facturas_api/app/secuencias_encf.py`. `GET /auth/verificar` responde
+503 sin `SUPABASE_JWT_SECRET`.
 
 ## Soluciones (fase 6): POS, portal de clientes, planes y Kontara Ventas
 

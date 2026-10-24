@@ -129,7 +129,7 @@ async def test_vendedores_y_columna_vendedor_id(pool):
 
 
 async def test_preferencias_y_envios(pool, monkeypatch):
-    monkeypatch.setenv("CERTIFICADOS_CLAVE", "clave-de-prueba-larga")
+    monkeypatch.setenv("CERTIFICADOS_CLAVE", "clave-larga-de-prueba-con-mas-de-32-caracteres")
     assert (await envio.leer_preferencia(pool, "inventario", envio.INVENTARIO_POR_DEFECTO))["metodo"] == "promedio"
     await envio.guardar_preferencia(pool, "inventario", {"metodo": "peps"})
     assert (await envio.leer_preferencia(pool, "inventario", envio.INVENTARIO_POR_DEFECTO))["metodo"] == "peps"
