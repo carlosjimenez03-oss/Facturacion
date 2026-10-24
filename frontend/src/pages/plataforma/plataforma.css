@@ -26,6 +26,17 @@
 .cfg-nav .sv{cursor:pointer;border:0;background:none;text-align:left;font:inherit;font-size:13.5px;width:100%}
 .cfg-nav .sv.on{background:var(--teal-bg);color:var(--teal);font-weight:600}
 .cfg-body{flex:999 1 640px;min-width:0;display:flex;flex-direction:column;gap:20px}
+.cfg-body > *{scroll-margin-top:16px}
+@media (max-width:900px){
+  /* En el teléfono las secciones son una tira de botones que se desplaza de
+     lado, fija bajo la marca y con fondo para no tapar el contenido. */
+  .cfg{gap:16px}
+  .cfg-nav{flex:1 1 100%;flex-direction:row;gap:6px;overflow-x:auto;scrollbar-width:none;top:65px;z-index:20;background:var(--bg);margin:0 -16px;padding:8px 16px;border-bottom:1px solid var(--bd)}
+  .cfg-nav::-webkit-scrollbar{display:none}
+  .cfg-nav .sv{width:auto;flex:none;white-space:nowrap;border:1px solid var(--bd);background:#fff;border-radius:999px;padding:7px 12px;font-size:13px}
+  .cfg-nav .sv.on{border-color:var(--teal-2)}
+  .cfg-body > *{scroll-margin-top:130px}
+}
 .cfg-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
 .cfg-full{grid-column:1/-1}
 .cfg-box{border:1px solid var(--bd);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px;flex:1 1 300px;min-width:0}
