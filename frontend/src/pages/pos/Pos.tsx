@@ -18,6 +18,7 @@ import { useNavigate } from "react-router-dom";
 import { IconPos } from "../../layout/icons";
 import { api } from "../../lib/api";
 import { configuracionApi, publicarEmpresa } from "../../lib/configuracionApi";
+import { empresaEnUso } from "../../lib/empresaActual";
 import type { Secuencia } from "../../lib/configuracionApi";
 import { construirDatos, construirItemsInventario, desglose, siguienteEncf } from "../../lib/buildDatos";
 import { erpApi } from "../../lib/erpApi";
@@ -537,6 +538,7 @@ export function PosPage() {
       });
       const venta = nuevaVentaOffline({
         clave: claveVenta.current || nuevaClave(),
+        empresaId: empresaEnUso(),
         creadaEn: new Date().toISOString(),
         sesionId: sesion.id,
         caja: sesion.caja,

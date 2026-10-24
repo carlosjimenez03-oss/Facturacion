@@ -1,12 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { cargarEmpresa, nombreEmpresa, useEmpresa } from "../lib/configuracionApi";
+import { empresaEnUso } from "../lib/empresaActual";
+import { cambiarEmpresa, cargarMisEmpresas, useMisEmpresas } from "../lib/empresasApi";
 import { ERP_API_URL } from "../lib/erpApi";
 import type { ResumenSincronizacion, ResumenTareas } from "../lib/operacionApi";
 import { EMPRESA_NOMBRE, EMPRESA_RNC, formatoRnc, MARCA, nombreAmbiente } from "../lib/marca";
 import { AUTH_CONFIGURADA, cerrarSesion, fetchConSesion } from "../lib/sesion";
 import { motivoRechazo, useFacturas } from "../lib/useFacturas";
 import { useSesion } from "../pages/plataforma/useSesion";
+import { leerCola } from "../pages/pos/posAlmacen";
+import { sinSincronizar } from "../pages/pos/posOffline";
+import { AgregarEmpresa } from "./AgregarEmpresa";
 import {
   IconActualizar,
   IconAlerta,
@@ -79,6 +84,9 @@ export function Topbar() {
   const navigate = useNavigate();
   const sesion = useSesion();
   const empresa = useEmpresa();
+  const misEmpresas = useMisEmpresas();
+  const empresaId = misEmpresas?.actual ?? empresaEnUso();
+  const [cambiando, setCambiando] = useState(false);
   const { facturas, enLinea, error } = useFacturas();
   const [panel, setPanel] = useState<Panel>(null);
   const [modal, setModal] = useState<Modal>(null);
@@ -131,6 +139,27 @@ export function Topbar() {
     setQ("");
     navigate(to);
   };
+
+  /** Cambia de empresa (recarga la aplicación en la otra). Si el POS de esta
+   * tiene ventas sin sincronizar, se avisa: se quedan en este navegador,
+   * guardadas con su empresa, y se envían al volver a ella. */
+  async function cambiarA(id: number, nombreOtra: string) {
+    let pendientes = 0;
+    try {
+      pendientes = sinSincronizar(await leerCola()).length;
+    } catch {
+      // sin IndexedDB: no hay cola sin conexión
+    }
+    if (
+      pendientes > 0 &&
+      !window.confirm(
+        `Hay ${pendientes} venta(s) del POS de ${nombre} sin sincronizar. Se quedan guardadas en este navegador y se enviarán a ${nombre} cuando vuelva a ella. ¿Cambiar a ${nombreOtra}?`,
+      )
+    )
+      return;
+    setCambiando(true);
+    await cambiarEmpresa(id);
+  }
 
   async function salir() {
     setPanel(null);
@@ -363,7 +392,16 @@ export function Topbar() {
               <div className="pop-h" style={{ fontSize: 14, color: "#111827" }}>
                 Mis empresas
                 <span style={{ display: "flex", gap: 2 }}>
-                  <button type="button" className="ib" style={{ width: 32, height: 32 }} onClick={() => void cargarEmpresa(true)} aria-label="Actualizar lista">
+                  <button
+                    type="button"
+                    className="ib"
+                    style={{ width: 32, height: 32 }}
+                    onClick={() => {
+                      void cargarEmpresa(true);
+                      void cargarMisEmpresas(true);
+                    }}
+                    aria-label="Actualizar lista"
+                  >
                     <IconActualizar width={17} height={17} />
                   </button>
                   <button type="button" className="ib" style={{ width: 32, height: 32 }} onClick={() => setPanel(null)} aria-label="Cerrar">
@@ -371,32 +409,56 @@ export function Topbar() {
                   </button>
                 </span>
               </div>
-              <div className="pop-sec">
-                <div className="pop-i pop-static">
-                  <span className="co-av" style={{ width: 32, height: 32 }}>
-                    {nombre.charAt(0).toUpperCase()}
+              <div className="pop-sec co-lista">
+                {(misEmpresas?.empresas.length ? misEmpresas.empresas : [null]).map((e) => {
+                  const actual = e === null || e.id === empresaId;
+                  const titulo = e ? e.razon_social : razonSocial;
+                  const nombreCorto = e ? e.nombre_comercial || e.razon_social : nombre;
+                  const rncEmpresa = e ? e.rnc : rnc;
+                  return (
+                    <button
+                      key={e?.id ?? "actual"}
+                      type="button"
+                      className={`pop-i${actual ? " act" : ""}`}
+                      aria-current={actual ? "true" : undefined}
+                      disabled={cambiando}
+                      onClick={() => (actual || !e ? undefined : void cambiarA(e.id, nombreCorto))}
+                    >
+                      <span className="co-av">{nombreCorto.charAt(0).toUpperCase()}</span>
+                      <span className="pop-txt">
+                        <b>{titulo}</b>
+                        <span className="hint">
+                          {rncEmpresa ? `RNC ${formatoRnc(rncEmpresa)}` : "RNC sin configurar"} · Emisor electrónico
+                        </span>
+                      </span>
+                      {e && misEmpresas && misEmpresas.empresas.length > 1 && e.rol === "admin" && <span className="co-rol">Admin</span>}
+                      {actual && <IconCheck />}
+                    </button>
+                  );
+                })}
+              </div>
+              {(misEmpresas?.empresas.length ?? 0) <= 1 && (
+                <div className="co-empty">
+                  <span className="co-empty-ic">
+                    <IconEmpresa />
+                    <b>+</b>
                   </span>
-                  <span className="pop-txt">
-                    <b>{razonSocial}</b>
-                    <span className="hint">{rnc ? `RNC ${formatoRnc(rnc)}` : "RNC sin configurar"} · Emisor electrónico</span>
+                  <b style={{ color: "#111827", fontSize: 14.5 }}>¡Agrega otras empresas a tu cuenta!</b>
+                  <span className="hint" style={{ fontSize: 13, lineHeight: 1.5 }}>
+                    Gestiona todas tus empresas en un mismo lugar y simplifica tu administración.
                   </span>
-                  <IconCheck />
                 </div>
-              </div>
-              <div className="co-empty">
-                <span className="co-empty-ic">
-                  <IconEmpresa />
-                  <b>+</b>
-                </span>
-                <b style={{ color: "#111827", fontSize: 14.5 }}>¡Agrega otras empresas a tu cuenta!</b>
-                <span className="hint" style={{ fontSize: 13, lineHeight: 1.5 }}>
-                  Gestiona todas tus empresas en un mismo lugar y simplifica tu administración.
-                </span>
-              </div>
+              )}
+              {misEmpresas && !misEmpresas.puede_agregar && (
+                <div className="co-motivo">
+                  {misEmpresas.motivo ?? "Solo un administrador de la empresa puede agregar otras."}
+                </div>
+              )}
               <div style={{ padding: "12px 16px 16px" }}>
                 <button
                   type="button"
                   className="btn co-add"
+                  disabled={!misEmpresas?.puede_agregar}
                   onClick={() => {
                     setPanel(null);
                     setModal("agregar-empresa");
@@ -512,30 +574,7 @@ export function Topbar() {
       )}
 
       {modal === "pos" && <ModalPos onCerrar={() => setModal(null)} onProbar={() => { setModal(null); navigate("/pos"); }} />}
-      {modal === "agregar-empresa" && (
-        <div className="scrim" role="presentation" onClick={() => setModal(null)}>
-          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="agregar-empresa-t" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-h">
-              <h3 id="agregar-empresa-t">Varias empresas: muy pronto</h3>
-            </div>
-            <div className="modal-b">
-              <p style={{ margin: 0 }}>
-                Por ahora {MARCA} administra <b>una empresa por instalación</b>: {razonSocial}
-                {rnc ? ` (RNC ${formatoRnc(rnc)})` : ""}. Estamos preparando la gestión de varias empresas desde una misma cuenta.
-              </p>
-              <p style={{ margin: 0 }}>
-                Mientras tanto, si necesita facturar con otro RNC, se instala una copia aparte de la aplicación con su propio certificado
-                digital y sus secuencias.
-              </p>
-            </div>
-            <div className="modal-f">
-              <button type="button" className="btn btn-p" onClick={() => setModal(null)}>
-                Entendido
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {modal === "agregar-empresa" && <AgregarEmpresa onCerrar={() => setModal(null)} />}
     </header>
   );
 }

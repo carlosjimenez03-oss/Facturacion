@@ -1,5 +1,6 @@
 // Utilidades de las pantallas de Kontara Nómina.
 import { createContext, useCallback, useEffect, useState } from "react";
+import { claveEmpresa } from "../../lib/empresaActual";
 import { nominaApi, type AvisoNomina, type Empleado, type EmpleadoPayload, type EmpresaNomina, type EmpresaPayload, type EstadoPeriodo } from "../../lib/nominaApi";
 
 /** true cuando el layout global ya dibuja <NominaSidebar /> en lugar del menú principal. */
@@ -63,12 +64,13 @@ export function descargarBlob(nombre: string, blob: Blob) {
 
 // --- Bandeja: avisos leídos (solo en este navegador) ---------------------
 
-const CLAVE_LEIDOS = "kontara.nomina.avisos-leidos";
+// Por empresa (multiempresa, ver lib/empresaActual.ts).
+const CLAVE_LEIDOS = () => claveEmpresa("kontara.nomina.avisos-leidos");
 const EVENTO = "kontara-nomina-avisos";
 
 function leerLeidos(): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(CLAVE_LEIDOS) ?? "[]") as string[]);
+    return new Set(JSON.parse(localStorage.getItem(CLAVE_LEIDOS()) ?? "[]") as string[]);
   } catch {
     return new Set();
   }
@@ -76,7 +78,7 @@ function leerLeidos(): Set<string> {
 
 function guardarLeidos(ids: Set<string>) {
   try {
-    localStorage.setItem(CLAVE_LEIDOS, JSON.stringify([...ids]));
+    localStorage.setItem(CLAVE_LEIDOS(), JSON.stringify([...ids]));
   } catch {
     // sin almacenamiento: solo dura mientras la página esté abierta
   }

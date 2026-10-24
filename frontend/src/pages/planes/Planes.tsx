@@ -270,6 +270,18 @@ export function PlanesPage() {
                 )}
               </div>
             ))}
+          {consumo && consumo.ecf_por_empresa.length > 1 && (
+            <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 6 }} data-consumo="por-empresa">
+              <span className="hint">e-CF emitidos este mes por empresa (el plan cuenta el total de todas las empresas de la cuenta):</span>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {consumo.ecf_por_empresa.map((e) => (
+                  <span key={e.empresa_id} className="chip">
+                    {e.nombre}: <b style={{ marginLeft: 4 }}>{e.ecf_emitidos.toLocaleString("en-US")}</b>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </section>
 

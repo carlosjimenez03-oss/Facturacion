@@ -79,7 +79,10 @@ EOF
 # Generado por 40-kontara-sesion.sh: sesión EXIGIDA (KONTARA_AUTH).
 auth_request /_kontara/verificar;
 auth_request_set $kontara_motivo $upstream_http_x_kontara_motivo;
+# Multiempresa: la empresa que verificó erp-api (ver nginx.conf).
+auth_request_set $kontara_empresa $upstream_http_x_kontara_empresa;
 error_page 401 = @kontara_sin_sesion;
+error_page 403 = @kontara_sin_empresa;
 EOF
     echo "40-kontara-sesion: inicio de sesión EXIGIDO en /api*"
     ;;

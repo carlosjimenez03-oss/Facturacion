@@ -115,11 +115,13 @@ export interface Usuario {
   /** app_metadata.kontara: puede entrar a Kontara. */
   acceso: boolean;
   admin: boolean;
+  /** Rol en la empresa en uso (multiempresa). */
+  rol_empresa: "admin" | "usuario" | null;
 }
 
 export interface Usuarios {
   configurado: boolean;
-  /** Solo los que tienen acceso a Kontara. */
+  /** Los miembros de la empresa en uso con acceso a Kontara (multiempresa: cada empresa ve los suyos). */
   usuarios: Usuario[];
   /** Los demás usuarios del mismo Supabase Auth (no pueden entrar). */
   sin_acceso: Usuario[];
@@ -265,8 +267,12 @@ export const configuracionApi = {
   eliminarVendedor: (id: string) => request<void>(`/configuracion/vendedores/${id}`, { method: "DELETE" }),
 
   usuarios: () => request<Usuarios>("/configuracion/usuarios"),
-  crearUsuario: (correo: string, contrasena: string | null) =>
-    request<Usuario>("/configuracion/usuarios", json("POST", { correo, contrasena: contrasena || null })),
+  /** Crea o invita EN LA EMPRESA EN USO; si el correo ya es de un usuario, lo agrega a ella. */
+  crearUsuario: (correo: string, contrasena: string | null, rol: "admin" | "usuario" = "usuario") =>
+    request<Usuario>("/configuracion/usuarios", json("POST", { correo, contrasena: contrasena || null, rol })),
+  cambiarRolUsuario: (id: string, rol: "admin" | "usuario") => request<Usuario>(`/configuracion/usuarios/${id}/rol`, json("PUT", { rol })),
+  /** Lo saca de la empresa en uso (sigue en las demás). */
+  quitarDeEmpresa: (id: string) => request<void>(`/configuracion/usuarios/${id}/empresa`, { method: "DELETE" }),
   desactivarUsuario: (id: string) => request<Usuario>(`/configuracion/usuarios/${id}/desactivar`, { method: "POST" }),
   activarUsuario: (id: string) => request<Usuario>(`/configuracion/usuarios/${id}/activar`, { method: "POST" }),
   darAccesoUsuario: (id: string) => request<Usuario>(`/configuracion/usuarios/${id}/acceso`, { method: "POST" }),

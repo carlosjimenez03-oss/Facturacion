@@ -100,7 +100,10 @@ export interface Suscripcion {
 export interface Consumo {
   mes: string;
   plan_limites: PlanClave;
+  /** Total de la instalación (todas las empresas): es lo que cuenta el plan. */
   ecf_emitidos: number;
+  /** Desglose de las empresas del usuario (multiempresa). */
+  ecf_por_empresa: { empresa_id: number; nombre: string; ecf_emitidos: number }[];
   ecf_limite: number | null;
   ecf_porcentaje: number | null;
   /** null = todavía no hay tabla de usuarios de la plataforma. */

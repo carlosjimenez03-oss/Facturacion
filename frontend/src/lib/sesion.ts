@@ -21,6 +21,12 @@
 // Sin VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY en el build, el inicio de
 // sesión queda apagado (AUTH_CONFIGURADA = false) y todo funciona como antes.
 // Ver docs/AUTH.md.
+//
+// Multiempresa: `fetchConSesion` manda también la empresa de la pestaña
+// (`X-Kontara-Empresa`, ver empresaActual.ts). Si el servidor responde que el
+// usuario no es miembro de esa empresa (403 sin_empresa), se olvida la
+// elección y se recarga: el servidor da la que le corresponde.
+import { cabeceraEmpresa, empresaSeleccionada, fijarUsuarioEmpresa, seleccionarEmpresa } from "./empresaActual";
 
 const URL_CRUDA = ((import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? "").trim();
 export const SUPABASE_ANON_KEY = ((import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined) ?? "").trim();
@@ -64,6 +70,7 @@ export class AuthError extends Error {
 let sesion: Sesion | null = leerGuardada();
 const oyentes = new Set<() => void>();
 let temporizador: number | undefined;
+fijarUsuarioEmpresa(sesion?.usuario.id ?? null);
 
 function leerGuardada(): Sesion | null {
   if (!AUTH_CONFIGURADA) return null;
@@ -87,6 +94,7 @@ function escribirCookie(token: string | null, expira?: number) {
 
 function guardar(nueva: Sesion | null) {
   sesion = nueva;
+  fijarUsuarioEmpresa(nueva?.usuario.id ?? null);
   try {
     if (nueva) localStorage.setItem(CLAVE, JSON.stringify(nueva));
     else localStorage.removeItem(CLAVE);
@@ -112,6 +120,7 @@ if (typeof window !== "undefined" && AUTH_CONFIGURADA) {
   window.addEventListener("storage", (e) => {
     if (e.key !== CLAVE) return;
     sesion = leerGuardada();
+    fijarUsuarioEmpresa(sesion?.usuario.id ?? null);
     programarRenovacion();
     oyentes.forEach((o) => o());
   });
@@ -376,18 +385,43 @@ export function authHeaders(): Record<string, string> {
 }
 
 function conToken(init: RequestInit | undefined, token: string | null): RequestInit {
-  if (!token) return init ?? {};
   const headers = new Headers(init?.headers);
-  headers.set("Authorization", `Bearer ${token}`);
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  for (const [k, v] of Object.entries(cabeceraEmpresa())) {
+    if (!headers.has(k)) headers.set(k, v);
+  }
   return { ...init, headers };
 }
 
-/** `fetch` con la sesión: Bearer, renovación previa y un reintento tras 401. */
+/** 403 de una empresa de la que el usuario no es miembro (o que ya no
+ * existe): se olvida la elegida y se recarga con la que dé el servidor. */
+async function sinEmpresa(respuesta: Response): Promise<boolean> {
+  if (respuesta.status !== 403 || empresaSeleccionada() === null) return false;
+  try {
+    const cuerpo = await respuesta.clone().json();
+    if (cuerpo?.codigo !== "sin_empresa" && cuerpo?.codigo !== "empresa_inexistente") return false;
+  } catch {
+    return false;
+  }
+  seleccionarEmpresa(null);
+  if (typeof window !== "undefined") window.location.assign("/");
+  return true;
+}
+
+/** `fetch` con la sesión: Bearer, renovación previa y un reintento tras 401;
+ * y la empresa de la pestaña (X-Kontara-Empresa). */
 export async function fetchConSesion(input: string, init?: RequestInit): Promise<Response> {
-  if (!AUTH_CONFIGURADA) return fetch(input, init);
+  if (!AUTH_CONFIGURADA) {
+    const respuesta = await fetch(input, conToken(init, null));
+    await sinEmpresa(respuesta);
+    return respuesta;
+  }
   const token = await tokenVigente();
   const respuesta = await fetch(input, conToken(init, token));
-  if (respuesta.status !== 401 || !sesion) return respuesta;
+  if (respuesta.status !== 401 || !sesion) {
+    await sinEmpresa(respuesta);
+    return respuesta;
+  }
   const renovada = await renovarSesion();
   if (!renovada) {
     guardar(null);
@@ -395,5 +429,6 @@ export async function fetchConSesion(input: string, init?: RequestInit): Promise
   }
   const segunda = await fetch(input, conToken(init, renovada.access_token));
   if (segunda.status === 401) guardar(null);
+  else await sinEmpresa(segunda);
   return segunda;
 }

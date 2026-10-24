@@ -3,6 +3,7 @@ import { IconDocumento, IconSubir } from "../../layout/icons";
 import { ACTIVIDADES_ECONOMICAS, OFICINA_VIRTUAL_DGII, PROVINCIAS } from "../../lib/catalogosRD";
 import {
   configuracionApi,
+  useDatosEmpresa,
   type AmbienteApp,
   type Certificado,
   type Empresa,
@@ -1154,7 +1155,9 @@ export function SeccionUsuarios({ refSeccion, avisar }: { refSeccion: RefSeccion
   const [nuevo, setNuevo] = useState(false);
   const [correo, setCorreo] = useState("");
   const [clave, setClave] = useState("");
+  const [rol, setRol] = useState<"admin" | "usuario">("usuario");
   const yo = sesionActual()?.usuario.id;
+  const nombreDeLaEmpresa = useDatosEmpresa().nombre;
 
   const cargar = () => configuracionApi.usuarios().then(setDatos).catch((err) => setError(mensajeError(err)));
   useEffect(() => {
@@ -1163,12 +1166,13 @@ export function SeccionUsuarios({ refSeccion, avisar }: { refSeccion: RefSeccion
 
   async function crear() {
     try {
-      const u = await configuracionApi.crearUsuario(correo, clave || null);
+      const u = await configuracionApi.crearUsuario(correo, clave || null, rol);
       setNuevo(false);
       setCorreo("");
       setClave("");
+      setRol("usuario");
       await cargar();
-      avisar(u.invitado ? `Invitación enviada a ${u.correo}` : `Usuario ${u.correo} creado`);
+      avisar(u.invitado ? `Invitación enviada a ${u.correo}` : `${u.correo} agregado a ${nombreDeLaEmpresa}`);
     } catch (err) {
       avisar("No se pudo crear el usuario", { detalle: mensajeError(err), error: true });
     }
@@ -1181,6 +1185,27 @@ export function SeccionUsuarios({ refSeccion, avisar }: { refSeccion: RefSeccion
       avisar(activo ? "Usuario activado" : "Usuario desactivado");
     } catch (err) {
       avisar("No se pudo cambiar el usuario", { detalle: mensajeError(err), error: true });
+    }
+  }
+
+  async function cambiarRol(u: Usuario, nuevoRol: "admin" | "usuario") {
+    try {
+      await configuracionApi.cambiarRolUsuario(u.id, nuevoRol);
+      await cargar();
+      avisar(`${u.correo} ahora es ${nuevoRol === "admin" ? "administrador" : "usuario"} de ${nombreDeLaEmpresa}`);
+    } catch (err) {
+      avisar("No se pudo cambiar el rol", { detalle: mensajeError(err), error: true });
+    }
+  }
+
+  async function quitar(u: Usuario) {
+    if (!window.confirm(`¿Quitar a ${u.correo} de ${nombreDeLaEmpresa}? Sigue en sus otras empresas.`)) return;
+    try {
+      await configuracionApi.quitarDeEmpresa(u.id);
+      await cargar();
+      avisar(`${u.correo} ya no es miembro de ${nombreDeLaEmpresa}`);
+    } catch (err) {
+      avisar("No se pudo quitar de la empresa", { detalle: mensajeError(err), error: true });
     }
   }
 
@@ -1198,7 +1223,7 @@ export function SeccionUsuarios({ refSeccion, avisar }: { refSeccion: RefSeccion
     <Tarjeta
       id="usuarios"
       refSeccion={refSeccion}
-      titulo="Usuarios"
+      titulo={`Usuarios de ${nombreDeLaEmpresa}`}
       extra={
         datos?.configurado ? (
           <button type="button" className="btn btn-o btn-sm" onClick={() => setNuevo((v) => !v)}>
@@ -1240,6 +1265,13 @@ export function SeccionUsuarios({ refSeccion, avisar }: { refSeccion: RefSeccion
             <label className="lbl" htmlFor="us-p">Contraseña inicial</label>
             <input id="us-p" className="inp" type="password" autoComplete="new-password" value={clave} onChange={(e) => setClave(e.target.value)} placeholder="Vacía = enviar invitación" />
           </div>
+          <div className="fld">
+            <label className="lbl" htmlFor="us-r">Rol en {nombreDeLaEmpresa}</label>
+            <select id="us-r" className="inp" value={rol} onChange={(e) => setRol(e.target.value as "admin" | "usuario")}>
+              <option value="usuario">Usuario</option>
+              <option value="admin">Administrador</option>
+            </select>
+          </div>
           <div className="cfg-acciones">
             <button type="button" className="btn btn-p btn-sm" disabled={!correo.includes("@") || (clave !== "" && clave.length < 8)} onClick={() => void crear()}>
               {clave ? "Crear usuario" : "Enviar invitación"}
@@ -1247,7 +1279,8 @@ export function SeccionUsuarios({ refSeccion, avisar }: { refSeccion: RefSeccion
           </div>
           <span className="hint" style={{ gridColumn: "1 / -1" }}>
             Sin contraseña, Supabase envía un correo de invitación (requiere SMTP configurado en el recurso de Supabase). Con contraseña, el usuario
-            queda confirmado y puede entrar de inmediato; pídale que la cambie en Seguridad.
+            queda confirmado y puede entrar de inmediato; pídale que la cambie en Seguridad. Si el correo ya es de un usuario (de otra de sus
+            empresas), se agrega a esta sin crearlo de nuevo.
           </span>
         </div>
       )}
@@ -1257,6 +1290,7 @@ export function SeccionUsuarios({ refSeccion, avisar }: { refSeccion: RefSeccion
             <thead>
               <tr>
                 <th>Correo</th>
+                <th>Rol</th>
                 <th>Creado</th>
                 <th>Último acceso</th>
                 <th>Estado</th>
@@ -1270,6 +1304,22 @@ export function SeccionUsuarios({ refSeccion, avisar }: { refSeccion: RefSeccion
                     {u.correo}
                     {u.id === yo && <span className="chip chip-sm" style={{ marginLeft: 6 }}>Usted</span>}
                   </td>
+                  <td>
+                    {u.id === yo ? (
+                      <span className="mut">{u.rol_empresa === "admin" ? "Administrador" : "Usuario"}</span>
+                    ) : (
+                      <select
+                        className="inp"
+                        style={{ height: 32, width: "auto" }}
+                        aria-label={`Rol de ${u.correo}`}
+                        value={u.rol_empresa ?? "usuario"}
+                        onChange={(e) => void cambiarRol(u, e.target.value as "admin" | "usuario")}
+                      >
+                        <option value="usuario">Usuario</option>
+                        <option value="admin">Administrador</option>
+                      </select>
+                    )}
+                  </td>
                   <td className="mut">{fechaCorta(u.creado_en)}</td>
                   <td className="mut">{u.ultimo_acceso ? fechaCorta(u.ultimo_acceso) : "Nunca"}</td>
                   <td>
@@ -1279,9 +1329,14 @@ export function SeccionUsuarios({ refSeccion, avisar }: { refSeccion: RefSeccion
                   </td>
                   <td className="right">
                     {u.id !== yo && (
-                      <button type="button" className="btn btn-g btn-sm" onClick={() => void cambiar(u.id, !u.activo)}>
-                        {u.activo ? "Desactivar" : "Activar"}
-                      </button>
+                      <span style={{ display: "inline-flex", gap: 4 }}>
+                        <button type="button" className="btn btn-g btn-sm" onClick={() => void cambiar(u.id, !u.activo)}>
+                          {u.activo ? "Desactivar" : "Activar"}
+                        </button>
+                        <button type="button" className="btn btn-g btn-sm" title={`Quitar de ${nombreDeLaEmpresa} (sigue en sus otras empresas)`} onClick={() => void quitar(u)}>
+                          Quitar
+                        </button>
+                      </span>
                     )}
                   </td>
                 </tr>
