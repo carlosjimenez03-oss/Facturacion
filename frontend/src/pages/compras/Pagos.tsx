@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { IconAlerta } from "../../layout/icons";
+import { bancosApi } from "../../lib/bancosApi";
+import type { CuentaBancaria } from "../../lib/bancosApi";
 import { comprasApi } from "../../lib/comprasApi";
 import type { CuentaPorPagar, MetodoPago, PagoProveedor } from "../../lib/comprasApi";
 import { formatoMonto, formatoRnc } from "../../lib/marca";
 import { AvisoError, Buscador, Cargando, Estadistica, Modal, SinResultados, Vacio } from "../ingresos/IngresosShell";
 import { useAviso } from "../ingresos/useAviso";
 import { centavos, descargarCsv, fechaIso, fechaLegible, hoyIso, mensajeError, mesActualLegible } from "../ingresos/ingresosUtil";
+import { etiquetaCuenta } from "../bancos/bancosUtil";
 import { nombrePeriodo } from "../impuestos/impuestosUtil";
 import { ComprasEncabezado } from "./ComprasShell";
 import {
@@ -27,6 +30,8 @@ interface FormPago {
   montoManual: boolean;
   metodo: MetodoPago;
   cuenta_origen: string;
+  /** Cuenta de Bancos de la que sale el dinero ("" = solo el texto libre de cuenta_origen). */
+  cuenta_bancaria_id: string;
   referencia: string;
   tipo_retencion_isr: string;
   retencion_isr: string;
@@ -41,6 +46,7 @@ function formVacio(): FormPago {
     montoManual: false,
     metodo: "transferencia",
     cuenta_origen: "",
+    cuenta_bancaria_id: "",
     referencia: "",
     tipo_retencion_isr: "",
     retencion_isr: "",
@@ -58,6 +64,7 @@ export function PagosProveedoresPage() {
   const [params, setParams] = useSearchParams();
   const [cuentas, setCuentas] = useState<CuentaPorPagar[]>([]);
   const [pagos, setPagos] = useState<PagoProveedor[]>([]);
+  const [bancos, setBancos] = useState<CuentaBancaria[]>([]);
   const [cargando, setCargando] = useState(true);
   const [errorCuentas, setErrorCuentas] = useState<string | null>(null);
   const [errorPagos, setErrorPagos] = useState<string | null>(null);
@@ -77,7 +84,7 @@ export function PagosProveedoresPage() {
 
   const cargar = useCallback(async () => {
     setCargando(true);
-    const [cxp, hist] = await Promise.allSettled([comprasApi.listarCuentasPorPagar({ estado: "todas" }), comprasApi.listarPagos()]);
+    const [cxp, hist, ctas] = await Promise.allSettled([comprasApi.listarCuentasPorPagar({ estado: "todas" }), comprasApi.listarPagos(), bancosApi.listarCuentas()]);
     if (cxp.status === "fulfilled") {
       setCuentas(cxp.value);
       setErrorCuentas(null);
@@ -92,6 +99,8 @@ export function PagosProveedoresPage() {
       setPagos([]);
       setErrorPagos(mensajeError(hist.reason));
     }
+    // Sin Bancos (servicio caído o sin cuentas) queda solo el texto libre de la cuenta de origen.
+    setBancos(ctas.status === "fulfilled" ? ctas.value : []);
     setCargando(false);
   }, []);
 
@@ -101,6 +110,10 @@ export function PagosProveedoresPage() {
 
   const porPagar = useMemo(() => cuentas.filter((c) => c.estado !== "pagada" && Number(c.pendiente) > 0), [cuentas]);
   const seleccionada = porPagar.find((c) => c.registro606_id === form.registro606_id);
+  // Los pagos son en RD$: solo las cuentas activas en pesos (el backend rechaza las demás con 422).
+  const cuentasBanco = bancos.filter((c) => c.activa && c.moneda === "DOP");
+  const cuentaBanco = bancos.find((c) => c.id === form.cuenta_bancaria_id);
+  const nombreBanco = (id: string | null) => (id ? bancos.find((c) => c.id === id) : undefined);
   /** Las retenciones se aplican en un solo pago por factura. */
   const conRetenciones = (id: string) => pagos.some((p) => p.registro606_id === id && !p.anulado && tieneRetenciones(p));
   const bloqueadas = seleccionada ? conRetenciones(seleccionada.registro606_id) : false;
@@ -203,7 +216,8 @@ export function PagosProveedoresPage() {
         fecha: form.fecha,
         monto: montoValor.toFixed(2),
         metodo: form.metodo,
-        cuenta_origen: form.cuenta_origen.trim() || null,
+        cuenta_origen: cuentaBanco ? etiquetaCuenta(cuentaBanco) : form.cuenta_origen.trim() || null,
+        cuenta_bancaria_id: form.cuenta_bancaria_id || null,
         referencia: form.referencia.trim() || null,
         tipo_retencion_isr: retIsr > 0 ? Number(form.tipo_retencion_isr) : null,
         retencion_isr: retIsr.toFixed(2),
@@ -324,7 +338,7 @@ export function PagosProveedoresPage() {
                 value={form.registro606_id}
                 onChange={(e) => {
                   const c = porPagar.find((x) => x.registro606_id === e.target.value);
-                  setForm((prev) => ({ ...prellenar(c), fecha: prev.fecha, metodo: prev.metodo, cuenta_origen: prev.cuenta_origen, referencia: prev.referencia }));
+                  setForm((prev) => ({ ...prellenar(c), fecha: prev.fecha, metodo: prev.metodo, cuenta_origen: prev.cuenta_origen, cuenta_bancaria_id: prev.cuenta_bancaria_id, referencia: prev.referencia }));
                   setRegla(null);
                   setErrorForm(null);
                 }}
@@ -352,22 +366,38 @@ export function PagosProveedoresPage() {
                 ))}
               </select>
             </div>
-            <div className="fld">
-              <label className="lbl" htmlFor="pg-cta">Cuenta de origen</label>
-              <input
-                id="pg-cta"
-                className="inp"
-                list="pg-cuentas"
-                value={form.cuenta_origen}
-                onChange={(e) => set("cuenta_origen", e.target.value)}
-                placeholder={form.metodo === "efectivo" ? "Caja chica" : "Banco Popular ****4471"}
-              />
-              <datalist id="pg-cuentas">
-                {cuentasOrigen.map((c) => (
-                  <option key={c} value={c} />
-                ))}
-              </datalist>
-            </div>
+            {cuentasBanco.length > 0 && (
+              <div className="fld">
+                <label className="lbl" htmlFor="pg-banco">Cuenta bancaria</label>
+                <select id="pg-banco" className="inp" value={form.cuenta_bancaria_id} onChange={(e) => set("cuenta_bancaria_id", e.target.value)}>
+                  <option value="">Sin cuenta de Bancos</option>
+                  {cuentasBanco.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {etiquetaCuenta(c)}
+                    </option>
+                  ))}
+                </select>
+                <span className="hint">{cuentaBanco ? "El pago sale de esta cuenta y se concilia con el extracto." : "Elija la cuenta para verlo en Bancos y conciliarlo."}</span>
+              </div>
+            )}
+            {!cuentaBanco && (
+              <div className="fld">
+                <label className="lbl" htmlFor="pg-cta">Cuenta de origen</label>
+                <input
+                  id="pg-cta"
+                  className="inp"
+                  list="pg-cuentas"
+                  value={form.cuenta_origen}
+                  onChange={(e) => set("cuenta_origen", e.target.value)}
+                  placeholder={form.metodo === "efectivo" ? "Caja chica" : "Banco Popular ****4471"}
+                />
+                <datalist id="pg-cuentas">
+                  {cuentasOrigen.map((c) => (
+                    <option key={c} value={c} />
+                  ))}
+                </datalist>
+              </div>
+            )}
             <div className="fld">
               <label className="lbl" htmlFor="pg-ref">Referencia</label>
               <input
@@ -642,7 +672,9 @@ export function PagosProveedoresPage() {
                     </td>
                     <td>
                       {METODO_LABEL[p.metodo] ?? p.metodo}
-                      {(p.cuenta_origen || p.referencia) && <div className="hint">{[p.cuenta_origen, p.referencia].filter(Boolean).join(" · ")}</div>}
+                      {(p.cuenta_bancaria_id || p.cuenta_origen || p.referencia) && (
+                        <div className="hint">{[nombreBanco(p.cuenta_bancaria_id)?.nombre ?? p.cuenta_origen, p.referencia].filter(Boolean).join(" · ")}</div>
+                      )}
                     </td>
                     <td className="num" style={{ textDecoration: p.anulado ? "line-through" : undefined }}>
                       {formatoMonto(p.monto)}

@@ -185,6 +185,8 @@ export interface Cobro {
   monto: string;
   metodo: MetodoCobro;
   cuenta_destino: string | null;
+  /** Cuenta de Bancos (bancosApi.CuentaBancaria) donde entró el dinero; null si no se indicó. */
+  cuenta_bancaria_id: string | null;
   referencia: string | null;
   notas: string | null;
   anulado: boolean;
@@ -197,6 +199,11 @@ export interface CobroPayload {
   monto: string;
   metodo: MetodoCobro;
   cuenta_destino?: string | null;
+  /**
+   * Cuenta de Bancos (en RD$, activa) donde entra el dinero: el cobro pasa a ser un movimiento conciliable de esa
+   * cuenta. 422 si no existe, está inactiva, es en dólares o la fecha es anterior a su saldo inicial.
+   */
+  cuenta_bancaria_id?: string | null;
   referencia?: string | null;
   notas?: string | null;
 }

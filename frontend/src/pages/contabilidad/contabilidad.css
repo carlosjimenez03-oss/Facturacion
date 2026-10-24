@@ -1,0 +1,84 @@
+/* Complementos de las pantallas de Contabilidad (el sistema de diseño está en index.css). */
+.ct-ctl{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+.ct-ctl .fld{flex:0 1 200px;min-width:140px}
+.ct-ctl .tb-search{flex:1 1 220px}
+.ct-ctl .grow{flex:1 1 auto}
+.ct-split{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.ct-split>*{flex:1 1 420px;min-width:0}
+.ct-lista{margin:6px 0 0;padding-left:18px}
+
+/* Catálogo: árbol con sangría por nivel (como el prototipo) */
+.ct-arbol-f{display:flex;align-items:center;gap:10px;padding:10px 20px;border-bottom:1px solid #F0F1F3;min-width:0}
+.ct-arbol-f:last-child{border-bottom:0}
+.ct-arbol-f .ib{width:28px;height:28px;flex:none}
+.ct-arbol-f .ib svg{transition:transform .15s}
+.ct-arbol-f .ct-hoja{width:28px;flex:none}
+.ct-arbol-f .ct-cod{width:90px;flex:none;color:#6B7280}
+.ct-arbol-f .ct-nom{flex:1 1 120px;min-width:0;color:#111827;overflow-wrap:anywhere}
+.ct-arbol-f .ct-sal{flex:none;font-variant-numeric:tabular-nums;text-align:right;min-width:110px}
+.ct-arbol-f .ct-acc{flex:none;opacity:.0;transition:opacity .12s}
+.ct-arbol-f:hover .ct-acc,.ct-arbol-f:focus-within .ct-acc{opacity:1}
+.ct-arbol-f.off .ct-nom{color:#9CA3AF}
+@media (hover:none){.ct-arbol-f .ct-acc{opacity:1}}
+@media (max-width:640px){
+  .ct-arbol-f{gap:6px;padding:9px 12px}
+  .ct-arbol-f .ct-cod{width:66px;font-size:12px}
+  .ct-arbol-f .ct-sal{min-width:0;font-size:13px}
+  .ct-arbol-f{flex-wrap:wrap;row-gap:2px}
+  .ct-arbol-f .ct-acc{order:5;flex-basis:100%;justify-content:flex-end}
+}
+
+/* Cuentas por defecto */
+.ct-def{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px 20px}
+.ct-def .fld .lbl{display:flex;justify-content:space-between;gap:8px}
+.ct-def-g{grid-column:1/-1;margin:8px 0 0;font-size:13px;font-weight:650;color:#0F766E;text-transform:uppercase;letter-spacing:.04em}
+.ct-def-g:first-child{margin-top:0}
+.ct-def .inp.falta{border-color:#FCA5A5;background:#FEF2F2}
+
+/* Asientos: líneas del formulario (como el prototipo) */
+.ct-lineas td{vertical-align:top}
+.ct-lineas td:first-child select.inp-sm{min-width:260px}
+.ct-lineas input.inp-sm{text-align:right;min-width:120px}
+.ct-lineas input[type=number]{-moz-appearance:textfield;appearance:textfield}
+.ct-lineas input[type=number]::-webkit-inner-spin-button,.ct-lineas input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.ct-gen{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+.ct-gen .stat{padding:14px 16px}
+.ct-gen .stat .v{font-size:22px}
+.tbl tr.ct-anulado td{color:#9CA3AF}
+.tbl tr.ct-sub td{background:#FAFBFC;font-weight:600;color:#111827}
+.tbl tr.ct-total td{font-weight:700;color:#111827;border-top:1px solid #D1D5DB}
+.tbl tr.ct-total.ct-res td{background:#F0FAF9;color:#0F766E}
+
+/* Reportes: selector como Reportes.dc.html */
+.ct-reps{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.ct-rep{text-align:left;font:inherit;cursor:pointer;padding:16px;border-radius:12px;border:1px solid #E5E7EB;background:#fff;display:flex;flex-direction:column;gap:4px}
+.ct-rep.on{border:1.5px solid #0F766E;background:#F0FAF9;padding:15.5px}
+.ct-rep b{color:#111827;font-size:14.5px;margin-top:4px}
+.ct-rep>span:last-child{font-size:12.5px;color:#6B7280}
+.ct-rep .chip{align-self:flex-start}
+.ct-cuadre{display:inline-flex;align-items:center;gap:6px}
+
+/* Resumen */
+.ct-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:16px}
+.ct-kpis .stat .v{font-size:22px}
+.ct-barra{display:flex;flex-direction:column;gap:10px;padding:4px 20px 18px}
+.ct-barra-f{display:grid;grid-template-columns:120px 1fr auto;gap:10px;align-items:center;font-size:13.5px;color:#374151}
+.ct-barra-f .num{font-weight:600;color:#111827}
+@media (max-width:640px){.ct-barra-f{grid-template-columns:90px 1fr;}.ct-barra-f .num{grid-column:1/-1;text-align:right;margin-top:-6px}}
+
+/* Activos fijos */
+.ct-fiscal{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center}
+.ct-fiscal .grow{flex:1 1 320px}
+.ct-fiscal .v{font-size:22px;font-weight:700;color:#0F766E;font-variant-numeric:tabular-nums}
+
+/* Impresión de reportes */
+.ct-imp{display:none}
+@media print{
+  .ct-imp{display:block!important;margin-bottom:12px}
+  .ct-imp h1{margin:0;font-size:20px}
+  .ct-imp p{margin:2px 0 0;font-size:12px;color:#4B5563}
+  .ct-reporte .tw{overflow:visible}
+  .ct-reporte .tbl{min-width:0!important;font-size:11px}
+  .ct-reporte .tbl th,.ct-reporte .tbl td{padding:5px 6px}
+  .ct-reporte .card{border:0;box-shadow:none}
+}

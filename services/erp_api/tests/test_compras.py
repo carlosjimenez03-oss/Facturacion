@@ -322,6 +322,7 @@ def test_registrar_pago(client, monkeypatch):
         "registro606_id": uuid.UUID(registro), "fecha": date(2026, 10, 20), "monto": Decimal("106600"),
         "metodo": "transferencia", "cuenta_origen": None, "referencia": None, "notas": None,
         "tipo_retencion_isr": 2, "retencion_isr": Decimal("6000"), "retencion_itbis": Decimal("5400"),
+        "cuenta_bancaria_id": None,
     }
     assert r.json()["monto"] == "106600.00"
 

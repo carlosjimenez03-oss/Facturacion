@@ -1,11 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { IconAlerta } from "../../layout/icons";
+import { bancosApi } from "../../lib/bancosApi";
+import type { CuentaBancaria } from "../../lib/bancosApi";
 import { erpApi } from "../../lib/erpApi";
 import type { Cobro, CuentaPorCobrar, EstadoCuentaCobrar, MetodoCobro } from "../../lib/erpApi";
 import { EMPRESA_NOMBRE, formatoMonto, formatoRnc } from "../../lib/marca";
 import { AvisoError, Buscador, Cargando, Estadistica, IngresosEncabezado, Modal, SinResultados, Vacio } from "./IngresosShell";
 import { useAviso } from "./useAviso";
+import { etiquetaCuenta } from "../bancos/bancosUtil";
 import { descargarCsv, enlaceWhatsApp, fechaIso, fechaLegible, hoyIso, mensajeError, mesActualLegible } from "./ingresosUtil";
 
 type Pestana = "pendientes" | "vencidas" | "cobradas" | "todas";
@@ -37,12 +40,14 @@ interface FormCobro {
   monto: string;
   metodo: MetodoCobro;
   cuenta_destino: string;
+  /** Cuenta de Bancos donde entra el dinero ("" = solo el texto libre de cuenta_destino). */
+  cuenta_bancaria_id: string;
   referencia: string;
   fecha: string;
 }
 
 function formVacio(): FormCobro {
-  return { factura_id: "", monto: "", metodo: "transferencia", cuenta_destino: "", referencia: "", fecha: hoyIso() };
+  return { factura_id: "", monto: "", metodo: "transferencia", cuenta_destino: "", cuenta_bancaria_id: "", referencia: "", fecha: hoyIso() };
 }
 
 function textoRecordatorio(c: CuentaPorCobrar): string {
@@ -60,6 +65,7 @@ export function CobrosPage() {
   const [params, setParams] = useSearchParams();
   const [cuentas, setCuentas] = useState<CuentaPorCobrar[]>([]);
   const [cobros, setCobros] = useState<Cobro[]>([]);
+  const [bancos, setBancos] = useState<CuentaBancaria[]>([]);
   const [cargando, setCargando] = useState(true);
   const [errorCuentas, setErrorCuentas] = useState<string | null>(null);
   const [errorCobros, setErrorCobros] = useState<string | null>(null);
@@ -77,7 +83,7 @@ export function CobrosPage() {
 
   const cargar = useCallback(async () => {
     setCargando(true);
-    const [cxc, hist] = await Promise.allSettled([erpApi.listarCuentasPorCobrar({ estado: "todas" }), erpApi.listarCobros()]);
+    const [cxc, hist, ctas] = await Promise.allSettled([erpApi.listarCuentasPorCobrar({ estado: "todas" }), erpApi.listarCobros(), bancosApi.listarCuentas()]);
     if (cxc.status === "fulfilled") {
       setCuentas(cxc.value);
       setErrorCuentas(null);
@@ -92,6 +98,8 @@ export function CobrosPage() {
       setCobros([]);
       setErrorCobros(mensajeError(hist.reason));
     }
+    // Sin Bancos (servicio caído o sin cuentas) queda solo el texto libre de la cuenta de destino.
+    setBancos(ctas.status === "fulfilled" ? ctas.value : []);
     setCargando(false);
   }, []);
 
@@ -145,6 +153,10 @@ export function CobrosPage() {
   const cuentasDestino = useMemo(() => [...new Set(cobros.map((c) => c.cuenta_destino).filter((x): x is string => Boolean(x)))], [cobros]);
 
   const seleccionada = porCobrar.find((c) => c.factura_id === form.factura_id);
+  // Los cobros son en RD$: solo las cuentas activas en pesos (el backend rechaza las demás con 422).
+  const cuentasBanco = bancos.filter((c) => c.activa && c.moneda === "DOP");
+  const cuentaBanco = bancos.find((c) => c.id === form.cuenta_bancaria_id);
+  const nombreBanco = (id: string | null) => (id ? bancos.find((c) => c.id === id) : undefined);
 
   function set<K extends keyof FormCobro>(campo: K, valor: FormCobro[K]) {
     setForm((prev) => ({ ...prev, [campo]: valor }));
@@ -171,7 +183,8 @@ export function CobrosPage() {
         fecha: form.fecha,
         monto: monto.toFixed(2),
         metodo: form.metodo,
-        cuenta_destino: form.cuenta_destino.trim() || null,
+        cuenta_destino: cuentaBanco ? etiquetaCuenta(cuentaBanco) : form.cuenta_destino.trim() || null,
+        cuenta_bancaria_id: form.cuenta_bancaria_id || null,
         referencia: form.referencia.trim() || null,
       });
       setAbierto(false);
@@ -295,22 +308,38 @@ export function CobrosPage() {
                 ))}
               </select>
             </div>
-            <div className="fld">
-              <label className="lbl" htmlFor="cb-cta">Cuenta de destino</label>
-              <input
-                id="cb-cta"
-                className="inp"
-                list="cb-cuentas"
-                value={form.cuenta_destino}
-                onChange={(e) => set("cuenta_destino", e.target.value)}
-                placeholder={form.metodo === "efectivo" ? "Caja chica" : "Banco Popular ****4471"}
-              />
-              <datalist id="cb-cuentas">
-                {cuentasDestino.map((c) => (
-                  <option key={c} value={c} />
-                ))}
-              </datalist>
-            </div>
+            {cuentasBanco.length > 0 && (
+              <div className="fld">
+                <label className="lbl" htmlFor="cb-banco">Cuenta bancaria</label>
+                <select id="cb-banco" className="inp" value={form.cuenta_bancaria_id} onChange={(e) => set("cuenta_bancaria_id", e.target.value)}>
+                  <option value="">Sin cuenta de Bancos</option>
+                  {cuentasBanco.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {etiquetaCuenta(c)}
+                    </option>
+                  ))}
+                </select>
+                <span className="hint">{cuentaBanco ? "El cobro entra a esta cuenta y se concilia con el extracto." : "Elija la cuenta para verlo en Bancos y conciliarlo."}</span>
+              </div>
+            )}
+            {!cuentaBanco && (
+              <div className="fld">
+                <label className="lbl" htmlFor="cb-cta">Cuenta de destino</label>
+                <input
+                  id="cb-cta"
+                  className="inp"
+                  list="cb-cuentas"
+                  value={form.cuenta_destino}
+                  onChange={(e) => set("cuenta_destino", e.target.value)}
+                  placeholder={form.metodo === "efectivo" ? "Caja chica" : "Banco Popular ****4471"}
+                />
+                <datalist id="cb-cuentas">
+                  {cuentasDestino.map((c) => (
+                    <option key={c} value={c} />
+                  ))}
+                </datalist>
+              </div>
+            )}
             <div className="fld">
               <label className="lbl" htmlFor="cb-ref">Referencia</label>
               <input
@@ -494,7 +523,7 @@ export function CobrosPage() {
                       <td>{c.cliente_nombre}</td>
                       <td>{METODO_LABEL[c.metodo] ?? c.metodo}</td>
                       <td>
-                        {c.cuenta_destino || "—"}
+                        {(nombreBanco(c.cuenta_bancaria_id)?.nombre ?? c.cuenta_destino) || "—"}
                         {c.referencia && <div className="hint mono">{c.referencia}</div>}
                       </td>
                       <td className="num" style={{ textDecoration: c.anulado ? "line-through" : undefined }}>

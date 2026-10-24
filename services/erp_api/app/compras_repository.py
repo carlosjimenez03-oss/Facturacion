@@ -57,7 +57,16 @@ from .compras_calculos import CamposPago606, Pago
 from . import impuestos_repository
 from .impuestos_repository import ConflictoImpuestosError, validar_periodo_mensual
 from .precalculos import nombre_periodo
-from .repository import _ZONA_RD, DatosInvalidosError, _monto_dgii, _redondear, hoy
+from .repository import (
+    _ZONA_RD,
+    DatosInvalidosError,
+    _monto_dgii,
+    _redondear,
+    bloquear_cuenta_bancaria,
+    hoy,
+    liberar_conciliacion,
+    validar_cuenta_bancaria,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -989,7 +998,7 @@ async def eliminar_factura_compra(pool: asyncpg.Pool, registro_id: uuid.UUID) ->
 _SELECT_PAGOS = f"""
     SELECT pg.id, pg.registro606_id, r.ncf, r.rnc_cedula AS proveedor_rnc,
            {_NOMBRE_PROVEEDOR} AS proveedor_nombre,
-           pg.fecha, pg.monto, pg.metodo, pg.cuenta_origen, pg.referencia, pg.notas,
+           pg.fecha, pg.monto, pg.metodo, pg.cuenta_origen, pg.cuenta_bancaria_id, pg.referencia, pg.notas,
            pg.tipo_retencion_isr, pg.retencion_isr, pg.retencion_itbis,
            pg.anulado, pg.anulado_en, pg.creado_en
     FROM compras.pagos pg
@@ -1144,8 +1153,11 @@ async def registrar_pago(
     tipo_retencion_isr: int | None,
     retencion_isr: Decimal,
     retencion_itbis: Decimal,
+    cuenta_bancaria_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
-    """Registra un pago a proveedor y actualiza su renglón del 606.
+    """Registra un pago a proveedor y actualiza su renglón del 606. Con
+    `cuenta_bancaria_id`, el pago (lo que sale, neto de retenciones) es un
+    movimiento de esa cuenta de Bancos.
 
     `monto` es lo que se paga (neto de retenciones). Las retenciones se
     aplican una sola vez por factura (en un solo pago); con ellas, la fecha
@@ -1183,6 +1195,7 @@ async def registrar_pago(
     )
     async with pool.acquire() as conn:
         async with conn.transaction():
+            await validar_cuenta_bancaria(conn, cuenta_bancaria_id, fecha, documento="pago")
             registro = await conn.fetchrow(
                 "SELECT * FROM compras606.registros WHERE id = $1 FOR UPDATE", registro606_id
             )
@@ -1235,8 +1248,8 @@ async def registrar_pago(
                 """
                 INSERT INTO compras.pagos
                     (registro606_id, fecha, monto, metodo, cuenta_origen, referencia, notas,
-                     tipo_retencion_isr, retencion_isr, retencion_itbis)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                     tipo_retencion_isr, retencion_isr, retencion_itbis, cuenta_bancaria_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
                 RETURNING id
                 """,
                 registro606_id,
@@ -1249,6 +1262,7 @@ async def registrar_pago(
                 tipo_retencion_isr,
                 retencion_isr,
                 retencion_itbis,
+                cuenta_bancaria_id,
             )
             return await _obtener_pago(conn, pago_id)
 
@@ -1256,14 +1270,20 @@ async def registrar_pago(
 async def anular_pago(pool: asyncpg.Pool, pago_id: uuid.UUID) -> dict[str, Any]:
     """Anula el pago y recalcula el 606 con los pagos que quedan (sin pagos:
     vuelve a los valores de antes del primer pago). 409 si ya estaba
-    anulado o si cambia un 606/IT-1/IR-17 ya marcado como presentado."""
+    anulado, si cambia un 606/IT-1/IR-17 ya marcado como presentado o si
+    está conciliado en una conciliación bancaria cerrada (con la línea del
+    extracto en el período abierto, se desconcilia: ver
+    `repository.liberar_conciliacion`)."""
     async with pool.acquire() as conn:
         async with conn.transaction():
             actual = await conn.fetchrow(
-                "SELECT registro606_id, anulado FROM compras.pagos WHERE id = $1", pago_id
+                "SELECT registro606_id, anulado, cuenta_bancaria_id FROM compras.pagos WHERE id = $1", pago_id
             )
             if actual is None:
                 raise CompraNoEncontradaError(str(pago_id))
+            # Primero el candado de la cuenta bancaria (mismo orden que Bancos).
+            if actual["cuenta_bancaria_id"] is not None:
+                await bloquear_cuenta_bancaria(conn, actual["cuenta_bancaria_id"])
             # Mismo orden de bloqueo que registrar_pago: primero el renglón del 606.
             registro = await conn.fetchrow(
                 "SELECT * FROM compras606.registros WHERE id = $1 FOR UPDATE", actual["registro606_id"]
@@ -1271,6 +1291,9 @@ async def anular_pago(pool: asyncpg.Pool, pago_id: uuid.UUID) -> dict[str, Any]:
             anulado = await conn.fetchval("SELECT anulado FROM compras.pagos WHERE id = $1 FOR UPDATE", pago_id)
             if anulado:
                 raise ConflictoComprasError("El pago ya está anulado")
+            motivo = await liberar_conciliacion(conn, "pago", pago_id, actual["cuenta_bancaria_id"])
+            if motivo is not None:
+                raise ConflictoComprasError(motivo)
             await conn.execute(
                 "UPDATE compras.pagos SET anulado = true, anulado_en = now() WHERE id = $1", pago_id
             )

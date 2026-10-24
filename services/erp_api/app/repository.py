@@ -58,7 +58,7 @@ class CobroNoEncontradoError(Exception):
 
 
 class CobroEstadoInvalidoError(Exception):
-    """El cobro ya está anulado."""
+    """El cobro ya está anulado o está en una conciliación bancaria cerrada (409)."""
 
 
 class DatosInvalidosError(Exception):
@@ -736,10 +736,80 @@ async def listar_cuentas_por_cobrar(
 
 # --- Cobros ---------------------------------------------------------
 
+async def validar_cuenta_bancaria(
+    conn: asyncpg.Connection, cuenta_id: uuid.UUID | None, fecha: date, *, documento: str
+) -> None:
+    """Cuenta de Bancos de un cobro o pago (`cuenta_bancaria_id`): debe
+    existir, estar activa, ser en pesos (los cobros y pagos son en RD$) y la
+    fecha no puede ser anterior a su saldo inicial. 422 si no."""
+    if cuenta_id is None:
+        return
+    cuenta = await conn.fetchrow(
+        "SELECT nombre, activa, moneda, fecha_saldo_inicial FROM bancos.cuentas WHERE id = $1", cuenta_id
+    )
+    if cuenta is None:
+        raise DatosInvalidosError("La cuenta bancaria indicada no existe")
+    if not cuenta["activa"]:
+        raise DatosInvalidosError(f"La cuenta bancaria «{cuenta['nombre']}» está inactiva")
+    if cuenta["moneda"] != "DOP":
+        raise DatosInvalidosError(
+            f"La cuenta «{cuenta['nombre']}» es en {cuenta['moneda']}: el {documento} es en RD$, use una cuenta en pesos"
+        )
+    if fecha < cuenta["fecha_saldo_inicial"]:
+        raise DatosInvalidosError(
+            f"La fecha del {documento} es anterior al saldo inicial de «{cuenta['nombre']}» "
+            f"({cuenta['fecha_saldo_inicial']:%d/%m/%Y})"
+        )
+
+
+async def bloquear_cuenta_bancaria(conn: asyncpg.Connection, cuenta_id: uuid.UUID) -> None:
+    """Candado de transacción de una cuenta de Bancos (el mismo de
+    `bancos_repository._bloquear_cuenta`): serializa sus movimientos, su
+    conciliación y su cierre."""
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtext('bancos.cuenta'), hashtext($1))", str(cuenta_id)
+    )
+
+
+async def liberar_conciliacion(
+    conn: asyncpg.Connection, origen: str, movimiento_id: uuid.UUID, cuenta_id: uuid.UUID | None
+) -> str | None:
+    """Al anular un cobro o pago de una cuenta de Bancos: si está conciliado
+    con una línea del extracto que ya quedó en una conciliación cerrada
+    (fecha de la línea <= `conciliada_hasta`), devuelve el motivo del 409
+    (anularlo descuadraría esa conciliación); si no, desconcilia la línea.
+    Llamar con el candado de la cuenta (`bloquear_cuenta_bancaria`) tomado."""
+    if cuenta_id is None:
+        return None
+    fila = await conn.fetchrow(
+        """
+        SELECT el.id, el.fecha, c.nombre,
+               (SELECT max(hasta) FROM bancos.conciliaciones WHERE cuenta_id = el.cuenta_id) AS conciliada_hasta
+        FROM bancos.extracto_lineas el JOIN bancos.cuentas c ON c.id = el.cuenta_id
+        WHERE el.mov_origen = $1 AND el.mov_id = $2
+        """,
+        origen,
+        movimiento_id,
+    )
+    if fila is None:
+        return None
+    if fila["conciliada_hasta"] is not None and fila["fecha"] <= fila["conciliada_hasta"]:
+        return (
+            f"El {origen} está conciliado con la línea del extracto del {fila['fecha']:%d/%m/%Y} de «{fila['nombre']}», "
+            f"que ya está en la conciliación cerrada al {fila['conciliada_hasta']:%d/%m/%Y}: reabra esa conciliación "
+            "en Bancos para anularlo"
+        )
+    await conn.execute(
+        "UPDATE bancos.extracto_lineas SET mov_origen = NULL, mov_id = NULL, conciliada_en = NULL WHERE id = $1",
+        fila["id"],
+    )
+    return None
+
+
 _SELECT_COBROS = """
     SELECT co.id, co.factura_id, f.encf,
            COALESCE(f.datos::jsonb #>> '{Encabezado,Comprador,RazonSocialComprador}', '') AS cliente_nombre,
-           co.fecha, co.monto, co.metodo, co.cuenta_destino, co.referencia, co.notas,
+           co.fecha, co.monto, co.metodo, co.cuenta_destino, co.cuenta_bancaria_id, co.referencia, co.notas,
            co.anulado, co.creado_en
     FROM ventas.cobros co
     LEFT JOIN facturacion.facturas f ON f.id = co.factura_id
@@ -781,17 +851,21 @@ async def registrar_cobro(
     cuenta_destino: str | None,
     referencia: str | None,
     notas: str | None,
+    cuenta_bancaria_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
     """Registra un cobro de una factura a crédito, validando que no supere
     lo pendiente. El advisory lock por factura evita que dos cobros
     simultáneos de la misma factura pasen ambos la validación (no se puede
     usar FOR UPDATE: facturacion.facturas es de solo lectura para este
-    servicio)."""
+    servicio). Con `cuenta_bancaria_id`, el cobro es un movimiento de esa
+    cuenta de Bancos (ver `validar_cuenta_bancaria`)."""
     monto = _redondear(monto)
     if monto <= 0:
         raise DatosInvalidosError("El monto del cobro debe ser mayor que cero")
+    fecha = fecha or hoy()
     async with pool.acquire() as conn:
         async with conn.transaction():
+            await validar_cuenta_bancaria(conn, cuenta_bancaria_id, fecha, documento="cobro")
             await conn.execute("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", str(factura_id))
             cuenta = await conn.fetchrow(
                 f"WITH {_CTE_CXC} SELECT pendiente FROM cxc WHERE factura_id = $1", factura_id
@@ -808,25 +882,33 @@ async def registrar_cobro(
             cobro_id = await conn.fetchval(
                 """
                 INSERT INTO ventas.cobros
-                    (factura_id, fecha, monto, metodo, cuenta_destino, referencia, notas)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    (factura_id, fecha, monto, metodo, cuenta_destino, referencia, notas, cuenta_bancaria_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 RETURNING id
                 """,
                 factura_id,
-                fecha or hoy(),
+                fecha,
                 monto,
                 metodo,
                 cuenta_destino,
                 referencia,
                 notas,
+                cuenta_bancaria_id,
             )
             fila = await conn.fetchrow(f"{_SELECT_COBROS} WHERE co.id = $1", cobro_id)
     return _fila_cobro(fila)
 
 
 async def anular_cobro(pool: asyncpg.Pool, cobro_id: uuid.UUID) -> dict[str, Any]:
+    """409 si ya estaba anulado o si está conciliado en una conciliación
+    bancaria cerrada; si su línea del extracto está en el período abierto,
+    se desconcilia (ver `liberar_conciliacion`)."""
     async with pool.acquire() as conn:
         async with conn.transaction():
+            # Mismo orden que Bancos: primero el candado de la cuenta, después la fila.
+            cuenta_id = await conn.fetchval("SELECT cuenta_bancaria_id FROM ventas.cobros WHERE id = $1", cobro_id)
+            if cuenta_id is not None:
+                await bloquear_cuenta_bancaria(conn, cuenta_id)
             anulado = await conn.fetchval(
                 "SELECT anulado FROM ventas.cobros WHERE id = $1 FOR UPDATE", cobro_id
             )
@@ -834,6 +916,9 @@ async def anular_cobro(pool: asyncpg.Pool, cobro_id: uuid.UUID) -> dict[str, Any
                 raise CobroNoEncontradoError(str(cobro_id))
             if anulado:
                 raise CobroEstadoInvalidoError("El cobro ya está anulado")
+            motivo = await liberar_conciliacion(conn, "cobro", cobro_id, cuenta_id)
+            if motivo is not None:
+                raise CobroEstadoInvalidoError(motivo)
             await conn.execute(
                 "UPDATE ventas.cobros SET anulado = true, anulado_en = now() WHERE id = $1", cobro_id
             )
