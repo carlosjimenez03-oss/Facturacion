@@ -5,6 +5,8 @@
 // main.py. Montos y cantidades viajan como string decimal ("1250.00"),
 // fechas como "YYYY-MM-DD" y marcas de tiempo como ISO 8601.
 
+import { fetchConSesion } from "./sesion";
+
 export const ERP_API_URL = (import.meta.env.VITE_ERP_API_URL as string | undefined) ?? "http://localhost:8019";
 
 export class ErpApiError extends Error {
@@ -17,7 +19,7 @@ export class ErpApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${ERP_API_URL}${path}`, {
+  const response = await fetchConSesion(`${ERP_API_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });

@@ -211,3 +211,48 @@ export function Logo({ size = 32 }: { size?: number }) {
     </svg>
   );
 }
+
+// --- Fase 6 · Plataforma (menú de usuario, empresas, configuración) ---
+export const IconActualizar = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M21 12a9 9 0 0 1-15.4 6.4L3 16" />
+    <path d="M3 12a9 9 0 0 1 15.4-6.4L21 8" />
+    <path d="M21 3v5h-5M3 21v-5h5" />
+  </Icon>
+);
+export const IconExterno = (p: SVGProps<SVGSVGElement>) => (
+  <Icon {...p}>
+    <path d="M14 4h6v6" />
+    <path d="M20 4 10 14" />
+    <path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" />
+  </Icon>
+);
+export const IconUsuario = () => (
+  <Icon>
+    <circle cx="12" cy="8" r="4" />
+    <path d="M4 21a8 8 0 0 1 16 0" />
+  </Icon>
+);
+export const IconEscudo = () => (
+  <Icon>
+    <path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z" />
+    <path d="m9 12 2 2 4-4" />
+  </Icon>
+);
+export const IconPlan = () => (
+  <Icon>
+    <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+  </Icon>
+);
+export const IconEmpresa = () => (
+  <Icon>
+    <path d="M4 21V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v16" />
+    <path d="M15 10h4a1 1 0 0 1 1 1v10M2 21h20M8 8h3M8 12h3M8 16h3" />
+  </Icon>
+);
+export const IconSubir = () => (
+  <Icon>
+    <path d="M12 16V4M7 9l5-5 5 5" />
+    <path d="M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3" />
+  </Icon>
+);

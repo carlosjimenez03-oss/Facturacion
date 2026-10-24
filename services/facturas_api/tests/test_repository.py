@@ -114,7 +114,7 @@ async def test_crear_factura_serializa_items_inventario():
     assert isinstance(resultado["items_inventario"], list)
     query, args = conn.queries[0]
     assert "items_inventario" in query
-    items_json = args[-1]
+    items_json = args[5]
     assert str(producto_id) in items_json
 
 
@@ -267,6 +267,6 @@ async def test_crear_factura_serializa_almacen_y_lote_de_items_inventario():
         ],
     )
 
-    items = json.loads(conn.queries[0][1][-1])
+    items = json.loads(conn.queries[0][1][5])
     assert items[0]["almacen_id"] == str(almacen_id) and items[0]["lote_id"] == str(lote_id)
     assert items[1]["almacen_id"] is None

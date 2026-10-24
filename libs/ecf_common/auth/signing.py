@@ -32,8 +32,22 @@ class CredencialFirma:
     certificate: Certificate
 
 
-def cargar_certificado_p12(path: str, password: str) -> CredencialFirma:
-    """Carga la llave privada y el certificado X.509 desde un archivo .p12/.pfx."""
+def cargar_certificado_p12(path: str, password: str, *, preferir_activo: bool = True) -> CredencialFirma:
+    """Carga la llave privada y el certificado X.509 desde un archivo .p12/.pfx.
+
+    Si en Configuración se cargó un certificado nuevo (ver
+    `certificado_activo.py`), se usa ese en vez de `path`/`password`; si no
+    existe o no se puede abrir, se usa `path` como siempre."""
+    if preferir_activo:
+        from .certificado_activo import CertificadoInvalidoError, abrir_p12, leer_activo
+
+        activo = leer_activo()
+        if activo is not None:
+            try:
+                private_key, certificate = abrir_p12(activo[0], activo[1])
+                return CredencialFirma(private_key=private_key, certificate=certificate)
+            except CertificadoInvalidoError:
+                pass
     with open(path, "rb") as fh:
         p12_bytes = fh.read()
     private_key, certificate, _ = pkcs12.load_key_and_certificates(

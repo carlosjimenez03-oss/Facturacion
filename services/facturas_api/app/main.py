@@ -40,17 +40,21 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from libs.ecf_common.auth.signing import cargar_certificado_p12, firmar_xml
+from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
 from libs.ecf_common.compras606 import fecha_dgii_a_aaaammdd, registrar_compra_606
 from libs.ecf_common.db import cerrar_pool, crear_pool, registrar_envio
 from libs.ecf_common.xml_tools import nombre_archivo_ecf
 
 from . import estado_dgii, inventario_client, repository
+from .certificado import estado_certificado
 from .config import FacturasApiSettings, get_settings
 from .consulta_resultado_client import ConsultaResultadoError
 from .inventario_client import InventarioApiError, StockInsuficienteError
+from .migraciones import aplicar_migraciones
 from .repository import FacturaNoEncontradaError
 from .representacion_impresa import RepresentacionImpresaError, generar_pdf
 from .schemas import (
+    CertificadoEstado,
     EnviarResponse,
     FacturaActualizar,
     FacturaCrear,
@@ -97,6 +101,13 @@ async def lifespan(app: FastAPI):
             "aquí Postgres no es opcional (es donde viven las facturas)."
         )
     app.state.db_pool = pool
+    # Columnas nuevas de facturacion.facturas (vendedor_id...): en Supabase
+    # nadie corre db/init. Si falla (permisos, tabla aún sin crear) se avisa
+    # en el log pero el servicio arranca igual.
+    try:
+        await aplicar_migraciones(pool)
+    except Exception:
+        logger.exception("No se pudieron aplicar las migraciones de facturacion.facturas")
 
     # Tarea de fondo que lleva a 'aceptado'/'rechazado' las facturas que
     # siguen en 'enviado' (ver app.estado_dgii). Con 0 queda desactivada --
@@ -114,6 +125,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.state.db_pool = None
+
+# REQUIRE_AUTH=true: exige la sesión de Supabase Auth (ver docs/AUTH.md).
+instalar_verificacion_sesion(app, settings)
 
 app.add_middleware(
     CORSMiddleware,
@@ -143,6 +157,14 @@ def health(settings: FacturasApiSettings = Depends(get_settings)) -> dict:
     }
 
 
+@app.get("/certificado", response_model=CertificadoEstado)
+def certificado(settings: FacturasApiSettings = Depends(get_settings)):
+    """Vigencia, titular y emisor del certificado .p12 con el que se firma
+    (Configuración → Certificado digital). Nunca devuelve la llave privada
+    ni la contraseña."""
+    return estado_certificado(settings)
+
+
 @app.post("/facturas", response_model=FacturaDetalle, status_code=201)
 async def crear_factura(payload: FacturaCrear, settings: FacturasApiSettings = Depends(get_settings)):
     if payload.tipo_ecf not in TIPOS_SOPORTADOS:
@@ -158,6 +180,7 @@ async def crear_factura(payload: FacturaCrear, settings: FacturasApiSettings = D
         encf=payload.encf,
         datos=payload.datos,
         items_inventario=[item.model_dump() for item in payload.items_inventario or []] or None,
+        vendedor_id=payload.vendedor_id,
     )
     return factura
 
@@ -197,6 +220,7 @@ async def actualizar_factura(factura_id: str, payload: FacturaActualizar):
         encf=payload.encf,
         datos=payload.datos,
         items_inventario=[item.model_dump() for item in payload.items_inventario or []] or None,
+        vendedor_id=payload.vendedor_id,
     )
 
 

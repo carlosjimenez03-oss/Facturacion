@@ -160,6 +160,12 @@ para poder asignarle un dominio en Dokploy. El rango arranca en **8001**, no
 tomado por otro servicio del host (si tu servidor no tiene ese conflicto,
 puedes correr el rango de vuelta a 8000 editando `docker-compose.dokploy.yml`):
 
+> **Desde la fase 6 todos se publican solo en `127.0.0.1`** del servidor
+> (`"127.0.0.1:8012:8000"`): el Cloudflare Tunnel los alcanza por
+> `localhost`, pero ya no desde Internet por IP:puerto. Los del receptor
+> (8015-8017) se pueden volver a abrir con `RECEPTOR_IP_PUBLICACION=0.0.0.0`.
+> Inicio de sesión, variables nuevas y qué revisar: [`AUTH.md`](AUTH.md).
+
 | Módulo | Puerto |
 |---|---|
 | autenticacion | 8001 |

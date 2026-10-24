@@ -18,15 +18,16 @@ El contrato con el frontend es `frontend/src/lib/erpApi.ts` (y
 import asyncio
 import logging
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from libs.ecf_common.auth.sesion_supabase import instalar_verificacion_sesion
 from libs.ecf_common.db import cerrar_pool, crear_pool
 
-from . import compras, impuestos, repository
+from . import compras, configuracion, impuestos, plataforma, repository
 from .config import ErpApiSettings, get_settings
 from .migraciones import aplicar_migraciones
 from .repository import (
@@ -89,12 +90,25 @@ async def lifespan(app: FastAPI):
     # En Supabase nadie ejecuta db/init: el esquema `ventas` se crea aquí.
     await aplicar_migraciones(pool)
     app.state.db_pool = pool
+    # Envío automático por correo de las facturas aceptadas (Configuración →
+    # WhatsApp y correo; no hace nada mientras no se encienda allí).
+    envio = None
+    if settings.envio_automatico_cada_segundos > 0:
+        envio = asyncio.create_task(configuracion.iniciar_envio_automatico(pool, settings))
     yield
+    if envio is not None:
+        envio.cancel()
+        with suppress(asyncio.CancelledError):
+            await envio
     await cerrar_pool(app.state.db_pool)
 
 
 app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=lifespan)
 app.state.db_pool = None
+
+# REQUIRE_AUTH=true: la API misma exige sesión (ver docs/AUTH.md). /auth/verificar
+# hace su propia verificación (es el que consulta nginx).
+instalar_verificacion_sesion(app, settings, rutas_publicas={"/auth/verificar"})
 
 app.add_middleware(
     CORSMiddleware,
@@ -108,6 +122,8 @@ app.add_middleware(
 
 app.include_router(impuestos.router)
 app.include_router(compras.router)
+app.include_router(configuracion.router)
+app.include_router(plataforma.router)
 
 
 def _pool():

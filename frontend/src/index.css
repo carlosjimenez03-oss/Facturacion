@@ -757,10 +757,26 @@ textarea.inp{height:auto;padding:10px 12px;resize:vertical}
   .sb.collapsed .sb-lbl,.sb.collapsed .chev,.sb.collapsed .sb-cap{display:revert}
   .sb.collapsed .sub{display:flex}
   .sb.collapsed .nv{justify-content:flex-start;padding:0 10px}
-  .tb{padding:10px 16px}
-  .tb-right{margin-left:0;width:100%;justify-content:flex-end}
-  .tb-search{max-width:none}
+  /* Barra superior compacta: una sola fila (búsqueda flexible + íconos). */
+  .tb{flex-wrap:nowrap;padding:8px 12px;gap:8px}
+  .tb-c{flex:1 1 auto;min-width:0;justify-content:flex-start;gap:8px}
+  .tb-c .tb-search,.tb-search{flex:1 1 auto;min-width:0;max-width:none}
+  .tb-right{flex:none;flex-wrap:nowrap;gap:4px;margin-left:0}
   .co-txt{display:none}
+  .co{margin-left:2px;padding:0 6px;gap:4px}
+}
+.solo-movil{display:none!important}
+.pop-i:disabled{opacity:.5;cursor:not-allowed}
+@media (max-width:640px){
+  /* Ayuda, compromiso ambiental, soluciones y ambiente pasan al menú de usuario. */
+  .tb-opc,.tb-env,.co > svg{display:none}
+  .conn{padding:0 9px}
+  .conn-txt{display:none}
+  .solo-movil{display:flex!important}
+  /* Los menús se abren a lo ancho de la barra (no se salen de la pantalla). */
+  .tb{position:relative}
+  .tb .pw{position:static}
+  .tb .pw > .pop{top:calc(100% - 4px);left:12px;right:12px;width:auto!important;max-width:none;transform:none;max-height:calc(100vh - 140px);overflow-y:auto}
 }
 @media (max-width:640px){
   .page{padding:20px 16px 48px}

@@ -4,6 +4,7 @@ import { api, ApiError } from "../lib/api";
 import { CODIGOS_MODIFICACION, TIPOS_INGRESOS } from "../lib/catalogos";
 import { erpApi, ErpApiError } from "../lib/erpApi";
 import type { Cliente, Cotizacion } from "../lib/erpApi";
+import { configuracionApi, publicarEmpresa, type Secuencia, type Vendedor } from "../lib/configuracionApi";
 import { calcularMontoItem, decimal2 } from "../lib/format";
 import { configParaTipo } from "../lib/tipoConfig";
 import {
@@ -169,6 +170,12 @@ export function FacturaForm() {
   const [formaPago, setFormaPago] = useState("1");
   const [emisor, setEmisor] = useState<DatosEmisor>(leerEmisor);
   const [editandoEmisor, setEditandoEmisor] = useState(() => !leerEmisor().direccion);
+  /** El emisor viene de Configuración → Datos de la empresa (si no, del navegador). */
+  const [emisorDeConfiguracion, setEmisorDeConfiguracion] = useState(false);
+  /** Secuencias e-NCF de Configuración por tipo (null = erp-api no respondió: respaldo local). */
+  const [secuencias, setSecuencias] = useState<Record<string, Secuencia> | null>(null);
+  const [vendedores, setVendedores] = useState<Vendedor[]>([]);
+  const [vendedorId, setVendedorId] = useState("");
   const [consumidorFinal, setConsumidorFinal] = useState(true);
   const [clienteEstado, setClienteEstado] = useState<"" | "buscando" | "encontrado" | "nuevo">("");
   /** Contacto de erp-api elegido para esta factura (null si es nuevo o no se pudo consultar). */
@@ -215,6 +222,39 @@ export function FacturaForm() {
       .then(setAlmacenes)
       .catch(() => setAlmacenes([]));
   }, []);
+
+  // Configuración (erp-api): emisor, secuencias e-NCF y vendedores. Si no
+  // responde, el formulario sigue con lo recordado en el navegador.
+  useEffect(() => {
+    configuracionApi
+      .empresa()
+      .then((e) => {
+        publicarEmpresa(e);
+        if (!e.configurada || editando) return;
+        setEmisor({ rnc: e.rnc ?? "", razonSocial: e.razon_social, direccion: e.direccion ?? "", correo: e.correo ?? "" });
+        setEditandoEmisor(!e.direccion);
+        setEmisorDeConfiguracion(true);
+      })
+      .catch(() => undefined);
+    configuracionApi
+      .secuencias()
+      .then((l) => setSecuencias(Object.fromEntries(l.map((x) => [String(x.tipo_ecf), x]))))
+      .catch(() => setSecuencias(null));
+    configuracionApi
+      .vendedores({ activo: true })
+      .then(setVendedores)
+      .catch(() => setVendedores([]));
+  }, [editando]);
+
+  const secuencia = secuencias?.[tipoEcf]?.configurada ? secuencias[tipoEcf] : null;
+
+  // La fecha de vencimiento de la secuencia sale de Configuración cuando está registrada.
+  useEffect(() => {
+    if (!secuencia?.fecha_vencimiento || editando) return;
+    setForm((prev) =>
+      prev.fechaVencimientoSecuencia === secuencia.fecha_vencimiento ? prev : { ...prev, fechaVencimientoSecuencia: secuencia.fecha_vencimiento ?? "" },
+    );
+  }, [secuencia, editando]);
 
   /** Almacén de la factura: el elegido o, si no se eligió, el principal. */
   const almacenId = form.almacenId || almacenes.find((a) => a.es_principal)?.id || "";
@@ -271,6 +311,7 @@ export function FacturaForm() {
       .obtener(id)
       .then((factura) => {
         setFacturaCompleta(factura);
+        setVendedorId(factura.vendedor_id ?? "");
         if (factura.estado !== "borrador") {
           setError(`Solo se pueden editar facturas en borrador (esta está "${factura.estado}").`);
           return;
@@ -382,6 +423,7 @@ export function FacturaForm() {
         setFormaPago(copia.formasPago[0]?.FormaPago ?? (copia.tipoPago === "2" ? "4" : "1"));
         setConsumidorFinal(!copia.compradorRnc && !copia.razonSocialComprador);
         setOrigen({ tipo: "copia", encf: original.encf, estado: original.estado });
+        setVendedorId(original.vendedor_id ?? "");
       })
       .catch((err) => setAvisoForm(`No se pudo copiar la factura: ${err instanceof ApiError ? err.message : String(err)}.`))
       .finally(() => setCargando(false));
@@ -430,8 +472,13 @@ export function FacturaForm() {
     return () => window.clearTimeout(t);
   }, [nombreBuscado]);
 
-  /** Próximo e-NCF sugerido: el mayor ya usado de este tipo + 1. */
-  const proximoEncf = useMemo(() => siguienteEncf(facturas, tipoEcf), [facturas, tipoEcf]);
+  /** Próximo e-NCF sugerido: el de la secuencia de Configuración o, si no hay, el mayor ya usado de este tipo + 1. */
+  const proximoEncf = useMemo(() => {
+    const local = siguienteEncf(facturas, tipoEcf);
+    const deSecuencia = secuencia?.siguiente_encf;
+    return deSecuencia && deSecuencia > local ? deSecuencia : local;
+  }, [facturas, tipoEcf, secuencia]);
+  const secuenciaBloquea = secuencia && (secuencia.estado === "vencida" || secuencia.estado === "agotada" || secuencia.estado === "inactiva");
 
   // También se reaplica cuando algo deja el e-NCF vacío (p. ej. ?copiar=, que copia los datos con e-NCF nuevo).
   useEffect(() => {
@@ -589,6 +636,10 @@ export function FacturaForm() {
   function validar(): string | null {
     if (!emisor.rnc || !emisor.razonSocial || !emisor.direccion) return "Complete los datos del emisor (RNC, razón social y dirección).";
     if (!form.encf || form.encf.length !== 13) return "El e-NCF debe tener 13 caracteres (por ejemplo E310000000001).";
+    if (secuenciaBloquea && !editando)
+      return `La secuencia E${tipoEcf} está ${secuencia?.estado === "inactiva" ? "desactivada" : secuencia?.estado}: actualícela en Configuración → Secuencias autorizadas.`;
+    if (secuencia?.hasta != null && Number(form.encf.slice(3)) > secuencia.hasta)
+      return `El e-NCF ${form.encf} está fuera del rango autorizado (hasta ${secuencia.prefijo}${String(secuencia.hasta).padStart(10, "0")}).`;
     if (config.requiereFechaVencimientoSecuencia && !form.fechaVencimientoSecuencia)
       return "Indique hasta cuándo está autorizada la secuencia de este tipo de comprobante.";
     if (pideComprador && config.compradorRncRequerido && !form.compradorRnc) return "El RNC o cédula del cliente es obligatorio para este tipo de comprobante.";
@@ -631,11 +682,17 @@ export function FacturaForm() {
       });
     }
     if (idGuardado) {
-      await api.actualizar(idGuardado, { encf: form.encf || null, datos, items_inventario });
+      await api.actualizar(idGuardado, { encf: form.encf || null, datos, items_inventario, vendedor_id: vendedorId || null });
       void registrarContacto();
       return idGuardado;
     }
-    const creada = await api.crear({ tipo_ecf: Number(tipoEcf), encf: form.encf || null, datos, items_inventario });
+    const creada = await api.crear({
+      tipo_ecf: Number(tipoEcf),
+      encf: form.encf || null,
+      datos,
+      items_inventario,
+      vendedor_id: vendedorId || null,
+    });
     setIdGuardado(creada.id);
     void registrarContacto();
     return creada.id;
@@ -766,6 +823,24 @@ export function FacturaForm() {
           </span>
         </div>
       )}
+      {secuencia && secuencia.avisos.length > 0 && (
+        <div className={secuenciaBloquea ? "al al-d" : "al al-w"} role="status">
+          <IconoAlerta />
+          <span>
+            <b>Secuencia E{tipoEcf}:</b> {secuencia.avisos.join(" ")}{" "}
+            <Link to="/configuracion/secuencias">Ir a Secuencias autorizadas</Link>
+          </span>
+        </div>
+      )}
+      {secuencias && !secuencia && !editando && (
+        <div className="al al-i" role="status">
+          <IconoInfo />
+          <span>
+            La secuencia E{tipoEcf} no está registrada en Configuración: se propone el siguiente e-NCF a los ya usados.{" "}
+            <Link to="/configuracion/secuencias">Registrar el rango autorizado</Link>
+          </span>
+        </div>
+      )}
       {avisoForm && (
         <div className="al al-w" role="status">
           <IconoAlerta />
@@ -802,7 +877,15 @@ export function FacturaForm() {
                 <input id="em-mail" type="email" className="inp" value={emisor.correo} onChange={(e) => setEmisor({ ...emisor, correo: e.target.value })} />
               </div>
               <span className="hint" style={{ gridColumn: "1 / -1" }}>
-                Se recuerdan en este navegador para las próximas facturas.
+                {emisorDeConfiguracion ? (
+                  <>
+                    Vienen de <Link to="/configuracion/empresa">Configuración → Datos de la empresa</Link>; los cambios aquí solo aplican a esta factura.
+                  </>
+                ) : (
+                  <>
+                    Se recuerdan en este navegador. Guárdelos en <Link to="/configuracion/empresa">Configuración</Link> para todas las facturas.
+                  </>
+                )}
               </span>
             </div>
           ) : (
@@ -1096,6 +1179,18 @@ export function FacturaForm() {
                     }}
                     maxLength={13}
                   />
+                </div>
+                <div className="fld">
+                  <label className="lbl" htmlFor="vend">Vendedor</label>
+                  <select id="vend" className="inp" value={vendedorId} onChange={(e) => setVendedorId(e.target.value)}>
+                    <option value="">Sin vendedor</option>
+                    {vendedores.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.nombre}
+                      </option>
+                    ))}
+                    {vendedorId && !vendedores.some((v) => v.id === vendedorId) && <option value={vendedorId}>Vendedor inactivo</option>}
+                  </select>
                 </div>
                 {config.requiereFechaVencimientoSecuencia && (
                   <div className="fld">

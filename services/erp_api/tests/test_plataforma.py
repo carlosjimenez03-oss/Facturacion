@@ -1,0 +1,263 @@
+"""Plataforma (fase 6) de erp-api: GET /auth/verificar (auth_request de
+nginx), usuarios de Supabase Auth (API admin de GoTrue, mockeada con respx)
+y GET /estado-servicios (healthchecks mockeados)."""
+import time
+
+import httpx
+import jwt
+import pytest
+import respx
+from fastapi.testclient import TestClient
+
+from services.erp_api.app import estado_servicios, main
+from services.erp_api.app.config import get_settings
+
+SECRETO = "super-secret-jwt-token-with-at-least-32-characters-long"
+SERVICE_KEY = "service-role-key-de-prueba"
+GW = "http://api-gw:8000"
+YO = "11111111-1111-1111-1111-111111111111"
+OTRO = "22222222-2222-2222-2222-222222222222"
+
+
+def token(secreto: str = SECRETO, **cambios) -> str:
+    claims = {"sub": YO, "email": "yo@empresa.do", "aud": "authenticated", "role": "authenticated",
+              "exp": int(time.time()) + 3600}
+    claims.update(cambios)
+    return jwt.encode(claims, secreto, algorithm="HS256")
+
+
+@pytest.fixture
+def client(monkeypatch):
+    async def fake_crear_pool(database_url):
+        return _PoolSano()
+
+    async def nada(pool):
+        return None
+
+    monkeypatch.setattr(main, "crear_pool", fake_crear_pool)
+    monkeypatch.setattr(main, "cerrar_pool", nada)
+    monkeypatch.setattr(main, "aplicar_migraciones", nada)
+    s = get_settings()
+    monkeypatch.setattr(s, "supabase_jwt_secret", SECRETO)
+    monkeypatch.setattr(s, "supabase_url", GW)
+    monkeypatch.setattr(s, "supabase_service_role_key", SERVICE_KEY)
+    with TestClient(main.app) as c:
+        yield c
+
+
+class _Conn:
+    async def fetchval(self, query, timeout=None):
+        return 1
+
+
+class _Acquire:
+    async def __aenter__(self):
+        return _Conn()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+class _PoolSano:
+    def acquire(self, timeout=None):
+        return _Acquire()
+
+
+# --- /auth/verificar ---------------------------------------------------------
+
+def test_verificar_sin_token_401(client):
+    r = client.get("/auth/verificar")
+    assert r.status_code == 401
+    assert r.headers["www-authenticate"] == "Bearer"
+
+
+def test_verificar_con_bearer_valido_204(client):
+    r = client.get("/auth/verificar", headers={"Authorization": f"Bearer {token()}"})
+    assert r.status_code == 204
+    assert r.headers["x-usuario-id"] == YO
+    assert r.headers["cache-control"] == "no-store"
+
+
+def test_verificar_con_cookie_valida_204(client):
+    client.cookies.set("kontara_sesion", token())
+    assert client.get("/auth/verificar").status_code == 204
+
+
+@pytest.mark.parametrize(
+    "malo",
+    [
+        token(exp=int(time.time()) - 5),
+        token(secreto="secreto-equivocado-de-al-menos-32-caracteres"),
+        token(role="anon"),
+        "basura",
+    ],
+    ids=["vencido", "otro-secreto", "anon-key", "basura"],
+)
+def test_verificar_tokens_invalidos_401(client, malo):
+    assert client.get("/auth/verificar", headers={"Authorization": f"Bearer {malo}"}).status_code == 401
+
+
+def test_verificar_sin_secreto_falla_cerrado(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "supabase_jwt_secret", "")
+    r = client.get("/auth/verificar", headers={"Authorization": f"Bearer {token()}"})
+    assert r.status_code == 401
+    assert "SUPABASE_JWT_SECRET" in r.json()["detail"]
+
+
+# --- Usuarios (GoTrue admin) ---------------------------------------------------------
+
+def _gotrue_user(id_=OTRO, email="ana@empresa.do", **cambios) -> dict:
+    u = {"id": id_, "email": email, "created_at": "2026-10-01T12:00:00Z", "last_sign_in_at": None,
+         "email_confirmed_at": "2026-10-01T12:00:00Z", "banned_until": None, "invited_at": None}
+    u.update(cambios)
+    return u
+
+
+@respx.mock
+def test_listar_usuarios(client):
+    ruta = respx.get(f"{GW}/auth/v1/admin/users").mock(
+        return_value=httpx.Response(200, json={"users": [
+            _gotrue_user(), _gotrue_user(YO, "yo@empresa.do", banned_until="2126-01-01T00:00:00Z"),
+        ]})
+    )
+    r = client.get("/configuracion/usuarios")
+    assert r.status_code == 200
+    cuerpo = r.json()
+    assert cuerpo["configurado"] is True
+    assert [u["correo"] for u in cuerpo["usuarios"]] == ["ana@empresa.do", "yo@empresa.do"]
+    assert cuerpo["usuarios"][1]["activo"] is False
+    enviado = ruta.calls[0].request
+    assert enviado.headers["apikey"] == SERVICE_KEY
+    assert enviado.headers["authorization"] == f"Bearer {SERVICE_KEY}"
+
+
+def test_usuarios_sin_service_role_key(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "supabase_service_role_key", "")
+    r = client.get("/configuracion/usuarios")
+    assert r.status_code == 200
+    assert r.json()["configurado"] is False
+    assert "Supabase Studio" in r.json()["mensaje"]
+    r = client.post("/configuracion/usuarios", json={"correo": "x@y.do", "contrasena": "12345678"})
+    assert r.status_code == 503
+
+
+@respx.mock
+def test_crear_usuario_con_contrasena(client):
+    ruta = respx.post(f"{GW}/auth/v1/admin/users").mock(return_value=httpx.Response(200, json=_gotrue_user()))
+    r = client.post("/configuracion/usuarios", json={"correo": "Ana@Empresa.do", "contrasena": "clave-segura-1"})
+    assert r.status_code == 201
+    import json
+    assert json.loads(ruta.calls[0].request.content) == {
+        "email": "ana@empresa.do", "password": "clave-segura-1", "email_confirm": True,
+    }
+
+
+@respx.mock
+def test_invitar_usuario_sin_contrasena(client):
+    ruta = respx.post(f"{GW}/auth/v1/invite").mock(
+        return_value=httpx.Response(200, json=_gotrue_user(invited_at="2026-10-24T00:00:00Z", email_confirmed_at=None))
+    )
+    r = client.post("/configuracion/usuarios", json={"correo": "ana@empresa.do"})
+    assert r.status_code == 201
+    assert r.json()["invitado"] is True
+    assert ruta.called
+
+
+@respx.mock
+def test_error_de_gotrue_se_traduce(client):
+    respx.post(f"{GW}/auth/v1/admin/users").mock(
+        return_value=httpx.Response(422, json={"code": 422, "msg": "A user with this email address has already been registered"})
+    )
+    r = client.post("/configuracion/usuarios", json={"correo": "ana@empresa.do", "contrasena": "clave-segura-1"})
+    assert r.status_code == 422
+    assert "already been registered" in r.json()["detail"]
+
+
+@respx.mock
+def test_desactivar_y_activar_usuario(client):
+    ruta = respx.put(f"{GW}/auth/v1/admin/users/{OTRO}").mock(
+        return_value=httpx.Response(200, json=_gotrue_user(banned_until="2126-01-01T00:00:00Z"))
+    )
+    r = client.post(f"/configuracion/usuarios/{OTRO}/desactivar", headers={"Authorization": f"Bearer {token()}"})
+    assert r.status_code == 200
+    assert r.json()["activo"] is False
+    assert b"876000h" in ruta.calls[0].request.content
+    ruta.mock(return_value=httpx.Response(200, json=_gotrue_user()))
+    r = client.post(f"/configuracion/usuarios/{OTRO}/activar")
+    assert r.json()["activo"] is True
+    assert b'"none"' in ruta.calls[1].request.content
+
+
+def test_no_puede_desactivarse_a_si_mismo(client):
+    r = client.post(f"/configuracion/usuarios/{YO}/desactivar", headers={"Authorization": f"Bearer {token()}"})
+    assert r.status_code == 409
+
+
+def test_usuario_id_invalido(client):
+    assert client.post("/configuracion/usuarios/../../otra/desactivar").status_code in (404, 422)
+    assert client.post("/configuracion/usuarios/no-es-uuid/activar").status_code == 422
+
+
+# --- Estado de las soluciones ---------------------------------------------------------
+
+@respx.mock
+def test_estado_servicios(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "estado_servicios", {
+        "facturas-api": "http://facturas-api:8000",
+        "inventario-api": "http://inventario-api:8000",
+        "recepcion": "http://recepcion:8000",
+        "receptor-recepcion": "http://receptor-recepcion:8000",
+    })
+    respx.get("http://facturas-api:8000/health").mock(
+        return_value=httpx.Response(200, json={"status": "ok", "app_env": "test", "dgii_environment": "testecf"})
+    )
+    respx.get("http://inventario-api:8000/health").mock(return_value=httpx.Response(500))
+    respx.get("http://recepcion:8000/health").mock(side_effect=httpx.ConnectError("refused"))
+    respx.get("http://receptor-recepcion:8000/health").mock(side_effect=httpx.ReadTimeout("lento"))
+    respx.get(f"{GW}/auth/v1/health").mock(return_value=httpx.Response(200, json={"version": "v2.177.0"}))
+
+    r = client.get("/estado-servicios")
+    assert r.status_code == 200
+    cuerpo = r.json()
+    assert cuerpo["ambiente"] == get_settings().app_env
+    por_id = {s["id"]: s for s in cuerpo["servicios"]}
+    assert por_id["erp-api"]["estado"] == "ok"
+    assert por_id["facturas-api"]["estado"] == "ok"
+    assert por_id["facturas-api"]["detalle"] == "test · testecf"
+    assert por_id["inventario-api"]["estado"] == "error"
+    assert "500" in por_id["inventario-api"]["detalle"]
+    assert por_id["recepcion"]["estado"] == "caido"
+    assert por_id["receptor-recepcion"]["estado"] == "caido"
+    assert "No respondió" in por_id["receptor-recepcion"]["detalle"]
+    assert por_id["base-datos"]["estado"] == "ok"
+    assert por_id["supabase-auth"]["estado"] == "ok"
+    assert por_id["supabase-auth"]["detalle"] == "GoTrue v2.177.0"
+    assert por_id["receptor-recepcion"]["grupo"] == "Receptor electrónico"
+    # Mismo orden que el catálogo (aplicación primero).
+    assert cuerpo["servicios"][0]["id"] == "facturas-api"
+
+
+@respx.mock
+def test_estado_servicios_sin_supabase_configurado(client, monkeypatch):
+    monkeypatch.setattr(get_settings(), "estado_servicios", {})
+    monkeypatch.setattr(get_settings(), "supabase_service_role_key", "")
+    por_id = {s["id"]: s for s in client.get("/estado-servicios").json()["servicios"]}
+    assert por_id["supabase-auth"]["estado"] == "no_configurado"
+
+
+async def test_base_de_datos_caida():
+    class PoolRoto:
+        def acquire(self, timeout=None):
+            raise OSError("connection refused")
+
+    assert (await estado_servicios.consultar_base_datos(PoolRoto(), 1))["estado"] == "caido"
+    assert (await estado_servicios.consultar_base_datos(None, 1))["estado"] == "caido"
+
+
+def test_rutas_de_negocio_no_piden_sesion_sin_require_auth(client, monkeypatch):
+    async def fake_listar(pool, **kw):
+        return []
+
+    from services.erp_api.app import configuracion_repository
+    monkeypatch.setattr(configuracion_repository, "listar_vendedores", fake_listar)
+    assert client.get("/configuracion/vendedores").status_code == 200

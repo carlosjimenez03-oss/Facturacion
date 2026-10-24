@@ -31,8 +31,9 @@ directamente por `asyncpg`: lo único que cambia es la variable
    **Supabase** y créelo (es un recurso Compose aparte del de la
    facturación). La plantilla genera los secretos al azar.
 2. En su pestaña **Environment** cambie como mínimo `DASHBOARD_PASSWORD`
-   (larga) y ponga `DISABLE_SIGNUP=true` (la aplicación no usa el login de
-   Supabase). Use para `POSTGRES_PASSWORD` solo letras y números, así no
+   (larga) y ponga `DISABLE_SIGNUP=true` (los usuarios de la aplicación
+   los crea usted: el inicio de sesión usa Supabase Auth, ver
+   [`AUTH.md`](AUTH.md)). Use para `POSTGRES_PASSWORD` solo letras y números, así no
    hay que codificarla en la cadena de conexión.
 3. **Deploy** y espere a que todos los contenedores estén *healthy*.
 

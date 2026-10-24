@@ -17,6 +17,7 @@ import {
   IconSync,
   IconTareas,
 } from "./icons";
+import { MARCA } from "../lib/marca";
 
 export interface MenuHoja {
   label: string;
@@ -113,14 +114,14 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
   { id: "tareas", label: "Mis tareas", icon: <IconTareas />, to: pendiente("tareas") },
   "separador",
   { id: "sync", label: "Centro de sincronización", icon: <IconSync />, to: pendiente("sincronizacion") },
-  { id: "config", label: "Configuración", icon: <IconConfig />, to: pendiente("configuracion") },
+  { id: "config", label: "Configuración", icon: <IconConfig />, to: "/configuracion" },
 ];
 
 export const MENU_SOLUCIONES: MenuItem[] = [
-  { id: "nomina", label: "Nómina", icon: <IconNomina />, to: pendiente("nomina") },
-  { id: "pos", label: "POS", icon: <IconPos />, to: pendiente("pos") },
+  { id: "nomina", label: "Nómina", icon: <IconNomina />, to: "/nomina" },
+  { id: "pos", label: "POS", icon: <IconPos />, to: "/pos" },
   { id: "portal", label: "Portal de clientes", icon: <IconPortal />, to: pendiente("portal-clientes") },
-  { id: "ventas", label: "Ventas", icon: <IconReportes />, to: pendiente("ventas") },
+  { id: "ventas", label: `${MARCA} Ventas`, icon: <IconReportes />, to: pendiente("ventas") },
 ];
 
 /** Descripción de cada módulo pendiente, para la página "En construcción". */
@@ -156,4 +157,5 @@ export const MODULOS_PENDIENTES: Record<string, { titulo: string; descripcion: s
   pos: { titulo: "POS", descripcion: "Punto de venta con e-CF de consumo." },
   "portal-clientes": { titulo: "Portal de clientes", descripcion: "Enlace para que sus clientes descarguen sus e-CF y paguen." },
   ventas: { titulo: "Ventas", descripcion: "Automatizaciones de correo y WhatsApp para fidelizar clientes." },
+  planes: { titulo: "Planes y consumo", descripcion: "Consumo del plan, comprobantes emitidos del mes y cambio de plan." },
 };

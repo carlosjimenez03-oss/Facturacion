@@ -481,6 +481,27 @@ el 606.
   proveedor.
 - `EMISOR_RAZON_SOCIAL` (opcional) para el certificado de retención.
 
+## Configuración y plataforma (fase 6)
+
+Rutas en `app/configuracion.py` (prefijo `/configuracion`) y
+`app/plataforma.py`; esquema `configuracion` (`app/migraciones_configuracion.py`
+= `db/init/013_configuracion.sql`). Contrato: `frontend/src/lib/configuracionApi.ts`.
+
+| Método y ruta | Qué hace |
+|---|---|
+| `GET/PUT /configuracion/empresa` | Datos de la empresa (una fila). El RNC es `EMISOR_RNC` si está configurado |
+| `GET/POST /configuracion/certificado` | Estado del `.p12` con que se firma; carga validada de uno nuevo (ver AUTH.md) |
+| `GET /configuracion/secuencias`, `GET/PUT/DELETE /configuracion/secuencias/{tipo}` | Rango e-NCF por tipo (31…47): siguiente e-NCF = mayor entre `desde`, `proximo` y el último usado en `facturacion.facturas` + 1; usados, disponibles, consumo y avisos (vencida, agotada, por vencer ≤ 30 días, por agotarse ≤ 10 o ≥ 90 %) |
+| `GET/POST /configuracion/vendedores`, `PUT/DELETE /configuracion/vendedores/{id}` | Vendedores (la factura guarda `facturacion.facturas.vendedor_id`, columna de facturas_api). No se borra uno con facturas: se desactiva |
+| `GET/POST /configuracion/usuarios`, `POST /configuracion/usuarios/{id}/desactivar\|activar` | Usuarios de Supabase Auth por la API admin de GoTrue (`SUPABASE_SERVICE_ROLE_KEY`) |
+| `GET/PUT /configuracion/inventario` | Método de valuación (preferencia; el costo sigue siendo promedio ponderado) |
+| `GET /configuracion/envio`, `PUT /configuracion/envio/correo\|whatsapp`, `DELETE /configuracion/envio/whatsapp`, `POST …/prueba` | SMTP y WhatsApp Cloud API (secretos cifrados con `CERTIFICADOS_CLAVE`) |
+| `GET /auth/verificar` | 204/401: sesión válida (lo consulta nginx con `auth_request`) |
+| `GET /estado-servicios` | `/health` de cada servicio por la red interna (2,5 s cada uno), base de datos y Supabase Auth |
+
+El e-NCF no se reserva aquí: facturas_api sigue recibiendo el que manda el
+formulario, que lo propone a partir de esta información.
+
 ## Despliegue
 
 Servicio `erp-api` en `docker-compose.dokploy.yml` (puerto de host 8019,

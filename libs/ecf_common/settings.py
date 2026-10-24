@@ -38,6 +38,14 @@ class EcfBaseSettings(BaseSettings):
     # requisito duro para operar. Formato: postgresql://user:pass@host:5432/db
     database_url: str = ""
 
+    # Sesión de los usuarios (Supabase Auth, ver docs/AUTH.md y
+    # libs/ecf_common/auth/sesion_supabase.py). `supabase_jwt_secret` es el
+    # JWT_SECRET del recurso de Supabase. Con `require_auth` (REQUIRE_AUTH)
+    # la API misma rechaza las peticiones sin sesión, además de nginx;
+    # apagado por defecto para no cortar las llamadas internas entre servicios.
+    require_auth: bool = False
+    supabase_jwt_secret: str = ""
+
     @property
     def dgii_environment(self) -> DGIIEnvironment:
         return dgii_environment_for(self.app_env)

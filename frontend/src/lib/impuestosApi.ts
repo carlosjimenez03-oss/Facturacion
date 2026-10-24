@@ -5,10 +5,11 @@
 // 1:1 con el backend. Mismas convenciones que erpApi.ts: montos como string
 // decimal con 2 decimales (pueden ser negativos en los pre-cálculos),
 // fechas "YYYY-MM-DD", periodo mensual "AAAAMM", año "AAAA".
+import { fetchConSesion } from "./sesion";
 import { ERP_API_URL, ErpApiError } from "./erpApi";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${ERP_API_URL}${path}`, {
+  const response = await fetchConSesion(`${ERP_API_URL}${path}`, {
     headers: { "Content-Type": "application/json" },
     ...init,
   });
@@ -30,7 +31,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 /** Descarga un archivo de texto del backend: devuelve el contenido y el nombre que propone el servidor (Content-Disposition). */
 async function descargar(path: string): Promise<{ nombre: string; contenido: string }> {
-  const response = await fetch(`${ERP_API_URL}${path}`);
+  const response = await fetchConSesion(`${ERP_API_URL}${path}`);
   if (!response.ok) {
     let detail = response.statusText;
     try {

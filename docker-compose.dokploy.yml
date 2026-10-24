@@ -28,12 +28,25 @@ x-modulo-env: &modulo-env
   # docs/SUPABASE.md. Ejemplo (modo sesión):
   # postgresql://postgres.<POOLER_TENANT_ID>:<POSTGRES_PASSWORD>@supavisor:5432/postgres
   DATABASE_URL: ${DATABASE_URL:?DATABASE_URL es requerido (Postgres de Supabase, ver docs/SUPABASE.md)}
+  # Inicio de sesión (Supabase Auth), ver docs/AUTH.md. SUPABASE_JWT_SECRET
+  # = el JWT_SECRET del recurso de Supabase: con él erp-api valida la sesión
+  # que nginx le consulta (auth_request). REQUIRE_AUTH=true hace que cada API
+  # también la exija por su cuenta (apagado: corta las llamadas internas).
+  SUPABASE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-}
+  REQUIRE_AUTH: ${REQUIRE_AUTH:-false}
+  # Certificado cargado desde Configuración → Certificado digital: volumen
+  # compartido `certificados` + llave con que se cifra su contraseña (y las
+  # de SMTP/WhatsApp). Sin CERTIFICADOS_CLAVE se sigue usando solo
+  # certs/emisor.p12 + CERTIFICADO_PASSWORD, como antes.
+  CERTIFICADO_ACTIVO_PATH: /app/certs-activos/activo.json
+  CERTIFICADOS_CLAVE: ${CERTIFICADOS_CLAVE:-}
 
 x-modulo-comun: &modulo-comun
   restart: unless-stopped
   environment: *modulo-env
   volumes:
     - ./certs:/app/certs:ro
+    - certificados:/app/certs-activos:ro
   # `supabase`: red interna del recurso de Supabase en Dokploy, para llegar
   # al pooler (`supavisor`) por nombre sin publicar el 5432 en el servidor.
   networks: [facturacion, supabase]
@@ -54,7 +67,7 @@ services:
       context: .
       dockerfile: services/autenticacion/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8001:8000"]
+    ports: ["127.0.0.1:8001:8000"]
 
   recepcion:
     <<: *modulo-comun
@@ -62,7 +75,7 @@ services:
       context: .
       dockerfile: services/recepcion/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8002:8000"]
+    ports: ["127.0.0.1:8002:8000"]
 
   recepcion-rfce:
     <<: *modulo-comun
@@ -70,7 +83,7 @@ services:
       context: .
       dockerfile: services/recepcion_rfce/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8003:8000"]
+    ports: ["127.0.0.1:8003:8000"]
 
   consulta-rfce:
     <<: *modulo-comun
@@ -78,7 +91,7 @@ services:
       context: .
       dockerfile: services/consulta_rfce/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8004:8000"]
+    ports: ["127.0.0.1:8004:8000"]
 
   consulta-resultado:
     <<: *modulo-comun
@@ -86,7 +99,7 @@ services:
       context: .
       dockerfile: services/consulta_resultado/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8005:8000"]
+    ports: ["127.0.0.1:8005:8000"]
 
   consulta-estado:
     <<: *modulo-comun
@@ -94,7 +107,7 @@ services:
       context: .
       dockerfile: services/consulta_estado/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8006:8000"]
+    ports: ["127.0.0.1:8006:8000"]
 
   consulta-trackids:
     <<: *modulo-comun
@@ -102,7 +115,7 @@ services:
       context: .
       dockerfile: services/consulta_trackids/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8007:8000"]
+    ports: ["127.0.0.1:8007:8000"]
 
   aprobacion-comercial:
     <<: *modulo-comun
@@ -110,7 +123,7 @@ services:
       context: .
       dockerfile: services/aprobacion_comercial/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8008:8000"]
+    ports: ["127.0.0.1:8008:8000"]
 
   anulacion-encf:
     <<: *modulo-comun
@@ -118,7 +131,7 @@ services:
       context: .
       dockerfile: services/anulacion_encf/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8009:8000"]
+    ports: ["127.0.0.1:8009:8000"]
 
   consulta-directorio:
     <<: *modulo-comun
@@ -126,7 +139,7 @@ services:
       context: .
       dockerfile: services/consulta_directorio/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8010:8000"]
+    ports: ["127.0.0.1:8010:8000"]
 
   consulta-timbre:
     <<: *modulo-comun
@@ -134,7 +147,7 @@ services:
       context: .
       dockerfile: services/consulta_timbre/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8011:8000"]
+    ports: ["127.0.0.1:8011:8000"]
 
   facturas-api:
     <<: *modulo-comun
@@ -142,7 +155,7 @@ services:
       context: .
       dockerfile: services/facturas_api/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8012:8000"]
+    ports: ["127.0.0.1:8012:8000"]
 
   # --- Inventario (catálogo, compras, kardex) ---
   #
@@ -158,7 +171,7 @@ services:
       context: .
       dockerfile: services/inventario_api/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8014:8000"]
+    ports: ["127.0.0.1:8014:8000"]
 
   # --- Receptor Electrónico (autenticación, recepción, aprobación comercial) ---
   #
@@ -177,7 +190,7 @@ services:
       context: .
       dockerfile: services/receptor_autenticacion/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8015:8000"]
+    ports: ["${RECEPTOR_IP_PUBLICACION:-127.0.0.1}:8015:8000"]
 
   receptor-recepcion:
     <<: *modulo-comun
@@ -185,7 +198,7 @@ services:
       context: .
       dockerfile: services/receptor_recepcion/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8016:8000"]
+    ports: ["${RECEPTOR_IP_PUBLICACION:-127.0.0.1}:8016:8000"]
 
   receptor-aprobacion-comercial:
     <<: *modulo-comun
@@ -193,7 +206,7 @@ services:
       context: .
       dockerfile: services/receptor_aprobacion_comercial/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8017:8000"]
+    ports: ["${RECEPTOR_IP_PUBLICACION:-127.0.0.1}:8017:8000"]
 
   # --- Formato 606 (Compras de Bienes y Servicios) ---
   #
@@ -206,7 +219,7 @@ services:
       context: .
       dockerfile: services/formato_606/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8018:8000"]
+    ports: ["127.0.0.1:8018:8000"]
 
   # --- ERP de ventas (contactos, cotizaciones, cobros, cuentas por cobrar) ---
   #
@@ -220,7 +233,7 @@ services:
       context: .
       dockerfile: services/erp_api/Dockerfile
       args: {APP_ENV: "${APP_ENV:-production}"}
-    ports: ["8019:8000"]
+    ports: ["127.0.0.1:8019:8000"]
     # El <<: de arriba no fusiona `environment` en profundidad: se repite el
     # ancla y se agrega EMISOR_100_ELECTRONICO (true = no presenta 607/608
     # por emitir solo e-CF; ponga false si todavía emite NCF serie B).
@@ -232,6 +245,16 @@ services:
       EMISOR_100_ELECTRONICO: ${EMISOR_100_ELECTRONICO:-true}
       APROBACION_COMERCIAL_URL: ${APROBACION_COMERCIAL_URL:-http://aprobacion-comercial:8000}
       EMISOR_RAZON_SOCIAL: ${EMISOR_RAZON_SOCIAL:-${VITE_EMPRESA_NOMBRE:-}}
+      # Configuración → Usuarios (API admin de GoTrue por la red interna).
+      # SERVICE_ROLE_KEY del recurso de Supabase: SOLO aquí, nunca en el
+      # frontend. Vacía = la pantalla explica cómo hacerlo en Studio.
+      SUPABASE_URL: ${SUPABASE_GATEWAY_URL:-http://api-gw:8000}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+    # Único servicio que ESCRIBE el certificado activo (los demás lo montan
+    # de solo lectura, ver x-modulo-comun).
+    volumes:
+      - ./certs:/app/certs:ro
+      - certificados:/app/certs-activos
 
   # --- Frontend (React) ---
 
@@ -258,8 +281,22 @@ services:
         VITE_MARCA: "${VITE_MARCA:-}"
         VITE_EMPRESA_NOMBRE: "${VITE_EMPRESA_NOMBRE:-}"
         VITE_EMPRESA_RNC: "${VITE_EMPRESA_RNC:-}"
-    ports: ["8013:80"]
-    networks: [facturacion]
+        # Inicio de sesión (docs/AUTH.md): "/" = mismo dominio (nginx
+        # reenvía /auth/v1/ a SUPABASE_GATEWAY_URL); la ANON_KEY es pública.
+        VITE_SUPABASE_URL: "${VITE_SUPABASE_URL:-}"
+        VITE_SUPABASE_ANON_KEY: "${VITE_SUPABASE_ANON_KEY:-}"
+    environment:
+      # nginx exige sesión en /api* (auth_request a erp-api) en cuanto existe
+      # SUPABASE_JWT_SECRET; KONTARA_AUTH=off lo apaga a mano (rollback).
+      KONTARA_AUTH: "${KONTARA_AUTH:-${SUPABASE_JWT_SECRET:+on}}"
+      SUPABASE_GATEWAY_URL: "${SUPABASE_GATEWAY_URL:-http://api-gw:8000}"
+    ports: ["127.0.0.1:8013:80"]
+    # `supabase`: para reenviar /auth/v1/ al gateway (api-gw) de Supabase.
+    networks: [facturacion, supabase]
+
+volumes:
+  # Certificado digital cargado desde Configuración (ver docs/AUTH.md).
+  certificados:
 
 networks:
   facturacion:

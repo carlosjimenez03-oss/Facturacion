@@ -25,6 +25,8 @@ import logging
 
 import asyncpg
 
+from .migraciones_configuracion import DDL_CONFIGURACION
+
 logger = logging.getLogger(__name__)
 
 # Clave arbitraria (pero fija) del advisory lock que serializa las
@@ -303,4 +305,5 @@ async def aplicar_migraciones(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_IMPUESTOS)
             await conn.execute(DDL_FUNCIONES)
             await conn.execute(DDL_COMPRAS)
+            await conn.execute(DDL_CONFIGURACION)
     logger.info("Esquemas 'ventas', 'impuestos', 'compras' y 'recepcion' verificados/creados")
