@@ -801,3 +801,65 @@ async def registrar_salida_por_factura(
                     )
                 )
     return movimientos
+
+
+async def registrar_reverso_por_factura(
+    pool: asyncpg.Pool, factura_id: str, *, documento: str | None = None
+) -> list[dict[str, Any]]:
+    """Devuelve al inventario la mercancía de una factura que la DGII
+    rechazó (estado definitivo: esa venta ya no existe; se vuelve a
+    facturar con otro e-NCF, que tendrá su propia salida). Cada salida de
+    la factura vuelve a su almacén y lote al costo con que salió
+    (`referencia_tipo = 'reverso_factura'`; el Kardex lo muestra como
+    "Reverso de venta"), igual que la anulación de un ajuste.
+
+    Idempotente por factura, con el mismo advisory lock que la salida (así
+    un reverso y una salida simultáneos de la misma factura se serializan):
+    si ya hay un reverso se devuelven sus movimientos sin mover nada; si la
+    factura no tiene salidas (nunca se registraron) no hace nada y devuelve
+    una lista vacía. Tras el reverso, la salida por factura sigue
+    devolviendo las salidas ya registradas sin volver a descontar."""
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock($1, hashtext($2))", _LOCK_SALIDA_FACTURA, factura_id
+            )
+            existentes = await conn.fetch(
+                """
+                SELECT * FROM inventario.movimientos
+                WHERE referencia_tipo = 'reverso_factura' AND referencia_id = $1
+                ORDER BY secuencia
+                """,
+                factura_id,
+            )
+            if existentes:
+                return [_con_id_str(fila) for fila in existentes]
+            salidas = await conn.fetch(
+                """
+                SELECT * FROM inventario.movimientos
+                WHERE referencia_tipo = 'factura' AND referencia_id = $1 AND tipo = 'salida'
+                ORDER BY secuencia
+                """,
+                factura_id,
+            )
+            if not salidas:
+                return []
+            await stock.bloquear_productos(conn, [mov["producto_id"] for mov in salidas])
+            movimientos: list[dict[str, Any]] = []
+            for mov in salidas:
+                movimientos.append(
+                    await stock.registrar_entrada(
+                        conn,
+                        producto_id=mov["producto_id"],
+                        almacen_id=mov["almacen_id"],
+                        cantidad=mov["cantidad"],
+                        costo_unitario=mov["costo_unitario"],
+                        lote_id=mov["lote_id"],
+                        motivo="Reverso de venta (e-CF rechazado por la DGII)",
+                        referencia_tipo="reverso_factura",
+                        referencia_id=factura_id,
+                        referencia_linea=mov["referencia_linea"],
+                        documento=documento or mov["documento"],
+                    )
+                )
+    return movimientos

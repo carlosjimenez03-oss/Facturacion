@@ -55,8 +55,8 @@ async def pool():
     nombre, _dsn, p = await _base()
     await aplicar_migraciones(p)  # sobre db/init completo: no cambia nada
     await p.execute(
-        "INSERT INTO configuracion.secuencias (tipo_ecf, prefijo, desde, hasta, proximo, fecha_vencimiento)"
-        " VALUES (32, 'E32', 1, 3, 1, NULL), (31, 'E31', 1, 5000, 1, '2027-12-31')"
+        "INSERT INTO configuracion.secuencias (ambiente, tipo_ecf, prefijo, desde, hasta, proximo, fecha_vencimiento)"
+        " VALUES ('test', 32, 'E32', 1, 3, 1, NULL), ('test', 31, 'E31', 1, 5000, 1, '2027-12-31')"
     )
     yield p
     await _borrar(nombre, p)
@@ -185,7 +185,8 @@ async def _preparar():
     nombre, dsn, p = await _base()
     await aplicar_migraciones(p)
     await p.execute(
-        "INSERT INTO configuracion.secuencias (tipo_ecf, prefijo, desde, hasta, proximo) VALUES (32, 'E32', 1, 100, 1)"
+        "INSERT INTO configuracion.secuencias (ambiente, tipo_ecf, prefijo, desde, hasta, proximo)"
+        " VALUES ('test', 32, 'E32', 1, 100, 1)"
     )
     await p.close()
     return nombre, dsn

@@ -20,6 +20,13 @@ Postgres (`repository.registrar_resultado_consulta`) solo aplica si la fila
 sigue en un estado actualizable, así que nunca se pisa un resultado ya
 registrado.
 
+Cada factura se consulta en su propio ambiente DGII (el activo cuando se
+creó, ver app.ambiente), aunque después se haya cambiado el activo.
+
+Si la DGII la rechaza, la salida de inventario de esa factura se revierte
+(`app.envio.revertir_inventario`; si inventario_api no responde, lo
+reintenta `sincronizar_reversos_pendientes`).
+
 Códigos de la DGII (ver services/consulta_resultado/app/schemas.py):
 0 No encontrado, 1 Aceptado, 2 Rechazado, 3 En Proceso, 4 Aceptado
 Condicional.
@@ -33,7 +40,7 @@ from typing import Any
 
 from libs.ecf_common.db import registrar_envio
 
-from . import consulta_resultado_client, inventario_client, repository
+from . import ambiente, consulta_resultado_client, envio, inventario_client, repository
 from .config import FacturasApiSettings
 from .consulta_resultado_client import ConsultaResultadoError
 from .inventario_client import InventarioApiError
@@ -116,8 +123,9 @@ async def actualizar_estado_factura(
     solo un aviso en el log).
     """
     track_id = factura["track_id"]
+    ambiente_factura = ambiente.de_factura(factura, settings)
     consulta = await consulta_resultado_client.consultar_resultado(
-        settings.consulta_resultado_url, track_id
+        settings.consulta_resultado_url, track_id, ambiente=ambiente_factura
     )
     codigo = _codigo(consulta)
     resultado = interpretar_resultado(consulta)
@@ -126,7 +134,7 @@ async def actualizar_estado_factura(
         await registrar_envio(
             pool,
             modulo=MODULO_AUDITORIA,
-            ambiente=settings.app_env,
+            ambiente=ambiente_factura,
             rnc_emisor=factura.get("rnc_emisor") or settings.emisor_rnc,
             encf=factura.get("encf"),
             track_id=track_id,
@@ -161,6 +169,8 @@ async def actualizar_estado_factura(
         # cambió de trackId) entre la lectura y esta actualización.
         return await repository.obtener_factura(pool, factura_id)
     logger.info("Factura %s (trackId %s): %s según la DGII", factura["id"], track_id, dgii_estado)
+    if actualizada.get("estado") == "rechazado":
+        await envio.revertir_inventario(pool, actualizada, settings)
     return actualizada
 
 
@@ -189,7 +199,8 @@ async def sincronizar_pendientes(pool, settings: FacturasApiSettings) -> int:
 
 
 async def sincronizar_inventario_pendiente(pool, settings: FacturasApiSettings) -> int:
-    """Reintenta la salida de mercancía de las facturas ya enviadas cuyo
+    """Reintenta la salida de mercancía de las facturas ya enviadas (o
+    emitidas en contingencia) cuyo
     registro en inventario_api falló (`inventario_sincronizado = false`).
     Devuelve cuántas quedaron sincronizadas. Si inventario_api no responde,
     corta la iteración y lo intenta en la próxima."""
@@ -213,6 +224,18 @@ async def sincronizar_inventario_pendiente(pool, settings: FacturasApiSettings) 
         await repository.registrar_sincronizacion_inventario(pool, fid, sincronizado=True, error=None)
         sincronizadas += 1
     return sincronizadas
+
+
+async def sincronizar_reversos_pendientes(pool, settings: FacturasApiSettings) -> int:
+    """Reintenta el reverso de inventario de las facturas rechazadas por la
+    DGII que quedó pendiente. Devuelve cuántos quedaron hechos; corta la
+    iteración en el primer fallo (inventario_api seguirá sin responder)."""
+    hechos = 0
+    for factura in await repository.listar_reversos_pendientes(pool, limite=LIMITE_POR_ITERACION):
+        if not await envio.revertir_inventario(pool, factura, settings):
+            break
+        hechos += 1
+    return hechos
 
 
 async def una_vuelta(pool, settings: FacturasApiSettings) -> None:
@@ -239,6 +262,12 @@ async def una_vuelta(pool, settings: FacturasApiSettings) -> None:
     inventario = await sincronizar_inventario_pendiente(pool, settings)
     if inventario:
         logger.info("Salidas de inventario reintentadas: %s factura(s) sincronizada(s)", inventario)
+    try:
+        reversos = await sincronizar_reversos_pendientes(pool, settings)
+        if reversos:
+            logger.info("Reversos de inventario de facturas rechazadas: %s registrado(s)", reversos)
+    except Exception:
+        logger.exception("No se pudieron reintentar los reversos de inventario")
 
 
 async def bucle_sincronizacion(pool, settings: FacturasApiSettings) -> None:

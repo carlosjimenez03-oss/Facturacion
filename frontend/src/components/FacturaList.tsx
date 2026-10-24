@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { IconMas, IconRechazo } from "../layout/icons";
+import { useEmpresa } from "../lib/configuracionApi";
 import { ESTADO_BADGE, ESTADO_LABEL, ESTADOS_PENDIENTES, TIPO_ECF_LABEL } from "../lib/estados";
 import type { FacturaResumen } from "../lib/types";
 import { motivoRechazo, useFacturas } from "../lib/useFacturas";
@@ -15,11 +16,16 @@ const FILTROS: { id: Filtro; label: string; test: (f: FacturaResumen) => boolean
   { id: "rechazadas", label: "Rechazadas", test: (f) => f.estado === "rechazado" || f.estado === "error" },
 ];
 
+/** Ambiente DGII en que se creó cada factura (su e-NCF es de la secuencia de ese ambiente). */
+const AMBIENTE_LABEL: Record<string, string> = { test: "Pruebas", qa: "Certificación", production: "Producción" };
+
 export function FacturaList() {
   const { facturas, cargando, error, recargar } = useFacturas();
   const [filtro, setFiltro] = useState<Filtro>("todas");
   const [tipo, setTipo] = useState("");
+  const [ambiente, setAmbiente] = useState("");
   const [q, setQ] = useState("");
+  const ambienteActivo = useEmpresa()?.ambiente;
 
   // Refrescar al entrar, por si se emitió o firmó algo en otra pantalla.
   useEffect(() => recargar(), []);
@@ -32,9 +38,10 @@ export function FacturaList() {
     return [...facturas]
       .filter(f.test)
       .filter((x) => !tipo || String(x.tipo_ecf) === tipo)
+      .filter((x) => !ambiente || x.ambiente === ambiente)
       .filter((x) => !texto || `${x.encf ?? ""} ${x.track_id ?? ""}`.toLowerCase().includes(texto))
       .sort((a, b) => b.creado_en.localeCompare(a.creado_en));
-  }, [facturas, filtro, tipo, q]);
+  }, [facturas, filtro, tipo, ambiente, q]);
 
   return (
     <div className="content">
@@ -114,6 +121,15 @@ export function FacturaList() {
               </option>
             ))}
           </select>
+          <select className="inp inp-auto" value={ambiente} onChange={(e) => setAmbiente(e.target.value)} aria-label="Ambiente DGII">
+            <option value="">Todos los ambientes</option>
+            {Object.entries(AMBIENTE_LABEL).map(([k, v]) => (
+              <option key={k} value={k}>
+                {v}
+                {k === ambienteActivo ? " (activo)" : ""}
+              </option>
+            ))}
+          </select>
         </div>
 
         {cargando && <p className="pad mut">Cargando…</p>}
@@ -162,6 +178,11 @@ export function FacturaList() {
                       <span className="chip">
                         {f.tipo_ecf} · {TIPO_ECF_LABEL[f.tipo_ecf] ?? "e-CF"}
                       </span>
+                      {ambienteActivo && f.ambiente !== ambienteActivo && (
+                        <div className="hint" title="Creada en otro ambiente DGII que el activo">
+                          {AMBIENTE_LABEL[f.ambiente] ?? f.ambiente}
+                        </div>
+                      )}
                     </td>
                     <td>
                       <span className={ESTADO_BADGE[f.estado]}>{ESTADO_LABEL[f.estado] ?? f.estado}</span>

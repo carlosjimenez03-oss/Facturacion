@@ -266,3 +266,130 @@ async def test_dos_envios_por_lotes_a_la_vez_no_se_pisan(pool, monkeypatch):
         contingencia.enviar_pendientes(pool, settings), contingencia.enviar_pendientes(pool, settings)
     )
     assert len(entradas) == 1 and (a.ocupado or b.ocupado)
+
+
+# --- Fase 7: inventario al emitir en contingencia y reverso al rechazarse ---------------------------------------------------------
+
+INVENTARIO = main.settings.inventario_api_url
+_ITEMS = json.dumps([{"producto_id": str(uuid.UUID(int=7)), "cantidad": "2", "numero_linea": "1"}])
+
+
+async def _firmada_con_items(pool, i: int) -> uuid.UUID:
+    """Factura 'firmado' (firma guardada: no hace falta certificado) con una
+    línea de inventario."""
+    fid = await _factura(pool, i, estado="firmado")
+    await pool.execute(
+        "UPDATE facturacion.facturas SET items_inventario = $2, emitida_en_contingencia = false,"
+        " contingencia_en = NULL WHERE id = $1",
+        fid, _ITEMS,
+    )
+    return fid
+
+
+@respx.mock
+async def test_salida_de_inventario_al_emitir_en_contingencia_y_reverso_al_rechazarse(pool, monkeypatch):
+    """La salida se registra al emitir en contingencia (no al enviar el
+    lote) y, si la DGII rechaza el e-CF, se revierte; un fallo de
+    inventario_api en cualquiera de los dos pasos lo reintenta la tarea de
+    fondo. Todo contra Postgres real, con inventario_api/recepcion/consulta
+    simulados."""
+    from services.facturas_api.app import ambiente, estado_dgii
+
+    ambiente.ACTIVO.invalidar()
+    monkeypatch.setattr(main.app.state, "db_pool", pool)
+    settings = main.settings.model_copy(update={"timeout_sonda_segundos": 1.0})
+    vendida = await _firmada_con_items(pool, 1)
+    caida = await _firmada_con_items(pool, 2)
+
+    salidas, reversos = [], []
+    inventario_arriba = {"v": True}
+
+    def salida(request):
+        if not inventario_arriba["v"]:
+            raise ConnectError("inventario-api caído")
+        salidas.append(json.loads(request.content)["factura_id"])
+        return Response(200, json={"ok": True, "movimientos": []})
+
+    def reverso(request):
+        if not inventario_arriba["v"]:
+            raise ConnectError("inventario-api caído")
+        reversos.append(json.loads(request.content))
+        return Response(200, json={"ok": True, "movimientos": []})
+
+    respx.post(f"{INVENTARIO}/movimientos/validar-disponibilidad").mock(
+        return_value=Response(200, json={"disponible": True, "faltantes": []})
+    )
+    respx.post(f"{INVENTARIO}/movimientos/salida-por-factura").mock(side_effect=salida)
+    respx.post(f"{INVENTARIO}/movimientos/reverso-por-factura").mock(side_effect=reverso)
+    envios = respx.post(f"{RECEPCION}/ecf").mock(side_effect=ConnectError("connection refused"))
+    sonda = respx.get(f"{RECEPCION}/disponibilidad").mock(return_value=Response(200, json={"disponible": False}))
+
+    # 1. Sin conexión: queda en contingencia y la mercancía sale ya.
+    r = await main.enviar_factura(str(vendida), settings)
+    assert r.estado == "contingencia"
+    assert salidas == [str(vendida)]
+    fila = await pool.fetchrow("SELECT * FROM facturacion.facturas WHERE id = $1", vendida)
+    assert fila["estado"] == "contingencia" and fila["inventario_sincronizado"] is True
+    # Se mandó el ambiente de la factura a recepcion.
+    assert b'name="ambiente"\r\n\r\ntest' in envios.calls.last.request.content
+
+    # 2. Con inventario_api caído al emitir: pendiente, y la tarea de fondo
+    # la reintenta aunque la factura siga en contingencia.
+    inventario_arriba["v"] = False
+    assert (await main.enviar_factura(str(caida), settings)).estado == "contingencia"
+    fila = await pool.fetchrow("SELECT * FROM facturacion.facturas WHERE id = $1", caida)
+    assert fila["inventario_sincronizado"] is False and "caído" in fila["inventario_error"]
+    pendientes = await repository.listar_inventario_pendiente(pool)
+    assert [p["id"] for p in pendientes] == [str(caida)]
+    inventario_arriba["v"] = True
+    assert await estado_dgii.sincronizar_inventario_pendiente(pool, settings) == 1
+    assert salidas == [str(vendida), str(caida)]
+
+    # 3. Vuelve la DGII: el lote las envía sin repetir la salida; la DGII
+    # rechaza `vendida` y acepta `caida`.
+    def recepcion(request):
+        encf = re.search(rb'name="encf"\r\n\r\n([^\r]+)', request.content).group(1).decode()
+        return Response(200, json={"trackId": f"trk-{encf}"})
+
+    def consulta(request):
+        if request.url.path.endswith("E310000000001"):
+            return Response(200, json={"codigo": 2, "estado": "Rechazado", "mensajes": [{"valor": "RNC", "codigo": 1}]})
+        return Response(200, json={"codigo": 1, "estado": "Aceptado", "mensajes": []})
+
+    envios.mock(side_effect=recepcion)
+    sonda.mock(return_value=Response(200, json={"disponible": True}))
+    rutas_consulta = respx.get(url__regex=rf"{re.escape(CONSULTA)}/resultado/.*").mock(side_effect=consulta)
+    inventario_arriba["v"] = False  # el reverso de la rechazada falla la primera vez
+    resultado = await contingencia.enviar_pendientes(pool, settings)
+    assert resultado.enviados == 2
+    assert salidas == [str(vendida), str(caida)]  # el envío no repitió ninguna salida
+    # Consultadas en el ambiente de cada factura.
+    assert all(c.request.url.params["ambiente"] == "test" for c in rutas_consulta.calls)
+    fila = await pool.fetchrow("SELECT * FROM facturacion.facturas WHERE id = $1", vendida)
+    assert fila["estado"] == "rechazado"
+    assert fila["inventario_reverso_pendiente"] is True and fila["inventario_revertido_en"] is None
+    assert (await pool.fetchrow("SELECT * FROM facturacion.facturas WHERE id = $1", caida))["estado"] == "aceptado"
+
+    # 4. La tarea de fondo reintenta el reverso, una sola vez.
+    assert [f["id"] for f in await repository.listar_reversos_pendientes(pool)] == [str(vendida)]
+    inventario_arriba["v"] = True
+    assert await estado_dgii.sincronizar_reversos_pendientes(pool, settings) == 1
+    assert await estado_dgii.sincronizar_reversos_pendientes(pool, settings) == 0
+    assert reversos == [{"factura_id": str(vendida), "documento": "E310000000001"}]
+    fila = await pool.fetchrow("SELECT * FROM facturacion.facturas WHERE id = $1", vendida)
+    assert fila["inventario_reverso_pendiente"] is False and fila["inventario_revertido_en"] is not None
+    # Una rechazada no vuelve a la lista de salidas pendientes.
+    assert await repository.listar_inventario_pendiente(pool) == []
+
+
+async def test_lista_de_facturas_por_ambiente(pool):
+    await _factura(pool, 1)
+    prod = uuid.uuid4()
+    await pool.execute(
+        "INSERT INTO facturacion.facturas (id, tipo_ecf, ambiente, rnc_emisor, encf, estado, datos)"
+        " VALUES ($1, 31, 'production', '131897542', 'E310000000001', 'borrador', '{}')",
+        prod,
+    )
+    assert [f["id"] for f in await repository.listar_facturas(pool, ambiente="production")] == [str(prod)]
+    assert len(await repository.listar_facturas(pool, ambiente="test")) == 1
+    assert len(await repository.listar_facturas(pool)) == 2

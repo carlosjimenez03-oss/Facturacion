@@ -88,3 +88,18 @@ async def test_aplicar_migraciones_toma_el_lock_y_agrega_vendedor_id_contingenci
     assert "vendedor_id" in conn.llamadas[1]
     assert conn.llamadas[2] == migraciones.DDL_CONTINGENCIA
     assert conn.llamadas[3] == migraciones.DDL_IDEMPOTENCIA
+    assert conn.llamadas[4] == migraciones.DDL_FASE7
+
+
+def test_018_tiene_el_mismo_ddl_de_fase7():
+    archivo = (REPO_ROOT / "db" / "init" / "020_fase7_fiscal.sql").read_text(encoding="utf-8")
+    assert migraciones.DDL_FASE7.strip() in archivo
+
+
+def test_fase7_no_toma_locks_de_facturas_en_cada_arranque():
+    for linea in migraciones.DDL_FASE7.splitlines():
+        if linea.strip().startswith("--"):
+            continue
+        if "facturacion.facturas" in linea and ("ALTER TABLE" in linea or "CREATE INDEX" in linea):
+            assert linea.startswith("        "), linea
+    assert "column_name = 'inventario_revertido_en'" in migraciones.DDL_FASE7

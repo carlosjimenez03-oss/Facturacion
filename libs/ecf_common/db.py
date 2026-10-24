@@ -36,8 +36,11 @@ def opciones_pool(database_url: str) -> dict[str, Any]:
     return {}
 
 
-async def crear_pool(database_url: str) -> asyncpg.Pool | None:
+async def crear_pool(database_url: str, *, max_size: int = 5) -> asyncpg.Pool | None:
     """Crea el pool de conexiones si `database_url` está configurado.
+
+    `max_size` pequeño para los módulos que solo leen el ambiente DGII
+    activo: cada conexión cuenta contra el pooler de Supabase.
 
     Retorna None (sin lanzar) si `database_url` está vacío o si la conexión
     falla — el módulo sigue funcionando sin auditoría en ese caso.
@@ -45,7 +48,7 @@ async def crear_pool(database_url: str) -> asyncpg.Pool | None:
     if not database_url:
         return None
     try:
-        return await asyncpg.create_pool(database_url, min_size=1, max_size=5, **opciones_pool(database_url))
+        return await asyncpg.create_pool(database_url, min_size=1, max_size=max_size, **opciones_pool(database_url))
     except Exception:
         logger.exception("No se pudo conectar a la base de datos de auditoría")
         return None

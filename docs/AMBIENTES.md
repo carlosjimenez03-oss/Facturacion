@@ -48,6 +48,52 @@ context en la raíz del repo, para poder copiar `libs/`).
 
 ## Cómo se selecciona el ambiente
 
+**Desde la fase 7 el ambiente DGII se cambia en Configuración → Ambiente
+DGII** (solo administradores), sin tocar Dokploy. `APP_ENV` queda como valor
+por defecto: mientras nadie lo cambie en Configuración, cada servicio usa el
+suyo como siempre.
+
+- **Dónde vive.** `configuracion.ambiente_dgii` (una fila, la crea erp-api:
+  `services/erp_api/app/migraciones_configuracion.py`, `DDL_AMBIENTE`; copia
+  en `db/init/020_fase7_fiscal.sql`) y su auditoría
+  `configuracion.ambiente_dgii_cambios` (anterior, nuevo, usuario, fecha).
+- **Quién lo lee.** facturas-api, recepcion, recepcion-rfce, las consultas
+  (resultado, estado, trackIds, directorio, RFCE, timbre), anulacion-encf,
+  aprobacion-comercial y autenticacion, en tiempo de ejecución
+  (`libs/ecf_common/ambiente.py`): la fila manda sobre `APP_ENV`, con una
+  caché de 15 s; sin fila, sin tabla, sin `DATABASE_URL` o con la base
+  caída, `APP_ENV`. Por eso los servicios de la DGII necesitan
+  `DATABASE_URL` (en `docker-compose.dokploy.yml` ya lo tienen para la
+  auditoría). Cada servicio guarda un token de la DGII por ambiente.
+  `GET /health` muestra el ambiente activo.
+- **Facturas.** Cada factura guarda el ambiente activo al crearse
+  (`facturacion.facturas.ambiente`) y se envía, se consulta y se timbra (QR
+  de la RI) siempre en ese ambiente: facturas-api le pasa `ambiente` a
+  `recepcion` (`POST /ecf`) y a `consulta_resultado` (`GET
+  /resultado/{trackId}?ambiente=`). Una factura todavía no enviada de otro
+  ambiente que el activo no se envía (409). `GET /facturas?ambiente=` filtra
+  la lista (y la pantalla tiene el filtro).
+- **Secuencias e-NCF por ambiente.** La DGII autoriza rangos distintos en
+  TesteCF, CerteCF y eCF: `configuracion.secuencias` tiene clave
+  `(ambiente, tipo_ecf)`, el siguiente número mira solo las facturas del
+  mismo ambiente y el índice único del e-NCF es `(rnc_emisor, ambiente,
+  encf)`. Las secuencias que ya existían quedan en el `APP_ENV` de la
+  instalación. En Configuración → Secuencias autorizadas se elige el
+  ambiente (por defecto el activo), para registrar las de producción antes
+  de cambiar.
+- **Reglas del cambio** (`PUT /configuracion/ambiente` de erp-api):
+  solo un administrador (`kontara_admin` o `KONTARA_ADMIN_EMAILS`; sin
+  inicio de sesión configurado, cualquiera, y la auditoría queda sin
+  usuario); bloqueado mientras haya facturas en `contingencia` o lotes de
+  contingencia abiertos (esos e-CF están firmados para el ambiente actual y
+  deben llegar a él); a producción, solo con un certificado vigente del RNC
+  de la empresa y confirmando en el diálogo que desde ese momento los
+  comprobantes tienen validez fiscal. Si el ambiente nuevo no tiene
+  secuencias, la respuesta lo advierte.
+
+Lo que sigue es el comportamiento de `APP_ENV`, que sigue siendo el valor
+por defecto:
+
 - La variable `APP_ENV` (`test` | `qa` | `production`) determina:
   - Qué archivo `.env.<ambiente>` carga cada módulo (`libs/ecf_common/settings.py`).
   - A qué ambiente de la DGII apunta el módulo (`libs/ecf_common/environments.py`).

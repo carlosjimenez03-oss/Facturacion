@@ -75,6 +75,9 @@ class FacturaResumen(BaseModel):
     error: str | None = None
     inventario_sincronizado: bool = False
     inventario_error: str | None = None
+    # Reverso de esa salida si la DGII rechazó la factura (app.envio.revertir_inventario).
+    inventario_reverso_pendiente: bool = False
+    inventario_revertido_en: datetime | None = None
     # Firma del XML que se envía (y que lleva la representación impresa) y
     # modo contingencia (ver app.contingencia): `emitida_en_contingencia` se
     # conserva tras enviarse (la RI sigue llevando la leyenda).

@@ -188,6 +188,7 @@ export type ReferenciaMovimiento =
   | "factura"
   | "ajuste"
   | "anulacion_ajuste"
+  | "reverso_factura"
   | "transferencia"
   | "lote";
 

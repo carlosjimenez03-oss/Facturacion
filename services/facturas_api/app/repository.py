@@ -95,11 +95,15 @@ async def listar_facturas(
     *,
     tipo_ecf: int | None = None,
     estado: str | None = None,
+    ambiente: str | None = None,
     limite: int = 50,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
     condiciones = []
     valores: list[Any] = []
+    if ambiente is not None:
+        valores.append(ambiente)
+        condiciones.append(f"ambiente = ${len(valores)}")
     if tipo_ecf is not None:
         valores.append(tipo_ecf)
         condiciones.append(f"tipo_ecf = ${len(valores)}")
@@ -320,6 +324,44 @@ async def registrar_sincronizacion_inventario(
         )
 
 
+async def marcar_reverso_inventario(
+    pool: asyncpg.Pool, factura_id: uuid.UUID, *, pendiente: bool, error: str | None
+) -> None:
+    """Estado del reverso de la salida de mercancía de una factura rechazada
+    por la DGII (ver app.envio.revertir_inventario): pendiente (se reintenta
+    en la tarea de fondo) o hecho (`inventario_revertido_en`)."""
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            UPDATE facturacion.facturas
+            SET inventario_reverso_pendiente = $2,
+                inventario_revertido_en = CASE WHEN $2 THEN inventario_revertido_en ELSE now() END,
+                inventario_error = $3
+            WHERE id = $1
+            """,
+            factura_id,
+            pendiente,
+            error,
+        )
+
+
+async def listar_reversos_pendientes(pool: asyncpg.Pool, *, limite: int = 50) -> list[dict[str, Any]]:
+    """Facturas rechazadas cuyo reverso de inventario quedó pendiente
+    (inventario_api no respondió), las más antiguas primero."""
+    async with pool.acquire() as conn:
+        filas = await conn.fetch(
+            """
+            SELECT id, encf, estado, items_inventario
+            FROM facturacion.facturas
+            WHERE inventario_reverso_pendiente AND estado = 'rechazado'
+            ORDER BY actualizado_en ASC
+            LIMIT $1
+            """,
+            limite,
+        )
+    return [_fila_a_dict(fila) for fila in filas]
+
+
 # Estados desde los que el resultado de la consulta por trackId puede mover
 # la factura: 'enviado' (lo normal), 'error' con trackId (la DGII sí recibió
 # el comprobante) y 'aceptado' condicional (la DGII puede reclasificarlo).
@@ -388,8 +430,9 @@ async def registrar_resultado_consulta(
 async def listar_inventario_pendiente(
     pool: asyncpg.Pool, *, limite: int = 50, dias: int = 90
 ) -> list[dict[str, Any]]:
-    """Facturas que llegaron a la DGII (con trackId, no rechazadas) cuya salida
-    de mercancía no se pudo registrar en inventario_api (p. ej. inventario_api
+    """Facturas que llegaron a la DGII (con trackId, no rechazadas) o que se
+    emitieron en contingencia (ya entregadas al comprador) cuya salida de
+    mercancía no se pudo registrar en inventario_api (p. ej. inventario_api
     caído o reiniciándose durante un despliegue). La tarea de fondo de
     `app.estado_dgii` las reintenta: la salida por factura es idempotente."""
     async with pool.acquire() as conn:
@@ -398,8 +441,8 @@ async def listar_inventario_pendiente(
             SELECT id, encf, estado, items_inventario
             FROM facturacion.facturas
             WHERE NOT inventario_sincronizado
-              AND track_id IS NOT NULL
-              AND estado IN ('enviado', 'aceptado')
+              AND ((track_id IS NOT NULL AND estado IN ('enviado', 'aceptado'))
+                   OR (estado = 'contingencia' AND xml_firmado IS NOT NULL))
               AND CASE WHEN jsonb_typeof(items_inventario) = 'array'
                        THEN jsonb_array_length(items_inventario) > 0 ELSE false END
               AND actualizado_en >= now() - make_interval(days => $2)

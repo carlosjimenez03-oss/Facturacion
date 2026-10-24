@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from . import gotrue_admin
+from .ambiente_dgii import ambiente_activo
 from .config import ErpApiSettings
 
 # id del servicio (nombre en docker-compose) -> (nombre legible, grupo).
@@ -104,7 +105,7 @@ async def estado_de_servicios(settings: ErpApiSettings, pool) -> list[dict[str, 
             *consultas, consultar_base_datos(pool, timeout), consultar_supabase_auth(settings)
         )
     # erp-api responde esta misma consulta: está en línea.
-    propio = _servicio("erp-api", "ok", 0, settings.app_env)
+    propio = _servicio("erp-api", "ok", 0, await ambiente_activo(pool))
     servicios = [propio, *resultados]
     orden = list(SERVICIOS)
     return sorted(servicios, key=lambda s: orden.index(s["id"]) if s["id"] in orden else len(orden))

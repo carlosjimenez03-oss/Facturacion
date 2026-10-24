@@ -70,16 +70,17 @@ def _datos(tipo: int = 31, encf: str = "") -> dict:
                            "Emisor": {"RNCEmisor": RNC}}}
 
 
-async def _crear(pool, tipo=31, encf=None, asignar=False, dia=HOY):
+async def _crear(pool, tipo=31, encf=None, asignar=False, dia=HOY, ambiente="test"):
     return await secuencias_encf.crear_factura(
-        pool, tipo_ecf=tipo, ambiente="test", rnc_emisor=RNC, encf=encf, asignar_encf=asignar,
+        pool, tipo_ecf=tipo, ambiente=ambiente, rnc_emisor=RNC, encf=encf, asignar_encf=asignar,
         datos=_datos(tipo, encf or ""), dia=dia,
     )
 
 
-async def _secuencia(pool, tipo=31, desde=1, hasta=5000, proximo=None, vence=date(2027, 12, 31), activa=True):
+async def _secuencia(pool, tipo=31, desde=1, hasta=5000, proximo=None, vence=date(2027, 12, 31), activa=True,
+                     ambiente="test"):
     await repo.guardar_secuencia(pool, tipo, desde=desde, hasta=hasta, proximo=proximo,
-                                 fecha_vencimiento=vence, activa=activa, hoy=HOY)
+                                 fecha_vencimiento=vence, activa=activa, hoy=HOY, ambiente=ambiente)
 
 
 # --- e-NCF asignado por el servidor ---------------------------------------------------------
@@ -91,7 +92,7 @@ async def test_asigna_el_siguiente_de_la_secuencia_y_lo_pone_en_los_datos(pool):
     assert f["datos"]["Encabezado"]["IdDoc"]["eNCF"] == "E310000000120"
     assert list(f["datos"]["Encabezado"]["IdDoc"])[:2] == ["TipoeCF", "eNCF"]  # orden del XSD
     # encf vacío también asigna; y coincide con lo que muestra Configuración.
-    assert (await repo.obtener_secuencia(pool, 31, HOY))["siguiente_encf"] == "E310000000121"
+    assert (await repo.obtener_secuencia(pool, 31, HOY, "test"))["siguiente_encf"] == "E310000000121"
     assert (await _crear(pool, encf="  "))["encf"] == "E310000000121"
 
 
@@ -137,8 +138,8 @@ async def test_e_ncf_del_cliente_duplicado_se_rechaza(pool):
     # PUT de otro borrador con ese e-NCF: también; el propio sí puede conservarlo.
     otro = await _crear(pool, encf="E310000000008")
     with pytest.raises(secuencias_encf.EncfNoDisponibleError):
-        await secuencias_encf.validar_encf_para_actualizar(pool, uuid.UUID(otro["id"]), RNC, "E310000000007")
-    await secuencias_encf.validar_encf_para_actualizar(pool, uuid.UUID(f["id"]), RNC, "E310000000007")
+        await secuencias_encf.validar_encf_para_actualizar(pool, uuid.UUID(otro["id"]), RNC, "E310000000007", "test")
+    await secuencias_encf.validar_encf_para_actualizar(pool, uuid.UUID(f["id"]), RNC, "E310000000007", "test")
     # Con la secuencia: salta los que ya mandó el cliente.
     await _secuencia(pool, desde=1, hasta=5000)
     assert (await _crear(pool, asignar=True))["encf"] == "E310000000009"
@@ -151,7 +152,7 @@ async def test_indice_unico_solo_sin_duplicados_previos(pool, caplog):
     assert await secuencias_encf.asegurar_indice_encf_unico(pool) is False
     assert "E310000000001 ×2" in caplog.text
     async with pool.acquire() as conn:
-        assert await conn.fetchval("SELECT to_regclass('facturacion.facturas_rnc_encf_unico_idx')") is None
+        assert await conn.fetchval("SELECT to_regclass('facturacion.facturas_rnc_ambiente_encf_unico_idx')") is None
         await conn.execute(
             "DELETE FROM facturacion.facturas WHERE id = (SELECT id FROM facturacion.facturas LIMIT 1)"
         )
@@ -165,6 +166,85 @@ async def test_indice_unico_solo_sin_duplicados_previos(pool, caplog):
                                       encf="E310000000001", datos={})
     for _ in range(2):
         await facturas_repo.crear_factura(pool, tipo_ecf=31, ambiente="test", rnc_emisor=RNC, encf=None, datos={})
+
+
+async def test_secuencias_y_e_ncf_por_ambiente(pool):
+    """Fase 7: cada ambiente DGII tiene su secuencia y su numeración; el
+    mismo e-NCF puede existir en pruebas y en producción."""
+    await _secuencia(pool, desde=1, hasta=5000, proximo=40)
+    for _ in range(3):
+        await _crear(pool, asignar=True)
+    # Producción sin secuencia: no hay de dónde asignar (aunque pruebas tenga).
+    with pytest.raises(secuencias_encf.EncfNoDisponibleError, match="ambiente Producción"):
+        await _crear(pool, asignar=True, ambiente="production")
+    await _secuencia(pool, desde=1, hasta=100, ambiente="production")
+    prod = await _crear(pool, asignar=True, ambiente="production")
+    assert prod["encf"] == "E310000000001" and prod["ambiente"] == "production"
+    assert (await _crear(pool, asignar=True))["encf"] == "E310000000043"
+    # El e-NCF E310000000040 ya está en pruebas, pero en producción está libre.
+    assert (await _crear(pool, encf="E310000000040", ambiente="production"))["encf"] == "E310000000040"
+    with pytest.raises(secuencias_encf.EncfNoDisponibleError, match="ya está usado"):
+        await _crear(pool, encf="E310000000040")
+    # Configuración muestra lo de cada ambiente.
+    assert (await repo.obtener_secuencia(pool, 31, HOY, "production"))["siguiente_encf"] == "E310000000041"
+    assert (await repo.obtener_secuencia(pool, 31, HOY, "test"))["siguiente_encf"] == "E310000000044"
+    assert (await repo.obtener_secuencia(pool, 31, HOY, "qa"))["configurada"] is False
+    # Con el índice único nuevo (por ambiente) siguen conviviendo.
+    assert await secuencias_encf.asegurar_indice_encf_unico(pool) is True
+    async with pool.acquire() as conn:
+        assert await conn.fetchval("SELECT to_regclass('facturacion.facturas_rnc_ambiente_encf_unico_idx')")
+        assert await conn.fetchval("SELECT to_regclass('facturacion.facturas_rnc_encf_unico_idx')") is None
+    with pytest.raises(asyncpg.UniqueViolationError):
+        await facturas_repo.crear_factura(pool, tipo_ecf=31, ambiente="production", rnc_emisor=RNC,
+                                          encf="E310000000040", datos={})
+
+
+async def test_migracion_de_secuencias_de_una_base_anterior():
+    """Una base de antes de la fase 7 (db/init hasta 017) con secuencias y el
+    índice único sin ambiente: las secuencias quedan en el ambiente de la
+    instalación (APP_ENV) y la clave pasa a (ambiente, tipo_ecf)."""
+    nombre = f"seguridad_{uuid.uuid4().hex[:10]}"
+    admin = await asyncpg.connect(DSN)
+    await admin.execute(f"CREATE DATABASE {nombre} TEMPLATE template0 ENCODING 'UTF8'")
+    await admin.close()
+    dsn = DSN.rsplit("/", 1)[0] + f"/{nombre}"
+    conn = await asyncpg.connect(dsn)
+    try:
+        for archivo in sorted((REPO / "db" / "init").glob("*.sql")):
+            if archivo.name <= "017_contingencia.sql":
+                await conn.execute(archivo.read_text(encoding="utf-8"))
+        await conn.execute(
+            "INSERT INTO configuracion.secuencias (tipo_ecf, prefijo, desde, hasta, proximo) VALUES (31, 'E31', 1, 9, 1)"
+        )
+        await conn.execute(
+            "CREATE UNIQUE INDEX facturas_rnc_encf_unico_idx ON facturacion.facturas (rnc_emisor, encf) "
+            "WHERE encf IS NOT NULL"
+        )
+        p = await asyncpg.create_pool(dsn, min_size=1, max_size=2)
+        try:
+            for _ in range(2):
+                await aplicar_migraciones(p, ambiente_defecto="production")
+                await migrar_facturas(p)
+            assert await secuencias_encf.asegurar_indice_encf_unico(p) is True
+            filas = await conn.fetch("SELECT ambiente, tipo_ecf FROM configuracion.secuencias")
+            assert [(f["ambiente"], f["tipo_ecf"]) for f in filas] == [("production", 31)]
+            clave = await conn.fetchval(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'secuencias_pkey'"
+            )
+            assert clave == "PRIMARY KEY (ambiente, tipo_ecf)"
+            assert await conn.fetchval("SELECT to_regclass('facturacion.facturas_rnc_encf_unico_idx')") is None
+            with pytest.raises(asyncpg.CheckViolationError):
+                await conn.execute(
+                    "INSERT INTO configuracion.secuencias (ambiente, tipo_ecf, prefijo, desde, hasta, proximo) "
+                    "VALUES ('staging', 31, 'E31', 1, 9, 1)"
+                )
+        finally:
+            await p.close()
+    finally:
+        await conn.close()
+        admin = await asyncpg.connect(DSN)
+        await admin.execute(f"DROP DATABASE IF EXISTS {nombre} WITH (FORCE)")
+        await admin.close()
 
 
 async def test_indice_unico_nunca_impide_arrancar():

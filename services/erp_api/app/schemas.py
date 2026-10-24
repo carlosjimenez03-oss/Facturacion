@@ -288,7 +288,8 @@ class Casilla(BaseModel):
     codigo: str
     etiqueta: str
     valor: Monto
-    tipo: Literal["normal", "subtotal", "total"]
+    # "detalle": "de ellos" de la línea anterior (ya incluido en ella, no suma).
+    tipo: Literal["normal", "subtotal", "total", "detalle"]
     ayuda: str | None = None
 
 

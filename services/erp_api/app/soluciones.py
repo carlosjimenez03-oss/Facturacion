@@ -20,6 +20,8 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
 
+from libs.ecf_common.environments import dgii_environment_for
+
 from . import gotrue_admin, pagos
 from . import soluciones_calculos as calc
 from . import soluciones_repository as repo
@@ -408,6 +410,7 @@ async def timbre(request: Request, factura_id: str):
         rnc_emisor=factura["rnc_emisor"],
         encf=factura["encf"],
         datos=factura["datos"],
-        ambiente=get_settings().dgii_environment,
+        # El QR apunta al ambiente donde se emitió la factura.
+        ambiente=dgii_environment_for(factura.get("ambiente") or get_settings().app_env),
     )
 

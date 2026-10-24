@@ -58,6 +58,8 @@ export type EstadoSecuencia = "sin_configurar" | "inactiva" | "vencida" | "agota
 
 export interface Secuencia {
   tipo_ecf: number;
+  /** Ambiente DGII de la secuencia: cada ambiente (TesteCF, CerteCF, eCF) tiene las suyas. */
+  ambiente: AmbienteApp;
   nombre: string;
   prefijo: string;
   configurada: boolean;
@@ -189,6 +191,42 @@ export interface ServicioEstado {
   detalle: string | null;
 }
 
+/** Valores de APP_ENV / configuracion.ambiente_dgii: test = TesteCF, qa = CerteCF, production = eCF. */
+export type AmbienteApp = "test" | "qa" | "production";
+
+export interface CambioAmbiente {
+  id: number;
+  anterior: AmbienteApp;
+  nuevo: AmbienteApp;
+  usuario_id: string | null;
+  usuario_correo: string | null;
+  creado_en: string;
+}
+
+/** GET/PUT /configuracion/ambiente (services/erp_api/app/ambiente_dgii.py). */
+export interface EstadoAmbiente {
+  ambiente: AmbienteApp;
+  ambiente_dgii: string;
+  nombre: string;
+  /** configuracion = elegido en esta pantalla; variables = APP_ENV del despliegue. */
+  origen: "configuracion" | "variables";
+  app_env: string;
+  cambiado_por: string | null;
+  cambiado_en: string | null;
+  puede_cambiar: boolean;
+  motivo_sin_permiso: string | null;
+  bloqueos: string[];
+  pendientes_contingencia: number;
+  lotes_abiertos: number;
+  certificado: { estado: string; valido: boolean; motivo: string | null };
+  /** Secuencias activas y facturas por ambiente. */
+  secuencias: Record<AmbienteApp, number>;
+  facturas: Record<AmbienteApp, number>;
+  cambios: CambioAmbiente[];
+  avisos: string[];
+  aviso_produccion: string;
+}
+
 export interface EstadoServicios {
   ambiente: string;
   ambiente_dgii: string;
@@ -208,9 +246,17 @@ export const configuracionApi = {
     return request<Certificado>("/configuracion/certificado", { method: "POST", body: datos });
   },
 
-  secuencias: () => request<Secuencia[]>("/configuracion/secuencias"),
-  guardarSecuencia: (tipo: number, p: SecuenciaPayload) => request<Secuencia>(`/configuracion/secuencias/${tipo}`, json("PUT", p)),
-  eliminarSecuencia: (tipo: number) => request<void>(`/configuracion/secuencias/${tipo}`, { method: "DELETE" }),
+  ambiente: () => request<EstadoAmbiente>("/configuracion/ambiente"),
+  /** Solo administradores; a producción exige `confirmacion` (validez fiscal) y un certificado vigente. */
+  cambiarAmbiente: (ambiente: AmbienteApp, confirmacion: boolean) =>
+    request<EstadoAmbiente>("/configuracion/ambiente", json("PUT", { ambiente, confirmacion })),
+
+  /** Sin `ambiente`: las del ambiente activo. */
+  secuencias: (ambiente?: AmbienteApp) => request<Secuencia[]>(`/configuracion/secuencias${ambiente ? `?ambiente=${ambiente}` : ""}`),
+  guardarSecuencia: (tipo: number, p: SecuenciaPayload, ambiente?: AmbienteApp) =>
+    request<Secuencia>(`/configuracion/secuencias/${tipo}${ambiente ? `?ambiente=${ambiente}` : ""}`, json("PUT", p)),
+  eliminarSecuencia: (tipo: number, ambiente?: AmbienteApp) =>
+    request<void>(`/configuracion/secuencias/${tipo}${ambiente ? `?ambiente=${ambiente}` : ""}`, { method: "DELETE" }),
 
   vendedores: (p?: { activo?: boolean }) =>
     request<Vendedor[]>(`/configuracion/vendedores${p?.activo === undefined ? "" : `?activo=${p.activo}`}`),

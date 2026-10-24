@@ -43,10 +43,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  listar: (params?: { tipo_ecf?: number; estado?: string }) => {
+  /** `ambiente`: test | qa | production (ambiente DGII en que se creó la factura). */
+  listar: (params?: { tipo_ecf?: number; estado?: string; ambiente?: string }) => {
     const query = new URLSearchParams();
     if (params?.tipo_ecf) query.set("tipo_ecf", String(params.tipo_ecf));
     if (params?.estado) query.set("estado", params.estado);
+    if (params?.ambiente) query.set("ambiente", params.ambiente);
     const qs = query.toString();
     return request<FacturaResumen[]>(`/facturas${qs ? `?${qs}` : ""}`);
   },

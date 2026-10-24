@@ -80,28 +80,28 @@ async def test_secuencias_con_ecf_usados(pool):
     await _factura(pool, 32, "E320000000007")
     await _factura(pool, 31, None)  # borrador sin e-NCF: no cuenta
 
-    lista = {s["tipo_ecf"]: s for s in await repo.listar_secuencias(pool, HOY)}
+    lista = {s["tipo_ecf"]: s for s in await repo.listar_secuencias(pool, HOY, "test")}
     assert lista[31]["estado"] == "sin_configurar"
     assert lista[31]["siguiente_encf"] == "E310000000131"
 
     s = await repo.guardar_secuencia(pool, 31, desde=1, hasta=5000, proximo=None,
-                                     fecha_vencimiento=date(2027, 12, 31), activa=True, hoy=HOY)
+                                     fecha_vencimiento=date(2027, 12, 31), activa=True, hoy=HOY, ambiente="test")
     assert s["siguiente_encf"] == "E310000000131"
     assert s["usados"] == 2  # e-NCF del rango con factura
     assert s["disponibles"] == 4870
     assert s["estado"] == "vigente"
 
     s = await repo.guardar_secuencia(pool, 32, desde=1, hasta=10, proximo=None,
-                                     fecha_vencimiento=None, activa=True, hoy=HOY)
+                                     fecha_vencimiento=None, activa=True, hoy=HOY, ambiente="test")
     assert s["estado"] == "por_agotarse"
     assert s["siguiente_encf"] == "E320000000008"
 
     with pytest.raises(DatosInvalidosError):
         await repo.guardar_secuencia(pool, 33, desde=10, hasta=5, proximo=None, fecha_vencimiento=None,
-                                     activa=True, hoy=HOY)
-    await repo.eliminar_secuencia(pool, 32)
+                                     activa=True, hoy=HOY, ambiente="test")
+    await repo.eliminar_secuencia(pool, 32, "test")
     with pytest.raises(repo.SecuenciaNoEncontradaError):
-        await repo.eliminar_secuencia(pool, 32)
+        await repo.eliminar_secuencia(pool, 32, "test")
 
 
 async def test_vendedores_y_columna_vendedor_id(pool):

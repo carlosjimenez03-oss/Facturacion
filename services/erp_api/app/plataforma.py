@@ -15,8 +15,9 @@ from libs.ecf_common.auth.sesion_supabase import (
     respuesta_sin_sesion,
     usuario_de_request,
 )
+from libs.ecf_common.environments import dgii_environment_for
 
-from . import gotrue_admin
+from . import ambiente_dgii, gotrue_admin
 from .config import ErpApiSettings, get_settings
 from .configuracion_schemas import EstadoServicios
 from .estado_servicios import estado_de_servicios
@@ -106,9 +107,10 @@ async def verificar_sesion(request: Request, settings: ErpApiSettings = Depends(
 @router.get("/estado-servicios", response_model=EstadoServicios)
 async def estado_servicios(request: Request, settings: ErpApiSettings = Depends(get_settings)):
     servicios = await estado_de_servicios(settings, request.app.state.db_pool)
+    ambiente = await ambiente_dgii.ambiente_activo(request.app.state.db_pool)
     return {
-        "ambiente": settings.app_env,
-        "ambiente_dgii": settings.dgii_environment.value,
+        "ambiente": ambiente,
+        "ambiente_dgii": dgii_environment_for(ambiente).value,
         "verificado_en": datetime.now(timezone.utc),
         "servicios": servicios,
     }

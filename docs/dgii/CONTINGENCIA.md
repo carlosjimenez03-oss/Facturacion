@@ -107,12 +107,26 @@ contingencia --la DGII lo rechaza al recibirlo (4xx / 502)--> error
   responde, retoma el lote abierto más antiguo o arma uno nuevo
   (`A-0001`, `A-0002`…) con las `CONTINGENCIA_LOTE_TAMANO` (20) facturas en
   contingencia más antiguas (por `firmado_en`), las envía en orden y sigue el
-  flujo normal de cada una: trackId, salida de inventario, 606 de los tipos
-  41/43/47 y consulta del resultado. Si la conexión se cae a mitad, el lote
+  flujo normal de cada una: trackId, 606 de los tipos 41/43/47 y consulta
+  del resultado (la salida de inventario ya se registró al emitirla, ver
+  abajo). Si la conexión se cae a mitad, el lote
   queda `interrumpido` y se retoma en la siguiente vuelta; al terminar sin
   fallas se sale de contingencia. Un advisory lock de Postgres evita que dos
   réplicas envíen a la vez. Un envío exitoso desde `enviar` con pendientes
   lanza el envío por lotes en segundo plano.
+- **Inventario.** Un e-CF emitido en contingencia es una venta real: el
+  comprador se lleva la mercancía con la representación impresa. Por eso
+  la salida de inventario (`POST /movimientos/salida-por-factura` de
+  inventario-api) se registra **al emitirla en contingencia**, y el envío
+  posterior en lote no la repite (`inventario_sincronizado`; la salida es
+  además idempotente por factura). Si inventario-api no responde al emitir,
+  la tarea de fondo la reintenta aunque la factura siga en contingencia. Si
+  la DGII la **rechaza** (resultado definitivo `rechazado`), la mercancía
+  vuelve al inventario (`POST /movimientos/reverso-por-factura`,
+  idempotente; pendiente y reintentado si inventario-api no responde) --
+  igual que cualquier factura rechazada. Si la DGII la rechaza al recibirla
+  (queda en `error`, sin trackId) la salida se mantiene: la factura se
+  corrige y se vuelve a enviar con el mismo e-NCF.
 - **Endpoints.** `GET /contingencia` (estado, pendientes, `vence_en` = la
   pendiente más antigua + 72 h, últimos lotes), `GET /contingencia/lotes`,
   `POST /contingencia/reintentar`.
@@ -224,9 +238,15 @@ navegador nunca lo inventa. El POS sigue vendiendo y emite al reconectar.
 - Un timeout después de que la DGII ya recibió el e-CF lo deja en
   contingencia y se reenvía; la DGII lo rechazará como secuencia ya
   utilizada (queda en `error` con ese motivo para revisarlo).
-- La salida de inventario se registra al enviar a la DGII (flujo normal), no
-  al emitir en contingencia.
-- Las facturas en papel no entran todavía al IT-1.
+- Una factura en `error` (la DGII la rechazó al recibirla) que nunca se
+  corrige ni se reenvía conserva su salida de inventario: hay que anularla
+  con un ajuste.
+- Las facturas en papel entran al pre-cálculo del IT-1 (todas, también
+  para el emisor 100 % electrónico) hasta que su e-CF de reemplazo es
+  aceptado (ver docs/ERP_API.md, IT-1); el asiento mensual de
+  proporcionalidad de Contabilidad usa las mismas ventas.
+- El cambio de ambiente DGII (docs/AMBIENTES.md) se bloquea mientras haya
+  facturas en `contingencia` o lotes abiertos.
 - La notificación de la contingencia en la Oficina Virtual (solo exigida
   para la serie B) es manual.
 - POS sin conexión: la existencia sin red es la última copia menos lo

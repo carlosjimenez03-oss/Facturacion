@@ -27,9 +27,17 @@ y queda una venta sin comprobante válido). Ahora:
   serializa dos reintentos simultáneos, y lo respalda el índice único
   parcial de `clave_idempotencia` (migraciones.DDL_IDEMPOTENCIA).
 - `asegurar_indice_encf_unico` (lifespan de main.py) crea el índice único
-  parcial `(rnc_emisor, encf) WHERE encf IS NOT NULL` -- solo si no hay
-  duplicados previos: si los hay, lo registra en el log y sigue sin índice
-  (nunca impide el arranque); la comprobación de arriba sigue funcionando.
+  parcial `(rnc_emisor, ambiente, encf) WHERE encf IS NOT NULL` -- solo si
+  no hay duplicados previos: si los hay, lo registra en el log y sigue sin
+  índice (nunca impide el arranque); la comprobación de arriba sigue
+  funcionando. Con el nuevo creado, borra el anterior `(rnc_emisor, encf)`.
+
+**Por ambiente (fase 7).** Las secuencias que autoriza la DGII son distintas
+en TesteCF, CerteCF y eCF (se solicitan en cada ambiente): la secuencia, el
+"mayor ya usado" y la unicidad del e-NCF son del ambiente de la factura (el
+activo al crearla, ver app.ambiente). Así, pasar de pruebas a producción
+empieza la numeración de producción desde su `desde`, sin chocar con los
+e-NCF de pruebas.
 """
 from __future__ import annotations
 
@@ -42,6 +50,8 @@ from zoneinfo import ZoneInfo
 
 import asyncpg
 
+from libs.ecf_common.ambiente import nombre as nombre_ambiente
+
 from . import repository
 
 logger = logging.getLogger(__name__)
@@ -49,10 +59,12 @@ logger = logging.getLogger(__name__)
 ZONA = ZoneInfo("America/Santo_Domingo")
 # Distinta de _LOCK_MIGRACIONES (7_002_001) y de las de erp_api.
 _LOCK_INDICE = 7_002_002
-INDICE_ENCF_UNICO = "facturas_rnc_encf_unico_idx"
+INDICE_ENCF_UNICO = "facturas_rnc_ambiente_encf_unico_idx"
+# Índice de antes de la fase 7 (sin ambiente): se borra al crear el nuevo.
+INDICE_ENCF_UNICO_ANTERIOR = "facturas_rnc_encf_unico_idx"
 DDL_INDICE_ENCF_UNICO = f"""
 CREATE UNIQUE INDEX IF NOT EXISTS {INDICE_ENCF_UNICO}
-    ON facturacion.facturas (rnc_emisor, encf) WHERE encf IS NOT NULL
+    ON facturacion.facturas (rnc_emisor, ambiente, encf) WHERE encf IS NOT NULL
 """
 
 
@@ -120,20 +132,32 @@ def _con_encf(datos: dict[str, Any], encf: str) -> dict[str, Any]:
     return datos
 
 
-async def _secuencia_bloqueada(conn: asyncpg.Connection, tipo_ecf: int) -> asyncpg.Record | None:
+async def _secuencia_bloqueada(conn: asyncpg.Connection, tipo_ecf: int, ambiente: str) -> asyncpg.Record | None:
     # to_regclass: sin el esquema de erp_api (todavía) no hay secuencias, y
-    # una consulta fallida abortaría la transacción.
+    # una consulta fallida abortaría la transacción. Una base anterior a la
+    # fase 7 (sin la columna `ambiente`) tiene una secuencia por tipo.
     if await conn.fetchval("SELECT to_regclass('configuracion.secuencias')") is None:
         return None
+    por_ambiente = await conn.fetchval(
+        """
+        SELECT EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_schema = 'configuracion' AND table_name = 'secuencias' AND column_name = 'ambiente')
+        """
+    )
+    if not por_ambiente:
+        return await conn.fetchrow("SELECT * FROM configuracion.secuencias WHERE tipo_ecf = $1 FOR UPDATE", tipo_ecf)
     return await conn.fetchrow(
-        "SELECT * FROM configuracion.secuencias WHERE tipo_ecf = $1 FOR UPDATE", tipo_ecf
+        "SELECT * FROM configuracion.secuencias WHERE tipo_ecf = $1 AND ambiente = $2 FOR UPDATE", tipo_ecf, ambiente
     )
 
 
-async def _siguiente_numero(conn: asyncpg.Connection, tipo_ecf: int, secuencia: asyncpg.Record) -> int:
+async def _siguiente_numero(
+    conn: asyncpg.Connection, tipo_ecf: int, secuencia: asyncpg.Record, ambiente: str
+) -> int:
     mayor = await conn.fetchval(
-        "SELECT max(substr(encf, 4)::bigint) FROM facturacion.facturas WHERE encf ~ $1",
+        "SELECT max(substr(encf, 4)::bigint) FROM facturacion.facturas WHERE encf ~ $1 AND ambiente = $2",
         f"^E{tipo_ecf}[0-9]{{10}}$",
+        ambiente,
     )
     return max(int(secuencia["desde"]), int(secuencia["proximo"]), int(mayor or 0) + 1)
 
@@ -157,20 +181,22 @@ def validar_secuencia(tipo_ecf: int, secuencia: asyncpg.Record | dict, siguiente
 
 
 async def _bloquear_y_validar_libre(
-    conn: asyncpg.Connection, rnc_emisor: str, encf: str, excluir: uuid.UUID | None = None
+    conn: asyncpg.Connection, rnc_emisor: str, ambiente: str, encf: str, excluir: uuid.UUID | None = None
 ) -> None:
     """Serializa a quien use el mismo e-NCF (aunque todavía no exista el
-    índice único) y rechaza el que ya tiene otra factura del emisor."""
-    await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"encf|{rnc_emisor}|{encf}")
+    índice único) y rechaza el que ya tiene otra factura del emisor en el
+    mismo ambiente."""
+    await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", f"encf|{rnc_emisor}|{ambiente}|{encf}")
     otra = await conn.fetchval(
         """
         SELECT id FROM facturacion.facturas
-        WHERE rnc_emisor = $1 AND encf = $2 AND ($3::uuid IS NULL OR id <> $3::uuid)
+        WHERE rnc_emisor = $1 AND ambiente = $4 AND encf = $2 AND ($3::uuid IS NULL OR id <> $3::uuid)
         LIMIT 1
         """,
         rnc_emisor,
         encf,
         excluir,
+        ambiente,
     )
     if otra is not None:
         raise EncfNoDisponibleError(
@@ -209,20 +235,21 @@ async def crear_factura(
                         )
                     raise FacturaYaCreadaError(existente)
             if encf is None:
-                secuencia = await _secuencia_bloqueada(conn, tipo_ecf)
+                secuencia = await _secuencia_bloqueada(conn, tipo_ecf, ambiente)
                 if secuencia is None and asignar_encf:
                     raise EncfNoDisponibleError(
-                        f"No hay una secuencia E{tipo_ecf} registrada: regístrela en Configuración → Secuencias autorizadas."
+                        f"No hay una secuencia E{tipo_ecf} registrada para el ambiente {nombre_ambiente(ambiente)}: "
+                        "regístrela en Configuración → Secuencias autorizadas."
                     )
                 if secuencia is not None:
-                    siguiente = await _siguiente_numero(conn, tipo_ecf, secuencia)
+                    siguiente = await _siguiente_numero(conn, tipo_ecf, secuencia, ambiente)
                     validar_secuencia(tipo_ecf, secuencia, siguiente, dia or hoy())
                     encf = encf_de(tipo_ecf, siguiente)
                     datos = _con_encf(datos, encf)
             elif (datos.get("Encabezado") or {}).get("IdDoc"):
                 datos = _con_encf(datos, encf)
             if encf is not None:
-                await _bloquear_y_validar_libre(conn, rnc_emisor, encf)
+                await _bloquear_y_validar_libre(conn, rnc_emisor, ambiente, encf)
             try:
                 return await repository.crear_factura(
                     _UnaConexion(conn),
@@ -240,7 +267,7 @@ async def crear_factura(
 
 
 async def validar_encf_para_actualizar(
-    pool: asyncpg.Pool, factura_id: uuid.UUID, rnc_emisor: str, encf: str | None
+    pool: asyncpg.Pool, factura_id: uuid.UUID, rnc_emisor: str, encf: str | None, ambiente: str
 ) -> None:
     """PUT de un borrador: el e-NCF nuevo no puede ser el de otra factura.
     (La carrera con otro request la cierra el índice único.)"""
@@ -249,7 +276,7 @@ async def validar_encf_para_actualizar(
         return
     async with pool.acquire() as conn:
         async with conn.transaction():
-            await _bloquear_y_validar_libre(conn, rnc_emisor, encf, excluir=factura_id)
+            await _bloquear_y_validar_libre(conn, rnc_emisor, ambiente, encf, excluir=factura_id)
 
 
 async def asegurar_indice_encf_unico(pool: Any) -> bool:
@@ -263,9 +290,9 @@ async def asegurar_indice_encf_unico(pool: Any) -> bool:
                     return True
                 duplicados = await conn.fetch(
                     """
-                    SELECT rnc_emisor, encf, count(*) AS n FROM facturacion.facturas
-                    WHERE encf IS NOT NULL GROUP BY 1, 2 HAVING count(*) > 1
-                    ORDER BY 3 DESC LIMIT 10
+                    SELECT rnc_emisor, ambiente, encf, count(*) AS n FROM facturacion.facturas
+                    WHERE encf IS NOT NULL GROUP BY 1, 2, 3 HAVING count(*) > 1
+                    ORDER BY 4 DESC LIMIT 10
                     """
                 )
                 if duplicados:
@@ -277,6 +304,7 @@ async def asegurar_indice_encf_unico(pool: Any) -> bool:
                     )
                     return False
                 await conn.execute(DDL_INDICE_ENCF_UNICO)
+                await conn.execute(f"DROP INDEX IF EXISTS facturacion.{INDICE_ENCF_UNICO_ANTERIOR}")
         logger.info("Índice único de e-NCF por emisor verificado")
         return True
     except Exception:

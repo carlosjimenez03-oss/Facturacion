@@ -3,16 +3,18 @@ import { IconDocumento, IconSubir } from "../../layout/icons";
 import { ACTIVIDADES_ECONOMICAS, OFICINA_VIRTUAL_DGII, PROVINCIAS } from "../../lib/catalogosRD";
 import {
   configuracionApi,
+  type AmbienteApp,
   type Certificado,
   type Empresa,
   type EmpresaPayload,
   type EnvioConfig,
+  type EstadoAmbiente,
   type Secuencia,
   type Usuario,
   type Usuarios,
   type Vendedor,
 } from "../../lib/configuracionApi";
-import { formatoRnc, nombreAmbiente } from "../../lib/marca";
+import { formatoRnc } from "../../lib/marca";
 import { sesionActual } from "../../lib/sesion";
 import { encf, fechaCorta, mensajeError, numero, type Avisar } from "./configuracionUtil";
 
@@ -322,21 +324,101 @@ export function SeccionCertificado({ refSeccion, avisar }: { refSeccion: RefSecc
 
 // --- Ambiente DGII ---------------------------------------------------------
 
-const AMBIENTES = [
+export const AMBIENTES = [
   { label: "Pruebas", app: "test", desc: "TesteCF · simulación sin validez fiscal" },
   { label: "Certificación", app: "qa", desc: "CerteCF · proceso para ser emisor electrónico" },
   { label: "Producción", app: "production", desc: "eCF · comprobantes con validez fiscal" },
-] as const;
+] as const satisfies readonly { label: string; app: AmbienteApp; desc: string }[];
 
-export function SeccionAmbiente({ refSeccion, empresa }: { refSeccion: RefSeccion; empresa: Empresa | null }) {
-  const actual = nombreAmbiente(empresa?.ambiente);
-  const [pedido, setPedido] = useState<(typeof AMBIENTES)[number] | null>(null);
+type OpcionAmbiente = (typeof AMBIENTES)[number];
+
+const etiquetaAmbiente = (app: string | null | undefined) => AMBIENTES.find((a) => a.app === app)?.label ?? app ?? "—";
+
+function fechaHora(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString("es-DO", { dateStyle: "short", timeStyle: "short" });
+}
+
+/**
+ * Configuración → Ambiente DGII (PUT /configuracion/ambiente, solo administradores). El cambio llega a
+ * facturas-api, recepcion y las consultas en unos segundos; a producción pide confirmar que los
+ * comprobantes pasan a tener validez fiscal y exige un certificado vigente. Bloqueado mientras haya
+ * facturas en contingencia o lotes enviándose.
+ */
+export function SeccionAmbiente({ refSeccion, avisar, alCambiar }: { refSeccion: RefSeccion; avisar: Avisar; alCambiar: () => void }) {
+  const [estado, setEstado] = useState<EstadoAmbiente | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [pedido, setPedido] = useState<OpcionAmbiente | null>(null);
+  const [confirmado, setConfirmado] = useState(false);
+  const [errorCambio, setErrorCambio] = useState<string | null>(null);
+  const [cambiando, setCambiando] = useState(false);
+
+  const cargar = () =>
+    configuracionApi
+      .ambiente()
+      .then((e) => {
+        setEstado(e);
+        setError(null);
+      })
+      .catch((err) => setError(mensajeError(err)));
+  useEffect(() => {
+    void cargar();
+  }, []);
+
+  const actual = estado?.ambiente;
+  const bloqueado = Boolean(estado && estado.bloqueos.length > 0);
+  const sinPermiso = estado?.motivo_sin_permiso ?? null;
+
+  function abrir(a: OpcionAmbiente) {
+    if (!estado || a.app === actual) return;
+    setPedido(a);
+    setConfirmado(false);
+    setErrorCambio(null);
+    void cargar(); // bloqueos y certificado al momento de decidir
+  }
+
+  async function cambiar() {
+    if (!pedido) return;
+    setCambiando(true);
+    setErrorCambio(null);
+    try {
+      const nuevo = await configuracionApi.cambiarAmbiente(pedido.app, confirmado);
+      setEstado(nuevo);
+      setPedido(null);
+      alCambiar();
+      avisar(`Ambiente cambiado a ${pedido.label}`, { detalle: nuevo.avisos.join(" ") || undefined });
+    } catch (err) {
+      setErrorCambio(mensajeError(err));
+    } finally {
+      setCambiando(false);
+    }
+  }
+
+  const aProduccion = pedido?.app === "production";
+  const certificadoInvalido = aProduccion && estado && !estado.certificado.valido;
+  const sinSecuencias = pedido && estado && !estado.secuencias[pedido.app];
+  const puedeConfirmar = Boolean(pedido && estado && !bloqueado && !sinPermiso && !certificadoInvalido && (!aProduccion || confirmado));
+
   return (
     <Tarjeta id="ambiente" refSeccion={refSeccion} titulo="Ambiente DGII" extra={<span className="hint">Define a qué servicio web se envían los e-CF</span>}>
       <div className="card-b stack">
+        {error && (
+          <div className="al al-d" role="alert">
+            <span>{error}</span>
+          </div>
+        )}
         <div className="amb" role="radiogroup" aria-label="Ambiente DGII">
           {AMBIENTES.map((a) => (
-            <button key={a.label} type="button" role="radio" aria-checked={a.label === actual} className={a.label === actual ? "on" : ""} onClick={() => a.label !== actual && setPedido(a)}>
+            <button
+              key={a.app}
+              type="button"
+              role="radio"
+              aria-checked={a.app === actual}
+              className={a.app === actual ? "on" : ""}
+              disabled={!estado || (a.app !== actual && Boolean(sinPermiso))}
+              onClick={() => abrir(a)}
+            >
               <span style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <b>{a.label}</b>
                 <span className="dot" />
@@ -345,48 +427,117 @@ export function SeccionAmbiente({ refSeccion, empresa }: { refSeccion: RefSeccio
             </button>
           ))}
         </div>
-        {actual !== "Producción" && (
+        {estado && actual !== "production" && (
           <div className="al al-w">
             <span>
-              <b>Los comprobantes emitidos en {actual} no tienen validez fiscal.</b> Use este ambiente solo para pruebas o para el proceso de
-              certificación como emisor electrónico.
+              <b>Los comprobantes emitidos en {etiquetaAmbiente(actual)} no tienen validez fiscal.</b> Use este ambiente solo para pruebas o para el
+              proceso de certificación como emisor electrónico.
             </span>
           </div>
         )}
-        <span className="hint">
-          Ambiente actual de los servicios: <code>APP_ENV={empresa?.ambiente ?? "…"}</code> ({empresa?.ambiente_dgii ?? "…"}).
-        </span>
+        {estado && estado.bloqueos.length > 0 && (
+          <div className="al al-d" role="status">
+            <span>
+              <b>No se puede cambiar el ambiente ahora.</b> {estado.bloqueos.join(" ")}
+            </span>
+          </div>
+        )}
+        {sinPermiso && <span className="hint">{sinPermiso}</span>}
+        {estado && (
+          <span className="hint">
+            {estado.origen === "configuracion" ? (
+              <>
+                Elegido aquí{estado.cambiado_por ? ` por ${estado.cambiado_por}` : ""} el {fechaHora(estado.cambiado_en)} (variable del despliegue:{" "}
+                <code>APP_ENV={estado.app_env}</code>).
+              </>
+            ) : (
+              <>
+                Tomado de la variable del despliegue: <code>APP_ENV={estado.app_env}</code> ({estado.ambiente_dgii}). Al cambiarlo aquí, esta pantalla manda.
+              </>
+            )}{" "}
+            Las secuencias e-NCF son distintas en cada ambiente; las facturas conservan el ambiente en que se crearon.
+          </span>
+        )}
+        {estado && estado.cambios.length > 0 && (
+          <div className="tw">
+            <table className="tbl" aria-label="Cambios de ambiente">
+              <thead>
+                <tr>
+                  <th>Fecha</th>
+                  <th>Cambio</th>
+                  <th>Usuario</th>
+                </tr>
+              </thead>
+              <tbody>
+                {estado.cambios.map((c) => (
+                  <tr key={c.id}>
+                    <td className="mut">{fechaHora(c.creado_en)}</td>
+                    <td>
+                      {etiquetaAmbiente(c.anterior)} → <b>{etiquetaAmbiente(c.nuevo)}</b>
+                    </td>
+                    <td className="mut">{c.usuario_correo ?? "Sin inicio de sesión"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
-      {pedido && (
-        <div className="scrim" role="presentation" onClick={() => setPedido(null)}>
+      {pedido && estado && (
+        <div className="scrim" role="presentation" onClick={() => !cambiando && setPedido(null)}>
           <div className="modal" role="dialog" aria-modal="true" aria-labelledby="amb-t" onClick={(e) => e.stopPropagation()}>
             <div className="modal-h">
               <h3 id="amb-t">Cambiar a {pedido.label}</h3>
             </div>
             <div className="modal-b">
               <p style={{ margin: 0 }}>
-                El ambiente no se cambia desde aquí: lo fija el despliegue de <b>todos</b> los servicios a la vez (si quedaran mezclados, una
-                factura podría firmarse para un ambiente y enviarse a otro). Para pasar a <b>{pedido.label}</b>:
+                Los e-CF se enviarán a <b>{pedido.desc.split(" · ")[0]}</b> en lugar de {AMBIENTES.find((a) => a.app === actual)?.desc.split(" · ")[0] ?? estado.ambiente_dgii}. Las
+                facturas que ya existen conservan su ambiente: las enviadas se siguen consultando donde se enviaron y las que no se han enviado no
+                podrán enviarse (su e-NCF es de la secuencia del ambiente anterior).
               </p>
-              <ol style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6 }}>
-                <li>En Dokploy, abra el recurso Compose de la facturación → <b>Environment</b>.</li>
-                <li>
-                  Cambie <code>APP_ENV={pedido.app}</code>
-                  {pedido.app === "production" ? " y verifique que el certificado y las secuencias sean los de producción." : "."}
-                </li>
-                <li>
-                  Pulse <b>Deploy</b> y espere a que todos los servicios estén en línea (vea <i>Estado de las soluciones</i>).
-                </li>
-              </ol>
-              {pedido.app === "production" && (
+              {aProduccion && (
+                <div className="al al-d">
+                  <span>
+                    <b>Comprobantes con validez fiscal.</b> {estado.aviso_produccion}
+                  </span>
+                </div>
+              )}
+              {certificadoInvalido && (
+                <div className="al al-d" role="alert">
+                  <span>{estado.certificado.motivo}</span>
+                </div>
+              )}
+              {sinSecuencias && (
                 <div className="al al-w">
-                  <span>Desde ese momento cada e-CF enviado tiene validez fiscal.</span>
+                  <span>
+                    {pedido.label} no tiene secuencias e-NCF registradas: regístrelas en <b>Secuencias autorizadas</b> (eligiendo ese ambiente) antes de
+                    facturar.
+                  </span>
+                </div>
+              )}
+              {estado.bloqueos.length > 0 && (
+                <div className="al al-d" role="alert">
+                  <span>{estado.bloqueos.join(" ")}</span>
+                </div>
+              )}
+              {aProduccion && !certificadoInvalido && !bloqueado && (
+                <label style={{ display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer" }}>
+                  <input type="checkbox" checked={confirmado} onChange={(e) => setConfirmado(e.target.checked)} style={{ accentColor: "#0F766E", marginTop: 3 }} />
+                  <span>Entiendo que desde ahora los comprobantes que emita son fiscalmente válidos ante la DGII.</span>
+                </label>
+              )}
+              {errorCambio && (
+                <div className="al al-d" role="alert">
+                  <span>{errorCambio}</span>
                 </div>
               )}
             </div>
             <div className="modal-f">
-              <button type="button" className="btn btn-p" onClick={() => setPedido(null)}>
-                Entendido
+              <button type="button" className="btn btn-g" onClick={() => setPedido(null)} disabled={cambiando}>
+                Cancelar
+              </button>
+              <button type="button" className={aProduccion ? "btn btn-d" : "btn btn-p"} onClick={() => void cambiar()} disabled={!puedeConfirmar || cambiando}>
+                {cambiando ? "Cambiando…" : `Cambiar a ${pedido.label}`}
               </button>
             </div>
           </div>
@@ -416,17 +567,23 @@ function formDe(s: Secuencia): FormSecuencia {
   };
 }
 
-export function SeccionSecuencias({ refSeccion, avisar }: { refSeccion: RefSeccion; avisar: Avisar }) {
+export function SeccionSecuencias({ refSeccion, avisar, ambienteActivo }: { refSeccion: RefSeccion; avisar: Avisar; ambienteActivo?: AmbienteApp }) {
   const [seqs, setSeqs] = useState<Secuencia[]>([]);
+  /** Las secuencias son por ambiente: por defecto las del activo; se pueden registrar las de otro (p. ej. producción antes de cambiar). */
+  const [ambiente, setAmbiente] = useState<AmbienteApp | undefined>(ambienteActivo);
   const [error, setError] = useState<string | null>(null);
   const [editando, setEditando] = useState<number | null>(null);
   const [form, setForm] = useState<FormSecuencia | null>(null);
   const [solicitar, setSolicitar] = useState(false);
 
-  const cargar = () => configuracionApi.secuencias().then(setSeqs).catch((err) => setError(mensajeError(err)));
   useEffect(() => {
+    setAmbiente(ambienteActivo);
+  }, [ambienteActivo]);
+  const cargar = () => configuracionApi.secuencias(ambiente).then(setSeqs).catch((err) => setError(mensajeError(err)));
+  useEffect(() => {
+    setEditando(null);
     void cargar();
-  }, []);
+  }, [ambiente]);
 
   async function guardar(tipo: number) {
     if (!form) return;
@@ -437,7 +594,7 @@ export function SeccionSecuencias({ refSeccion, avisar }: { refSeccion: RefSecci
         proximo: form.proximo ? Number(form.proximo) : null,
         fecha_vencimiento: form.vence || null,
         activa: form.activa,
-      });
+      }, ambiente);
       setSeqs((l) => l.map((x) => (x.tipo_ecf === tipo ? s : x)));
       setEditando(null);
       avisar(`Secuencia E${tipo} guardada`, { detalle: s.siguiente_encf ? `Próximo e-NCF: ${s.siguiente_encf}` : undefined });
@@ -452,9 +609,24 @@ export function SeccionSecuencias({ refSeccion, avisar }: { refSeccion: RefSecci
       refSeccion={refSeccion}
       titulo="Secuencias autorizadas"
       extra={
-        <button type="button" className="btn btn-o btn-sm" onClick={() => setSolicitar((v) => !v)}>
-          {solicitar ? "Cerrar" : "Solicitar secuencias"}
-        </button>
+        <div className="row" style={{ gap: 8 }}>
+          <select
+            className="inp"
+            style={{ width: "auto", height: 32, padding: "0 10px" }}
+            aria-label="Ambiente de las secuencias"
+            value={ambiente ?? seqs[0]?.ambiente ?? ""}
+            onChange={(e) => setAmbiente(e.target.value as AmbienteApp)}
+          >
+            {AMBIENTES.map((a) => (
+              <option key={a.app} value={a.app}>
+                {a.label} ({a.desc.split(" · ")[0]}){a.app === ambienteActivo ? " · activo" : ""}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="btn btn-o btn-sm" onClick={() => setSolicitar((v) => !v)}>
+            {solicitar ? "Cerrar" : "Solicitar secuencias"}
+          </button>
+        </div>
       }
     >
       {solicitar && (

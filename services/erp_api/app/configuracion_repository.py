@@ -232,24 +232,25 @@ def calcular_secuencia(
     }
 
 
-async def ultimos_encf_usados(conn: asyncpg.Connection) -> dict[int, int]:
-    """Mayor número de e-NCF guardado en facturacion.facturas, por tipo."""
+async def ultimos_encf_usados(conn: asyncpg.Connection, ambiente: str) -> dict[int, int]:
+    """Mayor número de e-NCF guardado en facturacion.facturas del ambiente, por tipo."""
     try:
         filas = await conn.fetch(
             """
             SELECT substr(encf, 2, 2)::int AS tipo, max(substr(encf, 4)::bigint) AS mayor
             FROM facturacion.facturas
-            WHERE encf ~ '^E[0-9]{12}$'
+            WHERE encf ~ '^E[0-9]{12}$' AND ambiente = $1
             GROUP BY 1
-            """
+            """,
+            ambiente,
         )
     except asyncpg.UndefinedTableError:
         return {}
     return {int(f["tipo"]): int(f["mayor"]) for f in filas}
 
 
-async def cantidad_usados_en_rango(conn: asyncpg.Connection) -> dict[int, int]:
-    """Cuántos e-NCF de cada secuencia configurada ya tienen factura."""
+async def cantidad_usados_en_rango(conn: asyncpg.Connection, ambiente: str) -> dict[int, int]:
+    """Cuántos e-NCF de cada secuencia configurada del ambiente ya tienen factura."""
     try:
         filas = await conn.fetch(
             """
@@ -257,33 +258,42 @@ async def cantidad_usados_en_rango(conn: asyncpg.Connection) -> dict[int, int]:
             FROM configuracion.secuencias s
             JOIN facturacion.facturas f
               ON f.encf ~ '^E[0-9]{12}$'
+             AND f.ambiente = s.ambiente
              AND substr(f.encf, 2, 2)::int = s.tipo_ecf
              AND substr(f.encf, 4)::bigint BETWEEN s.desde AND s.hasta
+            WHERE s.ambiente = $1
             GROUP BY s.tipo_ecf
-            """
+            """,
+            ambiente,
         )
     except asyncpg.UndefinedTableError:
         return {}
     return {int(f["tipo_ecf"]): int(f["cantidad"]) for f in filas}
 
 
-async def listar_secuencias(pool: asyncpg.Pool, hoy: date) -> list[dict[str, Any]]:
+async def listar_secuencias(pool: asyncpg.Pool, hoy: date, ambiente: str) -> list[dict[str, Any]]:
+    """Las secuencias del `ambiente` DGII (son distintas en TesteCF, CerteCF y eCF)."""
     async with pool.acquire() as conn:
-        filas = {int(f["tipo_ecf"]): dict(f) for f in await conn.fetch("SELECT * FROM configuracion.secuencias")}
-        usados = await ultimos_encf_usados(conn)
-        cantidades = await cantidad_usados_en_rango(conn) if filas else {}
+        filas = {
+            int(f["tipo_ecf"]): dict(f)
+            for f in await conn.fetch("SELECT * FROM configuracion.secuencias WHERE ambiente = $1", ambiente)
+        }
+        usados = await ultimos_encf_usados(conn, ambiente)
+        cantidades = await cantidad_usados_en_rango(conn, ambiente) if filas else {}
     return [
         calcular_secuencia(tipo, filas.get(tipo), usados.get(tipo), hoy, cantidades.get(tipo, 0) if tipo in filas else None)
         for tipo in NOMBRES_TIPO
     ]
 
 
-async def obtener_secuencia(pool: asyncpg.Pool, tipo_ecf: int, hoy: date) -> dict[str, Any]:
+async def obtener_secuencia(pool: asyncpg.Pool, tipo_ecf: int, hoy: date, ambiente: str) -> dict[str, Any]:
     _validar_tipo(tipo_ecf)
     async with pool.acquire() as conn:
-        fila = await conn.fetchrow("SELECT * FROM configuracion.secuencias WHERE tipo_ecf = $1", tipo_ecf)
-        usados = await ultimos_encf_usados(conn)
-        cantidades = await cantidad_usados_en_rango(conn) if fila else {}
+        fila = await conn.fetchrow(
+            "SELECT * FROM configuracion.secuencias WHERE tipo_ecf = $1 AND ambiente = $2", tipo_ecf, ambiente
+        )
+        usados = await ultimos_encf_usados(conn, ambiente)
+        cantidades = await cantidad_usados_en_rango(conn, ambiente) if fila else {}
     return calcular_secuencia(
         tipo_ecf, dict(fila) if fila else None, usados.get(tipo_ecf), hoy, cantidades.get(tipo_ecf, 0) if fila else None
     )
@@ -299,6 +309,7 @@ async def guardar_secuencia(
     fecha_vencimiento: date | None,
     activa: bool,
     hoy: date,
+    ambiente: str,
 ) -> dict[str, Any]:
     _validar_tipo(tipo_ecf)
     if hasta < desde:
@@ -310,9 +321,9 @@ async def guardar_secuencia(
         await conn.execute(
             """
             INSERT INTO configuracion.secuencias
-                (tipo_ecf, prefijo, desde, hasta, proximo, fecha_vencimiento, activa)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
-            ON CONFLICT (tipo_ecf) DO UPDATE SET
+                (tipo_ecf, prefijo, desde, hasta, proximo, fecha_vencimiento, activa, ambiente)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            ON CONFLICT (ambiente, tipo_ecf) DO UPDATE SET
                 desde = EXCLUDED.desde,
                 hasta = EXCLUDED.hasta,
                 proximo = EXCLUDED.proximo,
@@ -327,14 +338,17 @@ async def guardar_secuencia(
             proximo,
             fecha_vencimiento,
             activa,
+            ambiente,
         )
-    return await obtener_secuencia(pool, tipo_ecf, hoy)
+    return await obtener_secuencia(pool, tipo_ecf, hoy, ambiente)
 
 
-async def eliminar_secuencia(pool: asyncpg.Pool, tipo_ecf: int) -> None:
+async def eliminar_secuencia(pool: asyncpg.Pool, tipo_ecf: int, ambiente: str) -> None:
     _validar_tipo(tipo_ecf)
     async with pool.acquire() as conn:
-        resultado = await conn.execute("DELETE FROM configuracion.secuencias WHERE tipo_ecf = $1", tipo_ecf)
+        resultado = await conn.execute(
+            "DELETE FROM configuracion.secuencias WHERE tipo_ecf = $1 AND ambiente = $2", tipo_ecf, ambiente
+        )
     if resultado == "DELETE 0":
         raise SecuenciaNoEncontradaError(str(tipo_ecf))
 

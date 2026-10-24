@@ -12,7 +12,7 @@ class FakeTokenProvider:
         self.error = error
         self.llamadas: list[bool] = []
 
-    async def obtener_token(self, forzar_renovacion: bool = False) -> TokenResponse:
+    async def obtener_token(self, forzar_renovacion: bool = False, **_) -> TokenResponse:
         self.llamadas.append(forzar_renovacion)
         if self.error is not None:
             raise self.error

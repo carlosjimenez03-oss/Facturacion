@@ -21,6 +21,7 @@ import asyncpg
 from libs.ecf_common.compras606 import validar_periodo
 
 from . import formatos, precalculos
+from .ambiente_dgii import ambiente_activo
 from .repository import _FECHA_EMISION, _ZONA_RD, DatosInvalidosError, hoy
 
 
@@ -84,7 +85,9 @@ async def _facturas_venta(
     conn: asyncpg.Connection, desde: date, hasta: date, estado: str = _ESTADO_ACEPTADO
 ) -> list[dict[str, Any]]:
     """e-CF de venta (31, 32, 33, 34, 44, 45, 46) en `estado` con
-    FechaEmision en [desde, hasta)."""
+    FechaEmision en [desde, hasta), del ambiente DGII activo (fase 7): los
+    e-CF de TesteCF/CerteCF no tienen validez fiscal y no se declaran en
+    producción, ni los de producción se mezclan con las pruebas."""
     filas = await conn.fetch(
         f"""
         SELECT f.id, f.tipo_ecf, f.encf, f.datos::text AS datos
@@ -92,6 +95,7 @@ async def _facturas_venta(
         CROSS JOIN LATERAL (SELECT f.datos::jsonb AS d) x
         WHERE f.tipo_ecf = ANY($1::int[])
           AND f.estado = $2
+          AND f.ambiente = $5
           AND {_FECHA_EMISION} >= $3 AND {_FECHA_EMISION} < $4
         ORDER BY {_FECHA_EMISION}, f.encf
         """,
@@ -99,6 +103,7 @@ async def _facturas_venta(
         estado,
         desde,
         hasta,
+        await ambiente_activo(conn),
     )
     return [
         {"id": str(f["id"]), "tipo_ecf": f["tipo_ecf"], "encf": f["encf"], "datos": json.loads(f["datos"])}
@@ -114,12 +119,14 @@ async def _cantidad_pendientes_dgii(conn: asyncpg.Connection, desde: date, hasta
         CROSS JOIN LATERAL (SELECT f.datos::jsonb AS d) x
         WHERE f.tipo_ecf = ANY($1::int[])
           AND f.estado = $2
+          AND f.ambiente = $5
           AND {_FECHA_EMISION} >= $3 AND {_FECHA_EMISION} < $4
         """,
         list(formatos.TIPOS_VENTA_607),
         _ESTADO_PENDIENTE_DGII,
         desde,
         hasta,
+        await ambiente_activo(conn),
     ) or 0
 
 
@@ -136,6 +143,47 @@ async def _facturas_papel_venta(conn: asyncpg.Connection, desde: date, hasta: da
         hasta,
     )
     return [f for f in (formatos.factura_papel_como_ecf(dict(fila)) for fila in filas) if f is not None]
+
+
+async def _facturas_papel_it1(
+    conn: asyncpg.Connection, desde: date, hasta: date
+) -> tuple[list[dict[str, Any]], list[tuple[str, str]]]:
+    """Facturas en papel (serie B) de venta del período para el IT-1: el IT-1
+    declara TODAS las ventas, así que entran aunque la empresa sea emisor
+    100 % electrónico (a diferencia del 607). Se excluye la que ya tiene su
+    e-CF de reemplazo aceptado por la DGII (`encf_reemplazo`, o un e-CF que
+    la referencia con el código de modificación 4, mismo criterio que la
+    contabilidad): esa venta la declara el e-CF, en el período de su
+    FechaEmision. Devuelve (facturas con la forma de un e-CF, [(NCF, e-NCF
+    de reemplazo)] de las excluidas)."""
+    filas = await conn.fetch(
+        """
+        SELECT p.*, r.encf AS reemplazo_aceptado
+        FROM operacion.facturas_papel p
+        LEFT JOIN LATERAL (
+            SELECT f.encf FROM facturacion.facturas f
+            WHERE f.estado = 'aceptado'
+              AND (upper(f.encf) = upper(p.encf_reemplazo)
+                   OR (upper(f.datos::jsonb #>> '{InformacionReferencia,NCFModificado}') = upper(p.ncf)
+                       AND f.datos::jsonb #>> '{InformacionReferencia,CodigoModificacion}' = '4'))
+            LIMIT 1
+        ) r ON true
+        WHERE p.fecha >= $1 AND p.fecha < $2
+        ORDER BY p.fecha, p.ncf
+        """,
+        desde,
+        hasta,
+    )
+    incluidas: list[dict[str, Any]] = []
+    regularizadas: list[tuple[str, str]] = []
+    for fila in filas:
+        if fila["reemplazo_aceptado"]:
+            regularizadas.append((fila["ncf"], fila["reemplazo_aceptado"]))
+            continue
+        factura = formatos.factura_papel_como_ecf(dict(fila))
+        if factura is not None:
+            incluidas.append(factura)
+    return incluidas, regularizadas
 
 
 def _advertencia_pendientes(cantidad: int) -> list[str]:
@@ -442,7 +490,10 @@ async def _datos_it1(
     conn: asyncpg.Connection, periodo: str
 ) -> tuple[precalculos.VentasItbis, precalculos.Compras606, Decimal]:
     desde, hasta = _rango_mes(periodo)
-    ventas = precalculos.acumular_ventas(await _facturas_venta(conn, desde, hasta))
+    # e-CF aceptados + facturas en papel (serie B) sin e-CF de reemplazo
+    # aceptado: el IT-1 (y su proporcionalidad) cuenta todas las ventas.
+    papel, _ = await _facturas_papel_it1(conn, desde, hasta)
+    ventas = precalculos.acumular_ventas(await _facturas_venta(conn, desde, hasta) + papel)
     compras = await conn.fetchrow(
         f"""
         SELECT COALESCE(sum({_SIGNO_606} * itbis_facturado), 0) AS itbis_facturado,
@@ -480,6 +531,8 @@ async def _precalculo_it1(conn: asyncpg.Connection, periodo: str) -> dict[str, A
             saldo_favor_sugerido=Decimal("0"),
             hoy=hoy(),
         )
+    desde, hasta = _rango_mes(periodo)
+    papel, regularizadas = await _facturas_papel_it1(conn, desde, hasta)
     resultado, _ = precalculos.calcular_it1(
         periodo=periodo,
         ventas=ventas,
@@ -488,8 +541,10 @@ async def _precalculo_it1(conn: asyncpg.Connection, periodo: str) -> dict[str, A
         ajustes=ajustes,
         saldo_favor_sugerido=saldo_sugerido,
         hoy=hoy(),
+        papel=precalculos.PapelIt1(
+            ventas=precalculos.acumular_ventas(papel), cantidad=len(papel), regularizadas=regularizadas
+        ),
     )
-    desde, hasta = _rango_mes(periodo)
     resultado["advertencias"] = _advertencia_pendientes(
         await _cantidad_pendientes_dgii(conn, desde, hasta)
     ) + resultado["advertencias"]

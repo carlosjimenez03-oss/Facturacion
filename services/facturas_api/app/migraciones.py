@@ -4,9 +4,10 @@ La tabla la crea `db/init/002_facturas.sql` (Postgres local) o la carga
 inicial a Supabase (docs/SUPABASE.md), donde nadie corre db/init después:
 por eso los cambios de esquema de esta tabla se aplican aquí, idempotentes,
 en el lifespan de main.py. `db/init/013_configuracion.sql` repite
-`DDL_FACTURAS`, `db/init/017_contingencia.sql` repite `DDL_CONTINGENCIA` y
-`db/init/018_pos_sin_conexion.sql` repite `DDL_IDEMPOTENCIA` para el
-Postgres local (lo verifica tests/test_migraciones.py).
+`DDL_FACTURAS`, `db/init/017_contingencia.sql` repite `DDL_CONTINGENCIA`,
+`db/init/018_pos_sin_conexion.sql` repite `DDL_IDEMPOTENCIA` y
+`db/init/020_fase7_fiscal.sql` repite `DDL_FASE7` para el Postgres local (lo
+verifica tests/test_migraciones.py).
 
 Para cambios futuros: agregar sentencias idempotentes al final del DDL que
 corresponda (`ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`) o un
@@ -129,6 +130,37 @@ $$;
 """
 
 
+# Fase 7: reverso de la salida de inventario de las facturas que la DGII
+# rechaza (app.envio.revertir_inventario) y el filtro por ambiente DGII de la
+# lista de facturas (el ambiente se elige en Configuración, ver app.ambiente).
+# El índice único del e-NCF por ambiente lo crea secuencias_encf al arrancar.
+DDL_FASE7 = """
+-- Reverso de inventario pendiente (inventario-api no respondió: lo reintenta
+-- la tarea de fondo) y cuándo quedó hecho. Se consulta el catálogo antes del
+-- ALTER TABLE / CREATE INDEX para no tomar locks de facturacion.facturas en
+-- cada arranque.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'facturacion' AND table_name = 'facturas' AND column_name = 'inventario_revertido_en'
+    ) THEN
+        ALTER TABLE facturacion.facturas
+            ADD COLUMN IF NOT EXISTS inventario_reverso_pendiente boolean NOT NULL DEFAULT false,
+            ADD COLUMN IF NOT EXISTS inventario_revertido_en timestamptz;
+    END IF;
+    IF to_regclass('facturacion.facturas_ambiente_idx') IS NULL THEN
+        CREATE INDEX IF NOT EXISTS facturas_ambiente_idx ON facturacion.facturas (ambiente, creado_en DESC);
+    END IF;
+    IF to_regclass('facturacion.facturas_reverso_pendiente_idx') IS NULL THEN
+        CREATE INDEX IF NOT EXISTS facturas_reverso_pendiente_idx ON facturacion.facturas (actualizado_en)
+            WHERE inventario_reverso_pendiente;
+    END IF;
+END;
+$$;
+"""
+
+
 async def aplicar_migraciones(pool: asyncpg.Pool) -> None:
     async with pool.acquire() as conn:
         async with conn.transaction():
@@ -136,4 +168,5 @@ async def aplicar_migraciones(pool: asyncpg.Pool) -> None:
             await conn.execute(DDL_FACTURAS)
             await conn.execute(DDL_CONTINGENCIA)
             await conn.execute(DDL_IDEMPOTENCIA)
-    logger.info("Columnas de 'facturacion.facturas', tablas de contingencia e idempotencia verificadas")
+            await conn.execute(DDL_FASE7)
+    logger.info("Columnas de 'facturacion.facturas', tablas de contingencia, idempotencia y fase 7 verificadas")

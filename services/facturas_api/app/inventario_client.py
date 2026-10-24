@@ -1,6 +1,6 @@
 """Cliente HTTP hacia `inventario_api` para descontar stock al vender.
 
-Dos llamadas, con dos políticas de fallo distintas y a propósito:
+Las llamadas, con políticas de fallo distintas y a propósito:
 
 - `validar_disponibilidad` se llama ANTES de enviar el e-CF a la DGII. Si no
   hay stock suficiente (o si inventario_api no responde y por lo tanto no se
@@ -10,9 +10,12 @@ Dos llamadas, con dos políticas de fallo distintas y a propósito:
   DGII (documento fiscal ya irreversible). Un fallo aquí NUNCA debe
   propagarse como error de la respuesta -- ver `app.main.enviar_factura`,
   que solo registra el fallo (`inventario_sincronizado`/`inventario_error`)
-  para poder detectarlo y resolverlo manualmente.
+  para poder detectarlo y resolverlo manualmente. También se llama al
+  emitir la factura en contingencia (la venta ya se entregó al comprador).
+- `registrar_reverso_por_factura` devuelve la mercancía de una factura que
+  la DGII rechazó (idempotente; ver `app.envio.revertir_inventario`).
 
-Ambas llevan la cabecera de llamada interna (`X-Kontara-Interno`, ver
+Todas llevan la cabecera de llamada interna (`X-Kontara-Interno`, ver
 libs/ecf_common/auth/sesion_supabase.py) para que funcionen aunque
 inventario-api tenga REQUIRE_AUTH=true.
 """
@@ -83,6 +86,21 @@ async def registrar_salida_por_factura(
             respuesta = await client.post(
                 f"{base_url}/movimientos/salida-por-factura",
                 json={"factura_id": factura_id, "items": _items_venta(items_inventario), "documento": documento},
+                headers=_cabeceras(),
+            )
+    except httpx.HTTPError as exc:
+        raise InventarioApiError(f"No se pudo contactar inventario_api: {exc}") from exc
+
+    if respuesta.status_code >= 400:
+        raise InventarioApiError(f"inventario_api respondió {respuesta.status_code}: {respuesta.text}")
+
+
+async def registrar_reverso_por_factura(base_url: str, factura_id: str, *, documento: str | None = None) -> None:
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            respuesta = await client.post(
+                f"{base_url}/movimientos/reverso-por-factura",
+                json={"factura_id": factura_id, "documento": documento},
                 headers=_cabeceras(),
             )
     except httpx.HTTPError as exc:

@@ -27,6 +27,9 @@
 .pc-casilla.subtotal{font-weight:650;color:var(--ink)}
 .pc-casilla.total{font-weight:650;color:var(--teal);background:#F0FAF9}
 .pc-casilla.total .num{font-size:16px}
+/* "De ellos" de la línea anterior (facturas en papel, serie B): ya incluido, no suma. */
+.pc-casilla.detalle{padding-left:46px;font-size:13px;color:var(--mut);background:#FAFAFB}
+.pc-casilla.detalle .num{color:var(--tx2)}
 .pc-res{border-color:#B7E3DD}
 .pc-res .card-b{display:flex;flex-direction:column;gap:8px}
 .pc-res-k{font-size:13px;color:var(--mut);font-weight:500;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
