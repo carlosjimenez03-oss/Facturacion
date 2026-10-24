@@ -20,12 +20,15 @@ from libs.ecf_common.empresa import (
     aislamiento_disponible,
     cabeceras_empresa,
     empresa_actual,
+    SQL_LEGADO,
     en_empresa,
+    es_admin_plataforma,
     invalidar_cache,
     rol_en_empresa,
 )
 
 from . import configuracion_repository as conf_repo
+from . import membresia
 from .config import ErpApiSettings, get_settings
 from .contabilidad_calculos import ddl_semilla_catalogo
 from .repository import DatosInvalidosError
@@ -41,6 +44,10 @@ SIN_AISLAMIENTO = (
     "pooler de Supabase en modo transacción): ver docs/MULTIEMPRESA.md. Mientras tanto se trabaja con una sola empresa."
 )
 SOLO_ADMIN = "Solo un administrador de la empresa puede hacer esto"
+SOLO_PLATAFORMA = (
+    "Solo un administrador de la instalación puede agregar empresas (KONTARA_ADMIN_EMAILS o la marca kontara_admin; "
+    "ver docs/MULTIEMPRESA.md)"
+)
 
 
 class EmpresaResumen(BaseModel):
@@ -53,11 +60,22 @@ class EmpresaResumen(BaseModel):
     predeterminada: bool
 
 
+class Invitacion(BaseModel):
+    id: int
+    rnc: str | None = None
+    razon_social: str
+    nombre_comercial: str | None = None
+    rol: Rol
+    agregado_por: str | None = None
+
+
 class MisEmpresas(BaseModel):
     actual: int
     empresas: list[EmpresaResumen]
-    # El usuario puede agregar empresas (es administrador de la actual) y la
-    # base las puede aislar.
+    # Invitaciones pendientes a otras empresas (las acepta el usuario).
+    invitaciones: list[Invitacion] = []
+    # El usuario puede agregar empresas (administrador de la instalación) y
+    # la base las puede aislar.
     puede_agregar: bool
     aislamiento: bool
     motivo: str | None = None
@@ -77,6 +95,10 @@ class NuevaEmpresa(BaseModel):
 
 class Seleccion(BaseModel):
     empresa_id: int = Field(..., ge=1)
+
+
+class RespuestaInvitacion(BaseModel):
+    aceptar: bool
 
 
 class ConsultaRnc(BaseModel):
@@ -117,13 +139,17 @@ def exigir_admin(request: Request) -> None:
 
 # --- consultas ------------------------------------------------------------------
 
+# Sus membresías activas en empresas activas (y, sin ninguna fila, la 1:
+# ver libs/ecf_common/empresa.py, _SQL_ROL).
 _SQL_MIS_EMPRESAS = """
 SELECT e.id, e.rnc, e.razon_social, e.nombre_comercial, e.estado, eu.rol
 FROM configuracion.empresas e
-JOIN configuracion.empresa_usuarios eu ON eu.empresa_id = e.id AND eu.usuario_id = $1
+JOIN configuracion.empresa_usuarios eu ON eu.empresa_id = e.id AND eu.usuario_id = $1 AND eu.estado = 'activo'
 WHERE e.estado = 'activa'
 UNION ALL
-SELECT e.id, e.rnc, e.razon_social, e.nombre_comercial, e.estado, CASE WHEN $2 THEN 'admin' ELSE 'usuario' END
+SELECT e.id, e.rnc, e.razon_social, e.nombre_comercial, e.estado,
+       CASE WHEN $2 OR COALESCE((SELECT previos_admin FROM configuracion.multiempresa_legado WHERE id = 1), false)
+            THEN 'admin' ELSE 'usuario' END
 FROM configuracion.empresas e
 WHERE e.id = 1 AND NOT EXISTS (SELECT 1 FROM configuracion.empresa_usuarios WHERE usuario_id = $1)
 ORDER BY 1
@@ -142,23 +168,6 @@ async def mis_empresas(pool, usuario) -> list[dict[str, Any]]:
         else:
             filas = await conn.fetch(_SQL_MIS_EMPRESAS, usuario.id, bool(usuario.admin_global))
     return [{**dict(f), "predeterminada": f["id"] == EMPRESA_PREDETERMINADA} for f in filas]
-
-
-async def materializar_membresia_implicita(conn, usuario_id: str, correo: str | None, admin_global: bool) -> None:
-    """Un usuario sin membresías es miembro implícito de la empresa 1. Antes
-    de darle su primera membresía explícita (otra empresa), se escribe la
-    implícita: si no, dejaría de entrar a la 1."""
-    if await conn.fetchval("SELECT 1 FROM configuracion.empresa_usuarios WHERE usuario_id = $1 LIMIT 1", usuario_id):
-        return
-    await conn.execute(
-        """
-        INSERT INTO configuracion.empresa_usuarios (empresa_id, usuario_id, correo, rol)
-        VALUES (1, $1, $2, $3) ON CONFLICT DO NOTHING
-        """,
-        usuario_id,
-        correo,
-        "admin" if admin_global else "usuario",
-    )
 
 
 async def inicializar_empresa(pool, empresa_id: int) -> None:
@@ -202,7 +211,10 @@ async def crear_empresa(pool, datos: NuevaEmpresa, usuario) -> dict[str, Any]:
                 usuario.correo if usuario is not None else None,
             )
             if usuario is not None:
-                await materializar_membresia_implicita(conn, usuario.id, usuario.correo, usuario.admin_global)
+                # Quien la crea, si es un usuario de antes sin filas: su fila
+                # de la empresa 1 primero (normalmente ya la escribió su
+                # inicio de sesión), para que no la pierda al tener esta.
+                await conn.execute(SQL_LEGADO, usuario.id, usuario.correo, bool(usuario.admin_global or usuario.admin))
                 await conn.execute(
                     """
                     INSERT INTO configuracion.empresa_usuarios (empresa_id, usuario_id, correo, rol, agregado_por)
@@ -270,7 +282,8 @@ async def listar(request: Request):
     return {
         "actual": empresa_actual(),
         "empresas": await mis_empresas(pool, usuario),
-        "puede_agregar": aislamiento and es_admin(request),
+        "invitaciones": await membresia.invitaciones(pool, usuario.id) if usuario is not None else [],
+        "puede_agregar": aislamiento and await es_admin_plataforma(pool, usuario),
         "aislamiento": aislamiento,
         "motivo": None if aislamiento else SIN_AISLAMIENTO,
     }
@@ -281,8 +294,9 @@ async def agregar(request: Request, payload: NuevaEmpresa):
     """Agrega una empresa (su RNC y datos fiscales). Quien la agrega queda
     como su administrador; luego carga su certificado, sus secuencias y su
     ambiente DGII en Configuración, ya dentro de ella."""
-    exigir_admin(request)
     pool = _pool(request)
+    if not await es_admin_plataforma(pool, _usuario(request)):
+        raise HTTPException(status_code=403, detail=SOLO_PLATAFORMA)
     if not await aislamiento_disponible(pool):
         raise HTTPException(status_code=409, detail=SIN_AISLAMIENTO)
     try:
@@ -305,6 +319,17 @@ async def elegir(request: Request, payload: Seleccion):
             raise HTTPException(status_code=403, detail="Su usuario no tiene acceso a esa empresa")
         await recordar_seleccion(pool, usuario.id, payload.empresa_id)
     return payload
+
+
+@router.post("/{empresa_id}/invitacion", response_model=MisEmpresas)
+async def responder_invitacion(request: Request, empresa_id: int, payload: RespuestaInvitacion):
+    """El usuario invitado acepta (entra a la empresa) o rechaza."""
+    usuario = _usuario(request)
+    if usuario is None:
+        raise HTTPException(status_code=409, detail="Las invitaciones necesitan el inicio de sesión")
+    if not await membresia.responder_invitacion(_pool(request), usuario.id, empresa_id, payload.aceptar):
+        raise HTTPException(status_code=404, detail="No hay una invitación pendiente a esa empresa")
+    return await listar(request)
 
 
 @router.get("/consulta-rnc/{rnc}", response_model=ConsultaRnc)

@@ -252,14 +252,19 @@ def test_usuarios_sin_service_role_key(client, monkeypatch):
 @respx.mock
 def test_crear_usuario_con_contrasena(client):
     respx.get(f"{GW}/auth/v1/admin/users").mock(return_value=httpx.Response(200, json={"users": []}))
-    ruta = respx.post(f"{GW}/auth/v1/admin/users").mock(return_value=httpx.Response(200, json=_gotrue_user()))
+    nuevo = _gotrue_user(app_metadata={"provider": "email"})
+    ruta = respx.post(f"{GW}/auth/v1/admin/users").mock(return_value=httpx.Response(200, json=nuevo))
+    marca = respx.put(f"{GW}/auth/v1/admin/users/{OTRO}").mock(return_value=httpx.Response(200, json=_gotrue_user()))
     r = client.post("/configuracion/usuarios", json={"correo": "Ana@Empresa.do", "contrasena": "clave-segura-1"})
     assert r.status_code == 201
+    # Se crea SIN la marca de Kontara; la marca va después de escribir su
+    # membresía (nunca queda con acceso y sin filas: la regla de los
+    # usuarios de antes de la multiempresa).
     assert json.loads(ruta.calls[0].request.content) == {
-        "email": "ana@empresa.do", "password": "clave-segura-1", "email_confirm": True,
-        "app_metadata": {"kontara": True},
+        "email": "ana@empresa.do", "password": "clave-segura-1", "email_confirm": True, "app_metadata": {},
     }
-    assert r.json()["acceso"] is True
+    assert json.loads(marca.calls[0].request.content) == {"app_metadata": {"kontara": True}}
+    assert r.json()["acceso"] is True and r.json()["estado_empresa"] == "activo"
 
 
 @respx.mock
@@ -280,6 +285,9 @@ def test_invitar_usuario_sin_contrasena(client):
 
 @respx.mock
 def test_dar_acceso_a_usuario_existente(client):
+    respx.get(f"{GW}/auth/v1/admin/users/{OTRO}").mock(
+        return_value=httpx.Response(200, json=_gotrue_user(app_metadata={"provider": "email"}))
+    )
     marca = respx.put(f"{GW}/auth/v1/admin/users/{OTRO}").mock(return_value=httpx.Response(200, json=_gotrue_user()))
     r = client.post(f"/configuracion/usuarios/{OTRO}/acceso")
     assert r.status_code == 200 and r.json()["acceso"] is True
@@ -310,7 +318,9 @@ def test_error_de_gotrue_se_traduce(client):
 
 @respx.mock
 def test_desactivar_y_activar_usuario(client):
-    respx.get(f"{GW}/auth/v1/admin/users/{OTRO}").mock(return_value=httpx.Response(200, json=_gotrue_user()))
+    """Miembro solo de esta empresa: se desactiva en ella y también en
+    Supabase Auth (cierra sus sesiones); activar levanta ese bloqueo."""
+    leer = respx.get(f"{GW}/auth/v1/admin/users/{OTRO}").mock(return_value=httpx.Response(200, json=_gotrue_user()))
     ruta = respx.put(f"{GW}/auth/v1/admin/users/{OTRO}").mock(
         return_value=httpx.Response(200, json=_gotrue_user(banned_until="2126-01-01T00:00:00Z"))
     )
@@ -318,6 +328,7 @@ def test_desactivar_y_activar_usuario(client):
     assert r.status_code == 200
     assert r.json()["activo"] is False
     assert b"876000h" in ruta.calls[0].request.content
+    leer.mock(return_value=httpx.Response(200, json=_gotrue_user(banned_until="2126-01-01T00:00:00Z")))
     ruta.mock(return_value=httpx.Response(200, json=_gotrue_user()))
     r = client.post(f"/configuracion/usuarios/{OTRO}/activar")
     assert r.json()["activo"] is True

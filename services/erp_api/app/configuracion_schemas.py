@@ -144,8 +144,9 @@ class Usuario(BaseModel):
     # mismo GoTrue se listan aparte, "sin acceso").
     acceso: bool = False
     admin: bool = False
-    # Rol en la empresa en curso (multiempresa); None = no es miembro.
+    # Rol y estado en la empresa en curso (multiempresa); None = no es miembro.
     rol_empresa: Literal["admin", "usuario"] | None = None
+    estado_empresa: Literal["activo", "inactivo", "invitado", "retirado"] | None = None
 
 
 class Usuarios(BaseModel):

@@ -19,6 +19,8 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from libs.ecf_common.empresa import es_admin_plataforma
+
 from . import nomina_repository as repo
 from .nomina_repository import ConflictoNominaError, NominaNoEncontradaError
 from .repository import DatosInvalidosError
@@ -488,6 +490,17 @@ def _csv(nombre: str, contenido: bytes) -> Response:
     )
 
 
+async def _exigir_admin_plataforma(request: Request) -> None:
+    """Las tasas de la TSS y la escala del ISR son de toda la instalación
+    (las usan todas las empresas): las cambia un administrador de la
+    instalación, no el de una empresa (docs/MULTIEMPRESA.md)."""
+    if not await es_admin_plataforma(_pool(request), getattr(request.state, "usuario", None)):
+        raise HTTPException(
+            status_code=403,
+            detail="Los parámetros de nómina son de toda la instalación: solo un administrador de la instalación los cambia",
+        )
+
+
 _EMPLEADO_NO_ENCONTRADO = "Empleado no encontrado"
 _PERIODO_NO_ENCONTRADO = "Nómina no encontrada"
 
@@ -516,6 +529,7 @@ async def parametros_vigentes(request: Request, fecha: date | None = None):
 
 @router.put("/parametros/{vigente_desde}", response_model=ParametrosNomina)
 async def guardar_parametros(request: Request, vigente_desde: date, payload: ParametrosPayload):
+    await _exigir_admin_plataforma(request)
     datos = payload.model_dump()
     datos["escala_isr"] = [t.model_dump() for t in payload.escala_isr]
     return await _llamar(repo.guardar_parametros, _pool(request), vigente_desde, **datos)
@@ -523,6 +537,7 @@ async def guardar_parametros(request: Request, vigente_desde: date, payload: Par
 
 @router.delete("/parametros/{vigente_desde}", status_code=204)
 async def eliminar_parametros(request: Request, vigente_desde: date):
+    await _exigir_admin_plataforma(request)
     await _llamar(repo.eliminar_parametros, _pool(request), vigente_desde, no_encontrado="Parámetros no encontrados")
 
 

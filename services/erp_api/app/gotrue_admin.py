@@ -107,20 +107,23 @@ async def obtener_usuario(settings: ErpApiSettings, usuario_id: str) -> dict[str
     return usuario_desde_gotrue(await _llamar(settings, "GET", f"/admin/users/{usuario_id}"))
 
 
-async def crear_usuario(settings: ErpApiSettings, correo: str, contrasena: str) -> dict[str, Any]:
+async def crear_usuario(settings: ErpApiSettings, correo: str, contrasena: str, con_acceso: bool = True) -> dict[str, Any]:
+    """`con_acceso=False`: sin la marca de Kontara (Configuración → Usuarios
+    la pone después de escribir su membresía, ver configuracion.py)."""
     u = await _llamar(
         settings,
         "POST",
         "/admin/users",
-        json={"email": correo, "password": contrasena, "email_confirm": True, "app_metadata": {MARCA_ACCESO: True}},
+        json={"email": correo, "password": contrasena, "email_confirm": True,
+              "app_metadata": {MARCA_ACCESO: True} if con_acceso else {}},
     )
     return usuario_desde_gotrue(u)
 
 
-async def invitar_usuario(settings: ErpApiSettings, correo: str) -> dict[str, Any]:
+async def invitar_usuario(settings: ErpApiSettings, correo: str, con_acceso: bool = True) -> dict[str, Any]:
     # /invite no recibe app_metadata: la marca se pone justo después.
     u = await _llamar(settings, "POST", "/invite", json={"email": correo})
-    return await dar_acceso(settings, u["id"])
+    return await dar_acceso(settings, u["id"]) if con_acceso else usuario_desde_gotrue(u)
 
 
 async def dar_acceso(settings: ErpApiSettings, usuario_id: str, *, admin: bool = False) -> dict[str, Any]:

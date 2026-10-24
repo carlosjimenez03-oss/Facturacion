@@ -205,22 +205,30 @@ async def _gotrue(funcion, *args):
         raise HTTPException(status_code=status, detail=f"Supabase Auth: {exc}") from exc
 
 
+def _con_membresia(u: dict, m: dict | None) -> dict:
+    """El usuario de GoTrue con su rol y estado EN ESTA EMPRESA. `activo` =
+    puede entrar a esta empresa (miembro activo y no bloqueado en Supabase)."""
+    rol = m["rol"] if m else None
+    if rol == membresia.IMPLICITO:
+        rol = "admin" if u["admin"] else "usuario"
+    estado = m["estado"] if m else None
+    return {**u, "rol_empresa": rol, "estado_empresa": estado, "activo": u["activo"] and estado == "activo",
+            "invitado": u["invitado"] or estado == "invitado"}
+
+
 @router.get("/usuarios", response_model=Usuarios)
 async def listar_usuarios(request: Request, settings: ErpApiSettings = Depends(get_settings)):
     """Usuarios de Kontara MIEMBROS DE ESTA EMPRESA (multiempresa: cada
-    empresa ve solo los suyos) y, solo en la empresa 1, los demás del mismo
-    Supabase Auth, que no pueden entrar hasta que se les dé acceso."""
+    empresa ve solo los suyos, con su estado en ella) y, solo en la empresa
+    1, los demás del mismo Supabase Auth, que no pueden entrar hasta que se
+    les dé acceso."""
     if not gotrue_admin.configurado(settings):
         return {"configurado": False, "usuarios": [], "mensaje": _USUARIOS_NO_CONFIGURADO}
     todos = await _gotrue(gotrue_admin.listar_usuarios, settings)
-    roles = await membresia.roles_de_la_empresa(_pool(request), [u["id"] for u in todos if u["acceso"]])
+    miembros = await membresia.membresias_de_la_empresa(_pool(request), [u["id"] for u in todos if u["acceso"]])
     return {
         "configurado": True,
-        "usuarios": [
-            {**u, "rol_empresa": roles[u["id"]] if roles[u["id"]] != "implicito" else ("admin" if u["admin"] else "usuario")}
-            for u in todos
-            if u["acceso"] and roles.get(u["id"])
-        ],
+        "usuarios": [_con_membresia(u, miembros[u["id"]]) for u in todos if u["acceso"] and miembros.get(u["id"])],
         "sin_acceso": [u for u in todos if not u["acceso"]] if empresa_actual() == EMPRESA_PREDETERMINADA else [],
     }
 
@@ -231,11 +239,24 @@ def _exigir_admin(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Solo un administrador de la empresa puede administrar sus usuarios")
 
 
+def _quien(request: Request) -> str | None:
+    return getattr(getattr(request.state, "usuario", None), "correo", None)
+
+
+async def _dar_acceso_con_membresia(request: Request, settings: ErpApiSettings, usuario: dict, rol: str) -> dict:
+    """Usuario de Supabase SIN acceso a Kontara: primero su fila en esta
+    empresa y después la marca (así nunca queda con acceso y sin filas, que
+    es la regla de los usuarios de antes de la multiempresa)."""
+    await membresia.agregar(_pool(request), usuario, rol, agregado_por=_quien(request), tenia_acceso=False)
+    return await _gotrue(gotrue_admin.dar_acceso, settings, usuario["id"])
+
+
 @router.post("/usuarios", response_model=Usuario, status_code=201)
 async def crear_usuario(request: Request, payload: UsuarioPayload, settings: ErpApiSettings = Depends(get_settings)):
     """Crea o invita un usuario EN ESTA EMPRESA. Si el correo ya es de un
-    usuario (de otra empresa de la instalación, o del mismo Supabase Auth),
-    se le da acceso y se agrega como miembro en vez de crearlo de nuevo."""
+    usuario de Kontara (de otra empresa), queda INVITADO: entra cuando acepta
+    en Mis empresas. Si existe en Supabase Auth sin acceso a Kontara, se le
+    da acceso a esta empresa."""
     _exigir_admin(request)
     correo = payload.correo.lower()
     if "@" not in correo:
@@ -244,23 +265,24 @@ async def crear_usuario(request: Request, payload: UsuarioPayload, settings: Erp
         (u for u in await _gotrue(gotrue_admin.listar_usuarios, settings) if (u["correo"] or "").lower() == correo),
         None,
     )
+    if existente is not None and existente["acceso"]:
+        actual = (await membresia.membresias_de_la_empresa(_pool(request), [existente["id"]]))[existente["id"]]
+        if actual and actual["estado"] in ("activo", "inactivo"):
+            raise HTTPException(status_code=409, detail=f"{correo} ya es miembro de esta empresa")
+        await membresia.agregar(
+            _pool(request), existente, payload.rol, estado="invitado", agregado_por=_quien(request), tenia_acceso=True
+        )
+        return {**existente, "rol_empresa": payload.rol, "estado_empresa": "invitado", "invitado": True, "activo": False}
     if existente is not None:
-        usuario = existente if existente["acceso"] else await _gotrue(gotrue_admin.dar_acceso, settings, existente["id"])
-        nuevo = False
+        usuario = await _dar_acceso_con_membresia(request, settings, existente, payload.rol)
+    elif payload.contrasena:
+        nuevo = await _gotrue(gotrue_admin.crear_usuario, settings, correo, payload.contrasena, False)
+        usuario = await _dar_acceso_con_membresia(request, settings, nuevo, payload.rol)
     else:
-        if payload.contrasena:
-            usuario = await _gotrue(gotrue_admin.crear_usuario, settings, correo, payload.contrasena)
-        else:
-            usuario = await _gotrue(gotrue_admin.invitar_usuario, settings, correo)
-        nuevo = True
-    await membresia.agregar(
-        _pool(request),
-        usuario,
-        payload.rol,
-        agregado_por=getattr(getattr(request.state, "usuario", None), "correo", None),
-        nuevo=nuevo,
-    )
-    return {**usuario, "rol_empresa": payload.rol}
+        nuevo = await _gotrue(gotrue_admin.invitar_usuario, settings, correo, False)
+        usuario = await _dar_acceso_con_membresia(request, settings, nuevo, payload.rol)
+        usuario = {**usuario, "invitado": True}
+    return {**usuario, "rol_empresa": payload.rol, "estado_empresa": "activo"}
 
 
 def _usuario_actual(request: Request, settings: ErpApiSettings):
@@ -281,46 +303,68 @@ def _no_es_uno_mismo(request: Request, settings: ErpApiSettings, usuario_id: str
         raise HTTPException(status_code=409, detail=f"No puede {accion} su propio usuario")
 
 
-async def _de_kontara(request: Request, settings: ErpApiSettings, usuario_id: str) -> dict:
-    """Activar/desactivar solo aplica a usuarios con acceso a Kontara y
-    miembros de esta empresa (un administrador no toca los de otras)."""
+async def _miembro(request: Request, settings: ErpApiSettings, usuario_id: str, *, invitado: bool = False) -> dict:
+    """El usuario de Kontara, miembro de esta empresa (activo o desactivado
+    en ella; con `invitado`, también con la invitación pendiente)."""
     usuario = await _gotrue(gotrue_admin.obtener_usuario, settings, usuario_id)
     if not usuario["acceso"]:
         raise HTTPException(status_code=404, detail="Ese usuario no tiene acceso a Kontara: use «Dar acceso»")
-    roles = await membresia.roles_de_la_empresa(_pool(request), [usuario_id])
-    if not roles.get(usuario_id):
-        raise HTTPException(status_code=404, detail="Ese usuario no es miembro de esta empresa")
-    return usuario
+    m = (await membresia.membresias_de_la_empresa(_pool(request), [usuario_id]))[usuario_id]
+    estados = ("activo", "inactivo", "invitado") if invitado else ("activo", "inactivo")
+    if not m or m["estado"] not in estados:
+        detalle = (
+            "Ese usuario todavía no aceptó la invitación a esta empresa"
+            if m and m["estado"] == "invitado"
+            else "Ese usuario no es miembro de esta empresa"
+        )
+        raise HTTPException(status_code=404, detail=detalle)
+    return {**usuario, "_membresia": m}
+
+
+async def _cambiar_estado(request: Request, settings: ErpApiSettings, usuario_id: str, activo: bool) -> dict:
+    usuario = await _miembro(request, settings, usuario_id)
+    m = usuario.pop("_membresia")
+    solo_esta = await membresia.cambiar_estado(_pool(request), usuario, "activo" if activo else "inactivo")
+    # En Supabase Auth (cierra o reabre TODAS sus sesiones) solo si no es de
+    # ninguna otra empresa: un administrador no bloquea ni desbloquea a un
+    # usuario que también es de otra.
+    if solo_esta and usuario["activo"] != activo:
+        usuario = await _gotrue(gotrue_admin.cambiar_activo, settings, usuario_id, activo)
+    return _con_membresia(usuario, {**m, "estado": "activo" if activo else "inactivo"})
 
 
 @router.post("/usuarios/{usuario_id}/desactivar", response_model=Usuario)
 async def desactivar_usuario(request: Request, usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
+    """Lo desactiva EN ESTA EMPRESA (sigue en las demás)."""
     _exigir_admin(request)
     usuario_id = str(_uuid(usuario_id))
     _no_es_uno_mismo(request, settings, usuario_id)
-    await _de_kontara(request, settings, usuario_id)
-    return await _gotrue(gotrue_admin.cambiar_activo, settings, usuario_id, False)
+    return await _cambiar_estado(request, settings, usuario_id, False)
 
 
 @router.post("/usuarios/{usuario_id}/activar", response_model=Usuario)
 async def activar_usuario(request: Request, usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
     _exigir_admin(request)
-    usuario_id = str(_uuid(usuario_id))
-    await _de_kontara(request, settings, usuario_id)
-    return await _gotrue(gotrue_admin.cambiar_activo, settings, usuario_id, True)
+    return await _cambiar_estado(request, settings, str(_uuid(usuario_id)), True)
 
 
 @router.post("/usuarios/{usuario_id}/acceso", response_model=Usuario)
 async def dar_acceso_usuario(request: Request, usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
     """Da acceso a Kontara a un usuario que ya existía en Supabase Auth
-    (`app_metadata.kontara = true`) y lo agrega a esta empresa. Entra desde
-    su próximo inicio de sesión."""
+    (`app_metadata.kontara = true`) como miembro de esta empresa. Entra desde
+    su próximo inicio de sesión. Si ya era de Kontara, queda invitado."""
     _exigir_admin(request)
-    usuario = await _gotrue(gotrue_admin.dar_acceso, settings, str(_uuid(usuario_id)))
-    await membresia.agregar(
-        _pool(request), usuario, "usuario", agregado_por=getattr(getattr(request.state, "usuario", None), "correo", None)
-    )
-    return {**usuario, "rol_empresa": "usuario"}
+    usuario = await _gotrue(gotrue_admin.obtener_usuario, settings, str(_uuid(usuario_id)))
+    if usuario["acceso"]:
+        actual = (await membresia.membresias_de_la_empresa(_pool(request), [usuario["id"]]))[usuario["id"]]
+        if actual and actual["estado"] in ("activo", "inactivo"):
+            return _con_membresia(usuario, actual)
+        await membresia.agregar(
+            _pool(request), usuario, "usuario", estado="invitado", agregado_por=_quien(request), tenia_acceso=True
+        )
+        return _con_membresia(usuario, {"rol": "usuario", "estado": "invitado"})
+    usuario = await _dar_acceso_con_membresia(request, settings, usuario, "usuario")
+    return _con_membresia(usuario, {"rol": "usuario", "estado": "activo"})
 
 
 @router.put("/usuarios/{usuario_id}/rol", response_model=Usuario)
@@ -331,18 +375,21 @@ async def cambiar_rol_usuario(
     _exigir_admin(request)
     usuario_id = str(_uuid(usuario_id))
     _no_es_uno_mismo(request, settings, usuario_id, "cambiar el rol de")
-    usuario = await _de_kontara(request, settings, usuario_id)
-    await membresia.agregar(_pool(request), usuario, payload.rol, agregado_por=None)
-    return {**usuario, "rol_empresa": payload.rol}
+    usuario = await _miembro(request, settings, usuario_id, invitado=True)
+    m = usuario.pop("_membresia")
+    await membresia.cambiar_rol(_pool(request), usuario, payload.rol)
+    return _con_membresia(usuario, {**m, "rol": payload.rol})
 
 
 @router.delete("/usuarios/{usuario_id}/empresa", status_code=204)
 async def quitar_de_la_empresa(request: Request, usuario_id: str, settings: ErpApiSettings = Depends(get_settings)):
-    """Quita al usuario de ESTA empresa (sigue en las demás)."""
+    """Quita al usuario de ESTA empresa (sigue en las demás) o retira su
+    invitación pendiente."""
     _exigir_admin(request)
     usuario_id = str(_uuid(usuario_id))
     _no_es_uno_mismo(request, settings, usuario_id, "quitar de la empresa a")
-    usuario = await _de_kontara(request, settings, usuario_id)
+    usuario = await _miembro(request, settings, usuario_id, invitado=True)
+    usuario.pop("_membresia")
     await membresia.quitar(_pool(request), usuario)
 
 

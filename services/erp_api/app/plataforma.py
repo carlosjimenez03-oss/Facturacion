@@ -16,7 +16,13 @@ from libs.ecf_common.auth.sesion_supabase import (
     respuesta_sin_sesion,
     usuario_de_request,
 )
-from libs.ecf_common.empresa import CABECERA_EMPRESA, EMPRESA_PREDETERMINADA, empresa_pedida, resolver_empresa
+from libs.ecf_common.empresa import (
+    CABECERA_EMPRESA,
+    EMPRESA_PREDETERMINADA,
+    empresa_pedida,
+    registrar_usuario_previo,
+    resolver_empresa,
+)
 from libs.ecf_common.environments import dgii_environment_for
 
 from . import ambiente_dgii, gotrue_admin
@@ -105,6 +111,10 @@ async def verificar_sesion(request: Request, settings: ErpApiSettings = Depends(
     if not await REVOCACION.vigente(pool, usuario):
         return _sin_sesion("La sesión se cerró: inicie sesión de nuevo", "sesion_cerrada")
     await marcar_acceso_si_falta(settings, usuario)
+    # Usuario de antes de la multiempresa: su fila en la empresa 1 se escribe
+    # en su primer inicio de sesión (nunca como efecto de lo que haga el
+    # administrador de otra empresa).
+    await registrar_usuario_previo(pool, usuario)
     # Multiempresa: la empresa que pide el navegador (X-Kontara-Empresa, o la
     # cookie kontara_empresa en las descargas) tiene que ser una de las del
     # usuario. nginx reenvía a las APIs la que se devuelve aquí, en lugar de
