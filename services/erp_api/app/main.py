@@ -17,7 +17,9 @@ cliente y `/documentos-venta` se calculan LEYENDO `facturacion.facturas`
 El contrato con el frontend es `frontend/src/lib/erpApi.ts` (y
 `frontend/src/lib/impuestosApi.ts` para impuestos,
 `frontend/src/lib/comprasApi.ts` para compras, `bancosApi.ts` y
-`contabilidadApi.ts` para bancos y contabilidad).
+`contabilidadApi.ts` para bancos y contabilidad y
+`frontend/src/lib/solucionesApi.ts` para Soluciones: planes, portal de
+clientes, Kontara Ventas y POS, con sus rutas en `soluciones.py`).
 """
 import asyncio
 import logging
@@ -42,6 +44,7 @@ from . import (
     reportes,
     repository,
     sincronizacion,
+    soluciones,
     tareas,
 )
 from .config import ErpApiSettings, get_settings
@@ -147,6 +150,7 @@ app.include_router(reportes.router)
 app.include_router(configuracion.router)
 app.include_router(plataforma.router)
 app.include_router(nomina.router)
+app.include_router(soluciones.router)
 
 
 def _pool():

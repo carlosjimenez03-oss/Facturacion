@@ -1,0 +1,25 @@
+/* Portal de clientes (PortalClientes.dc.html) y su página pública. */
+.portal-banner{display:flex;flex-wrap:wrap;align-items:center;gap:20px;padding:0 20px 0 0;overflow:hidden;background:#F6FAFF}
+.portal-banner-ilus{width:110px;height:96px;background:#CCEFEA;border-radius:0 60px 0 0;display:flex;align-items:flex-end;padding:0 0 10px 10px;flex:none}
+.portal-banner-ilus > div{width:82px;height:58px;background:#fff;border-radius:4px;box-shadow:0 2px 6px rgba(0,0,0,.1);padding:6px;display:flex;flex-direction:column;gap:4px}
+.portal-banner-ilus span{height:3px;background:#E5E7EB;border-radius:2px}
+.portal-mas{width:40px;height:40px;border-radius:50%;border:1px solid #D1D5DB;background:#fff;color:#0F766E;font-size:22px;cursor:pointer;line-height:1}
+.portal-mas:disabled{opacity:.4;cursor:default}
+.portal-chip{height:36px;border-radius:18px;padding:0 12px;gap:8px;background:#fff;border:1px solid #E5E7EB}
+.portal-chip button{border:0;background:none;cursor:pointer;color:#9CA3AF;padding:0;font-size:14px}
+.portal-banco{display:flex;flex-direction:column;gap:10px;padding:12px 14px;border:1px solid #EEF0F2;border-radius:10px;background:#FBFCFD;font-size:13.5px}
+
+/* Página pública /p/:token (sin menú ni barra superior). */
+.pp{min-height:100vh;background:#F6F7F9;padding:32px 16px}
+.pp-in{max-width:980px;margin:0 auto;display:flex;flex-direction:column;gap:20px}
+.pp-head{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:flex-end;gap:16px}
+.pp-head h1{margin:0;font-size:24px;font-weight:650;color:#111827}
+.pp-head p{margin:4px 0 0;color:#6B7280;font-size:14px}
+.pp-marca{font-size:12px;color:#0F766E;font-weight:650;letter-spacing:.02em;text-transform:uppercase}
+.pp-pagos{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.pp-pago{border:1px solid #E5E7EB;border-radius:10px;padding:14px;display:flex;flex-direction:column;gap:6px;font-size:13.5px;background:#fff}
+.pp-pie{font-size:12px;color:#9CA3AF;text-align:center}
+.pp-lista{display:none;list-style:none;margin:0;padding:0}
+.pp-lista li{display:flex;flex-direction:column;gap:8px;padding:14px 16px;border-top:1px solid #EEF0F2}
+.pp-lista li:first-child{border-top:0}
+@media (max-width:640px){.pp{padding:20px 12px}.pp-head h1{font-size:20px}.pp-lista{display:block}.pp-tabla{display:none}}

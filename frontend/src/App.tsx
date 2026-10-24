@@ -47,6 +47,11 @@ import { RecibosPage } from "./pages/nomina/Recibos";
 import { ReportesNominaPage } from "./pages/nomina/Reportes";
 import { SuscripcionesNominaPage } from "./pages/nomina/Suscripciones";
 import { Inicio } from "./pages/Inicio";
+import { PlanesPage } from "./pages/planes/Planes";
+import { PortalClientesPage } from "./pages/portal/PortalClientes";
+import { PortalPublicoPage } from "./pages/portal/PortalPublico";
+import { PosPage } from "./pages/pos/Pos";
+import { VentasPage } from "./pages/ventas/Ventas";
 import { Proximamente } from "./pages/Proximamente";
 import { ReportesPage } from "./pages/reportes/Reportes";
 import { SincronizacionPage } from "./pages/sincronizacion/Sincronizacion";
@@ -68,7 +73,15 @@ function FacturaNueva() {
 export default function App() {
   const { pathname, search } = useLocation();
   const sesion = useSesion();
-  // Todo, salvo /login, requiere sesión cuando el inicio de sesión está configurado.
+  // Portal de clientes público (/p/:token): sin menú ni sesión.
+  if (pathname.startsWith("/p/")) {
+    return (
+      <Routes>
+        <Route path="/p/:token" element={<PortalPublicoPage />} />
+      </Routes>
+    );
+  }
+  // Todo lo demás, salvo /login, requiere sesión cuando el inicio de sesión está configurado.
   if (pathname === "/login") return <Login />;
   if (AUTH_CONFIGURADA && (!sesion || sesion.recuperacion)) {
     return <Navigate to="/login" replace state={{ desde: pathname + search }} />;
@@ -157,6 +170,10 @@ export default function App() {
         <Route path="/nomina/pagos" element={<PagosNominaPage />} />
         <Route path="/nomina/suscripciones" element={<SuscripcionesNominaPage />} />
         <Route path="/nomina/configuracion" element={<ConfiguracionNominaPage />} />
+        <Route path="/pos" element={<PosPage />} />
+        <Route path="/portal-clientes" element={<PortalClientesPage />} />
+        <Route path="/planes" element={<PlanesPage />} />
+        <Route path="/ventas" element={<VentasPage />} />
 
         <Route path="/modulo/:slug" element={<Proximamente />} />
         <Route path="*" element={<Proximamente />} />

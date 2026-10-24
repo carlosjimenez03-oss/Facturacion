@@ -32,9 +32,6 @@ export interface MenuItem {
   hijos?: MenuHoja[];
 }
 
-/** Ruta de un módulo aún sin pantalla en React: muestra la página "En construcción". */
-const pendiente = (slug: string) => `/modulo/${slug}`;
-
 export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
   { id: "inicio", label: "Inicio", icon: <IconInicio />, to: "/" },
   { id: "bandeja", label: "Bandeja de entrada", icon: <IconBandeja />, to: "/bandeja" },
@@ -122,8 +119,8 @@ export const MENU_PRINCIPAL: (MenuItem | "separador")[] = [
 export const MENU_SOLUCIONES: MenuItem[] = [
   { id: "nomina", label: "Nómina", icon: <IconNomina />, to: "/nomina" },
   { id: "pos", label: "POS", icon: <IconPos />, to: "/pos" },
-  { id: "portal", label: "Portal de clientes", icon: <IconPortal />, to: pendiente("portal-clientes") },
-  { id: "ventas", label: `${MARCA} Ventas`, icon: <IconReportes />, to: pendiente("ventas") },
+  { id: "portal", label: "Portal de clientes", icon: <IconPortal />, to: "/portal-clientes" },
+  { id: "ventas", label: `${MARCA} Ventas`, icon: <IconReportes />, to: "/ventas" },
 ];
 
 /** Descripción de cada módulo pendiente, para la página "En construcción". */
