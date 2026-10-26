@@ -43,6 +43,11 @@ BEGIN
     END IF;
 END $$;
 
-GRANT web_anon TO CURRENT_USER;
+-- Con el nombre del rol, no CURRENT_USER: en la imagen de Supabase
+-- (supautils) `GRANT ... TO CURRENT_USER` de un no superusuario tumba el servidor.
+DO $$
+BEGIN
+    EXECUTE format('GRANT web_anon TO %I', current_user);
+END $$;
 GRANT USAGE ON SCHEMA facturacion TO web_anon;
 GRANT SELECT ON facturacion.envios_dgii TO web_anon;

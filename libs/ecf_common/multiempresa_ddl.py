@@ -200,10 +200,13 @@ BEGIN
            AND NOT (CASE WHEN pg16 THEN pg_has_role(current_user, r, 'SET')
                          ELSE pg_has_role(current_user, r, 'MEMBER') END) THEN
             BEGIN
+                -- Con el nombre del rol, nunca CURRENT_USER: en la imagen de
+                -- Supabase (supautils, Postgres 17) `GRANT ... TO CURRENT_USER`
+                -- hecho por un no superusuario tumba el servidor (señal 11).
                 IF pg16 THEN
-                    EXECUTE format('GRANT %I TO CURRENT_USER WITH INHERIT FALSE, SET TRUE', r);
+                    EXECUTE format('GRANT %I TO %I WITH INHERIT FALSE, SET TRUE', r, current_user);
                 ELSE
-                    EXECUTE format('GRANT %I TO CURRENT_USER', r);
+                    EXECUTE format('GRANT %I TO %I', r, current_user);
                 END IF;
             EXCEPTION WHEN insufficient_privilege OR invalid_grant_operation THEN
                 RAISE NOTICE 'No se pudo dar el rol % a %: %', r, current_user, SQLERRM;
