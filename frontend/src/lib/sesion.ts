@@ -240,8 +240,10 @@ export async function iniciarSesion(email: string, password: string): Promise<Se
  * Con el inicio de sesión configurado, las APIs NO deben responder sin
  * token: pide /api-erp/health sin sesión y espera el 401 de nginx (erp-api
  * deja /health abierto, así que solo nginx puede negarlo). Si llega otra
- * cosa (200 = nginx abierto, 5xx = sin SUPABASE_JWT_SECRET en nginx o en
- * erp-api) la aplicación muestra un aviso rojo. null = sin red (no se sabe).
+ * cosa (200 = nginx abierto, 503 = sin SUPABASE_JWT_SECRET en nginx o en
+ * erp-api) la aplicación muestra un aviso rojo. null = no se sabe: sin red,
+ * o 502/504 (erp-api reiniciándose tras un despliegue), que no es una falla
+ * de protección y se vuelve a comprobar en la próxima carga.
  */
 let comprobacion: Promise<boolean | null> | null = null;
 
@@ -249,7 +251,13 @@ export function apisProtegidas(): Promise<boolean | null> {
   if (!AUTH_CONFIGURADA) return Promise.resolve(true);
   // Una sola vez por carga de la página (la piden el login y el AppShell).
   comprobacion ??= fetch(`${ERP_API_URL}/health`, { credentials: "omit", cache: "no-store" })
-    .then((r) => r.status === 401)
+    .then((r) => {
+      if (r.status === 502 || r.status === 504) {
+        comprobacion = null;
+        return null;
+      }
+      return r.status === 401;
+    })
     .catch(() => {
       comprobacion = null; // sin red: se vuelve a intentar la próxima vez
       return null;
