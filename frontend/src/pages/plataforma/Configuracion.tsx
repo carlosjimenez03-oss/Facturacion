@@ -14,6 +14,7 @@ import {
   SeccionVendedores,
 } from "./ConfiguracionSecciones";
 import { mensajeError } from "./configuracionUtil";
+import { SeccionPadron } from "./SeccionPadron";
 import { SeccionPagos } from "./SeccionPagos";
 import "./plataforma.css";
 
@@ -27,6 +28,7 @@ const SECCIONES = [
   { id: "pagos", label: "Pagos en línea" },
   { id: "vendedores", label: "Vendedores" },
   { id: "usuarios", label: "Usuarios" },
+  { id: "padron", label: "Padrón de RNC" },
 ] as const;
 
 const VACIA: EmpresaPayload = {
@@ -169,6 +171,7 @@ export function ConfiguracionPage() {
           <SeccionPagos refSeccion={ref("pagos")} avisar={mostrarAviso} />
           <SeccionVendedores refSeccion={ref("vendedores")} avisar={mostrarAviso} />
           <SeccionUsuarios refSeccion={ref("usuarios")} avisar={mostrarAviso} />
+          <SeccionPadron refSeccion={ref("padron")} avisar={mostrarAviso} />
         </div>
       </div>
       {aviso}

@@ -1,11 +1,13 @@
 // "Agregar empresa" (Mis empresas, multiempresa): el RNC se verifica en el
-// registro de la instalación y en el directorio de emisores electrónicos de
-// la DGII (erp-api → consulta_directorio, best-effort) para proponer la razón
-// social; luego los datos fiscales. Quien la agrega queda como su
-// administrador y puede cambiarse a ella en ese momento.
-import { useState, type FormEvent } from "react";
+// registro de la instalación y en el padrón de RNC de la DGII (erp-api,
+// docs/PADRON_RNC.md), que llena razón social, nombre comercial y actividad
+// y dice su estado y régimen; con certificado digital, además, si es emisor
+// electrónico (consulta_directorio, best-effort). Quien la agrega queda como
+// su administrador y puede cambiarse a ella en ese momento.
+import { useRef, useState, type FormEvent } from "react";
 import { cambiarEmpresa, cargarMisEmpresas, empresasApi, type ConsultaRnc, type EmpresaResumen } from "../lib/empresasApi";
 import { formatoRnc } from "../lib/marca";
+import { estadoPadron, fechaPadron, NO_EN_PADRON, textoRegimen } from "../lib/padronUtil";
 import { IconCerrar } from "./icons";
 
 const CAMPOS: { k: "nombre_comercial" | "actividad_economica" | "direccion" | "provincia" | "municipio" | "telefono" | "correo"; t: string; ancho?: boolean }[] = [
@@ -30,6 +32,8 @@ export function AgregarEmpresa({ onCerrar }: { onCerrar: () => void }) {
   const [ocupado, setOcupado] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [creada, setCreada] = useState<EmpresaResumen | null>(null);
+  /** Lo último que llenó el padrón: se reemplaza al verificar otro RNC, lo escrito a mano no. */
+  const autollenado = useRef<Record<string, string>>({});
   const digitos = rnc.replace(/\D/g, "");
   const rncValido = digitos.length === 9 || digitos.length === 11;
 
@@ -41,7 +45,31 @@ export function AgregarEmpresa({ onCerrar }: { onCerrar: () => void }) {
     try {
       const c = await empresasApi.consultarRnc(digitos);
       setConsulta(c);
-      if (c.nombre && !razon) setRazon(c.nombre);
+      const previo = autollenado.current;
+      const libre = (actual: string | undefined, k: string) => !actual?.trim() || actual === previo[k];
+      const nuevos: Record<string, string> = {};
+      if (c.padron) {
+        const p = c.padron;
+        if (libre(razon, "razon")) {
+          setRazon(p.razon_social);
+          nuevos.razon = p.razon_social;
+        }
+        const llenar: Record<string, string | null> = { nombre_comercial: p.nombre_comercial, actividad_economica: p.actividad };
+        setDatos((d) => {
+          const sig = { ...d };
+          for (const [k, v] of Object.entries(llenar)) {
+            if (v && libre(d[k], k)) {
+              sig[k] = v;
+              nuevos[k] = v;
+            }
+          }
+          return sig;
+        });
+      } else if (c.nombre && libre(razon, "razon")) {
+        setRazon(c.nombre);
+        nuevos.razon = c.nombre;
+      }
+      autollenado.current = nuevos;
     } catch (err) {
       setError(mensaje(err));
     } finally {
@@ -132,15 +160,7 @@ export function AgregarEmpresa({ onCerrar }: { onCerrar: () => void }) {
                   <span>El RNC {formatoRnc(consulta.rnc)} ya es una empresa de esta instalación: búsquela en Mis empresas.</span>
                 </div>
               )}
-              {consulta && !consulta.registrada && (
-                <div className={`al ${consulta.emisor_electronico ? "al-s" : "al-i"}`}>
-                  <span>
-                    {consulta.emisor_electronico
-                      ? `DGII: ${consulta.nombre ?? "contribuyente"} es emisor electrónico.`
-                      : consulta.detalle ?? "No se pudo consultar la DGII: complete los datos a mano."}
-                  </span>
-                </div>
-              )}
+              {consulta && !consulta.registrada && <ResultadoDgii consulta={consulta} />}
               {paso === 2 && (
                 <div className="ae-grid">
                   <div className="fld ae-ancho">
@@ -184,6 +204,46 @@ export function AgregarEmpresa({ onCerrar }: { onCerrar: () => void }) {
           </form>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Lo que dijo la DGII: el padrón (datos, estado, régimen) y el directorio de emisores electrónicos. */
+function ResultadoDgii({ consulta }: { consulta: ConsultaRnc }) {
+  const p = consulta.padron;
+  const estado = p ? estadoPadron(p.estado) : null;
+  const regimen = p ? textoRegimen(p.regimen) : null;
+  const actualizado = fechaPadron(p?.padron_actualizado_en);
+  return (
+    <div className="ae-dgii" data-padron={p ? "encontrado" : "sin-datos"}>
+      {p && estado ? (
+        <div className={`al ${estado.aviso ? "al-w" : "al-s"}`}>
+          <span>
+            <b>Padrón de la DGII:</b> {p.razon_social}{" "}
+            <span className={estado.cls} data-estado-dgii>
+              {estado.label}
+            </span>
+            {regimen && <> · Régimen {regimen}</>}
+            {p.fecha_inicio && <> · Inicio {fechaPadron(p.fecha_inicio)}</>}
+            {estado.aviso && <span style={{ display: "block", marginTop: 4 }}>{estado.aviso}</span>}
+            <span className="hint" style={{ display: "block", marginTop: 4 }}>
+              {NO_EN_PADRON}
+              {actualizado && ` Padrón del ${actualizado}.`}
+            </span>
+          </span>
+        </div>
+      ) : (
+        <div className="al al-i">
+          <span>{consulta.padron_detalle ?? "No se encontró en el padrón de la DGII: complete los datos a mano."}</span>
+        </div>
+      )}
+      <p className="hint" style={{ margin: "6px 2px 0" }} data-directorio>
+        {consulta.consultado
+          ? consulta.emisor_electronico
+            ? "Emisor electrónico: sí (directorio de e-CF de la DGII)."
+            : "Emisor electrónico: no aparece en el directorio de e-CF de la DGII."
+          : consulta.detalle}
+      </p>
     </div>
   );
 }

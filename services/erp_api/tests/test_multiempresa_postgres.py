@@ -192,8 +192,9 @@ _PATH = {
     "lote_id": str(s.L1), "token": TOKEN_PORTAL,
 }
 # Sin datos de empresas (o con llamadas a otros servicios que aquí no hay).
+# El padrón de RNC es global y sin importar responde 503 (test_padron_postgres.py).
 _OMITIR = {"/health", "/estado-servicios", "/empresas/consulta-rnc/{rnc}", "/auth/verificar",
-           "/facturas/{factura_id}/representacion-impresa"}
+           "/facturas/{factura_id}/representacion-impresa", "/padron/{rnc}"}
 
 
 # Rutas con un parámetro de varios valores: una visita por valor.

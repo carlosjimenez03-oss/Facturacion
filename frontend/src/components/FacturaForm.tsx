@@ -22,6 +22,8 @@ import {
 import type { FormState, ItemFormulario } from "../lib/buildDatos";
 import { inventarioApi } from "../lib/inventarioApi";
 import { formatoMonto, formatoRnc } from "../lib/marca";
+import { padronApi, type ResultadoPadron } from "../lib/padronApi";
+import { estadoPadron, rncParaPadron, textoRegimen } from "../lib/padronUtil";
 import {
   buscarCliente,
   guardarCliente,
@@ -179,6 +181,9 @@ export function FacturaForm() {
   const [vendedorId, setVendedorId] = useState("");
   const [consumidorFinal, setConsumidorFinal] = useState(true);
   const [clienteEstado, setClienteEstado] = useState<"" | "buscando" | "encontrado" | "nuevo">("");
+  /** Padrón de RNC de la DGII para el RNC del comprador (estado, y el nombre si no está en Contactos). */
+  const [padronComprador, setPadronComprador] = useState<(ResultadoPadron & { rnc: string }) | null>(null);
+  const nombrePadron = useRef("");
   /** Contacto de erp-api elegido para esta factura (null si es nuevo o no se pudo consultar). */
   const [clienteErp, setClienteErp] = useState<Cliente | null>(null);
   const [contactosSinConexion, setContactosSinConexion] = useState(false);
@@ -507,6 +512,9 @@ export function FacturaForm() {
     const rnc = form.compradorRnc.replace(/\D/g, "");
     if (!rnc) return;
     setClienteEstado("buscando");
+    setPadronComprador(null);
+    const deLaDgii = rncParaPadron(rnc) ? padronApi.consultar(rnc).catch(() => null) : Promise.resolve(null);
+    void deLaDgii.then((r) => r && setPadronComprador({ ...r, rnc }));
     try {
       aplicarCliente(await erpApi.clientePorRnc(rnc));
       setContactosSinConexion(false);
@@ -514,6 +522,16 @@ export function FacturaForm() {
       setClienteErp(null);
       if (err instanceof ErpApiError && err.status === 404) {
         setContactosSinConexion(false);
+        // No está en Contactos: el nombre sale del padrón de la DGII.
+        const r = await deLaDgii;
+        if (r?.tipo === "encontrado") {
+          const nombre = r.contribuyente.razon_social;
+          setForm((prev) => {
+            if (prev.razonSocialComprador.trim() && prev.razonSocialComprador !== nombrePadron.current) return prev;
+            nombrePadron.current = nombre;
+            return { ...prev, razonSocialComprador: nombre };
+          });
+        }
         setClienteEstado("nuevo");
         return;
       }
@@ -998,6 +1016,7 @@ export function FacturaForm() {
                           set("compradorRnc", e.target.value.replace(/[^\d-]/g, ""));
                           setClienteEstado("");
                           setClienteErp(null);
+                          setPadronComprador(null);
                         }}
                         onBlur={() => form.compradorRnc && !form.razonSocialComprador && verificarCliente()}
                         placeholder="130452187"
@@ -1067,8 +1086,13 @@ export function FacturaForm() {
                       <span className="hint">
                         {contactosSinConexion
                           ? "No hay conexión con Contactos: complete los datos a mano."
-                          : "Cliente nuevo: se agregará a Contactos al guardar la factura."}
+                          : padronComprador?.tipo === "encontrado"
+                            ? "Nombre del padrón de la DGII. Cliente nuevo: se agregará a Contactos al guardar la factura."
+                            : "Cliente nuevo: se agregará a Contactos al guardar la factura."}
                       </span>
+                    )}
+                    {padronComprador && padronComprador.rnc === form.compradorRnc.replace(/\D/g, "") && (
+                      <PadronComprador resultado={padronComprador} />
                     )}
                     {clienteEstado === "encontrado" && clienteErp && clienteErp.condicion_pago_dias > 0 && (
                       <span className="hint">Condición del cliente: crédito a {clienteErp.condicion_pago_dias} días.</span>
@@ -1632,5 +1656,31 @@ function TarjetaTipo({
       <span style={{ fontSize: 13.5, fontWeight: 600, color: "#111827" }}>{tipo.label}</span>
       <span style={{ fontSize: 12, color: "#6B7280", lineHeight: 1.35 }}>{tipo.desc}</span>
     </button>
+  );
+}
+
+/** Estado del comprador en el padrón de RNC de la DGII, bajo la razón social. */
+function PadronComprador({ resultado }: { resultado: ResultadoPadron }) {
+  if (resultado.tipo === "no_encontrado") {
+    return (
+      <span className="hint" data-padron="no-encontrado">
+        {resultado.mensaje} Revise el número.
+      </span>
+    );
+  }
+  if (resultado.tipo === "no_disponible") return null;
+  const p = resultado.contribuyente;
+  const estado = estadoPadron(p.estado);
+  const regimen = textoRegimen(p.regimen);
+  return (
+    <span className="hint" data-padron="encontrado" style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+      DGII: <span className={estado.cls} data-estado-dgii>{estado.label}</span>
+      {regimen && <span>· Régimen {regimen}</span>}
+      {estado.aviso && (
+        <span role="alert" style={{ flexBasis: "100%", color: "#B45309", fontWeight: 600 }}>
+          {estado.aviso}
+        </span>
+      )}
+    </span>
   );
 }

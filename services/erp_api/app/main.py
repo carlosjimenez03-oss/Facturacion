@@ -43,6 +43,7 @@ from . import (
     empresas,
     impuestos,
     nomina,
+    padron,
     pagos,
     plataforma,
     reportes,
@@ -119,11 +120,16 @@ async def lifespan(app: FastAPI):
     envio = None
     if settings.envio_automatico_cada_segundos > 0:
         envio = asyncio.create_task(configuracion.iniciar_envio_automatico(pool, settings))
+    # Padrón de RNC de la DGII (docs/PADRON_RNC.md): descarga diaria.
+    actualizar_padron = None
+    if settings.padron_activo:
+        actualizar_padron = asyncio.create_task(padron.bucle_actualizacion(pool, settings))
     yield
-    if envio is not None:
-        envio.cancel()
-        with suppress(asyncio.CancelledError):
-            await envio
+    for tarea in (envio, actualizar_padron):
+        if tarea is not None:
+            tarea.cancel()
+            with suppress(asyncio.CancelledError):
+                await tarea
     await cerrar_pool(app.state.db_pool)
 
 
@@ -189,6 +195,8 @@ app.include_router(nomina.router)
 app.include_router(soluciones.router)
 # Fase 7 · Pagos con tarjeta en línea desde el portal de clientes (docs/PAGOS.md).
 app.include_router(pagos.router)
+# Padrón de RNC de la DGII (global): consulta por RNC/cédula e importación.
+app.include_router(padron.router)
 
 
 def _pool():

@@ -83,7 +83,7 @@ def test_ddl_es_idempotente():
         migraciones.DDL_VENTAS, migraciones.DDL_IMPUESTOS, migraciones.DDL_FUNCIONES, migraciones.DDL_COMPRAS,
         migraciones.DDL_CONTABILIDAD, migraciones.DDL_BANCOS, migraciones.DDL_CONFIGURACION,
         migraciones.DDL_OPERACION, migraciones.DDL_NOMINA, migraciones.DDL_SOLUCIONES,
-        migraciones.DDL_CONTINGENCIA, migraciones.DDL_PAGOS,
+        migraciones.DDL_CONTINGENCIA, migraciones.DDL_PAGOS, migraciones.DDL_PADRON,
     ):
         for linea in ddl.splitlines():
             if linea.startswith("CREATE "):
@@ -157,6 +157,23 @@ async def test_aplicar_migraciones_toma_el_lock_antes_del_ddl():
     assert llamadas.index(migraciones.DDL_AMBIENTE) < llamadas.index(multiempresa_ddl.DDL_MULTIEMPRESA)
     assert ("SELECT pg_advisory_xact_lock($1)", (multiempresa_ddl.LOCK_MULTIEMPRESA,)) in conn.execute_calls
     assert llamadas[-2:] == [multiempresa_ddl.DDL_MULTIEMPRESA, migraciones.DDL_MULTIEMPRESA]
+
+
+def test_022_padron_rnc_tiene_el_mismo_ddl_que_migraciones():
+    archivo = (REPO_ROOT / "db" / "init" / "022_padron_rnc.sql").read_text(encoding="utf-8")
+    assert migraciones.DDL_PADRON.strip() in archivo
+    # Global: no se aísla por empresa (ni columna empresa_id ni política).
+    assert "padron_rnc" not in migraciones.DDL_MULTIEMPRESA
+    assert "empresa_id integer" not in migraciones.DDL_PADRON and "ROW LEVEL SECURITY" not in migraciones.DDL_PADRON
+    # Los permisos de kontara_app / kontara_todas: kontara_conceder del esquema.
+    assert "kontara_conceder(ARRAY['configuracion'])" in archivo
+
+
+async def test_el_padron_se_crea_antes_de_la_multiempresa():
+    conn = _FakeConnection()
+    await migraciones.aplicar_migraciones(_FakePool(conn))
+    llamadas = [c[0] for c in conn.execute_calls]
+    assert llamadas.index(migraciones.DDL_PADRON) < llamadas.index(multiempresa_ddl.DDL_MULTIEMPRESA)
 
 
 def test_021_tiene_el_mismo_ddl_de_multiempresa():

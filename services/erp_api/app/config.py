@@ -68,6 +68,19 @@ class ErpApiSettings(EcfBaseSettings):
     facturas_api_url: str = "http://facturas-api:8000"
     envio_automatico_cada_segundos: int = 300
 
+    # Padrón de RNC de la DGII (docs/PADRON_RNC.md): el listado público
+    # DGII_RNC.zip se descarga e importa solo cada PADRON_CADA_HORAS (la
+    # primera vez poco después de arrancar). PADRON_ACTIVO=false apaga la
+    # descarga automática (se puede subir el ZIP en Configuración).
+    dgii_padron_url: str = "https://dgii.gov.do/app/WebApps/Consultas/RNC/DGII_RNC.zip"
+    padron_activo: bool = True
+    padron_cada_horas: float = 24.0
+    padron_primera_espera_segundos: float = 60.0
+    padron_timeout_segundos: float = 300.0
+    # Tope del ZIP (descarga o archivo subido) y del TXT descomprimido.
+    padron_max_mb: int = 200
+    padron_max_descomprimido_mb: int = 1500
+
     # Healthchecks de "Estado de las soluciones" (GET /estado-servicios):
     # cada servicio de la red interna con su /health. Segundos por consulta.
     estado_servicios_timeout_segundos: float = 2.5

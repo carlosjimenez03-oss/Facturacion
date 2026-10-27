@@ -1034,6 +1034,15 @@ ofrece). El cobro de un pago aprobado se registra con
 `repository.registrar_cobro_en` (mismas validaciones y candado que
 `POST /cobros`) y su asiento con `contabilidad_repository.contabilizar_documento`.
 
+## Padrón de RNC de la DGII
+
+Rutas en `app/padron.py` (lector del archivo en `app/padron_archivo.py`);
+tablas globales `configuracion.padron_rnc` y `configuracion.padron_rnc_estado`
+(`DDL_PADRON` = `db/init/022_padron_rnc.sql`). `GET /padron/{rnc}`,
+`GET /padron/estado`, `POST /padron/actualizar`, `POST /padron/archivo`;
+descarga diaria del `DGII_RNC.zip` con advisory lock. Detalle, formato del
+archivo, fuentes y variables: [`PADRON_RNC.md`](PADRON_RNC.md).
+
 ## Despliegue
 
 Servicio `erp-api` en `docker-compose.dokploy.yml` (puerto de host 8019,

@@ -5,6 +5,9 @@ import os
 from pathlib import Path
 
 os.environ.setdefault("APP_ENV", "test")
+# Sin descarga diaria del padrón de RNC de la DGII en las pruebas (las que
+# la prueban la llaman directo).
+os.environ.setdefault("PADRON_ACTIVO", "false")
 
 import pytest
 from cryptography import x509
