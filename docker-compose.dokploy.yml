@@ -287,6 +287,11 @@ services:
       PAGOS_URL_PUBLICA: ${PAGOS_URL_PUBLICA:-}
       AZUL_AUTH_KEY: ${AZUL_AUTH_KEY:-}
       PAGOS_VIGENCIA_MINUTOS: ${PAGOS_VIGENCIA_MINUTOS:-30}
+      # Padrón de RNC de la DGII (docs/PADRON_RNC.md): descarga diaria del
+      # DGII_RNC.zip; sin salida a dgii.gov.do se sube en Configuración.
+      DGII_PADRON_URL: ${DGII_PADRON_URL:-https://dgii.gov.do/app/WebApps/Consultas/RNC/DGII_RNC.zip}
+      PADRON_ACTIVO: ${PADRON_ACTIVO:-true}
+      PADRON_CADA_HORAS: ${PADRON_CADA_HORAS:-24}
     # Único servicio que ESCRIBE el certificado activo (los demás lo montan
     # de solo lectura, ver x-modulo-comun).
     volumes:

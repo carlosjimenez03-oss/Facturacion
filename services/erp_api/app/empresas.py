@@ -7,6 +7,7 @@ Contrato con el frontend: `frontend/src/lib/empresasApi.ts`.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Any, Literal
@@ -27,10 +28,13 @@ from libs.ecf_common.empresa import (
     rol_en_empresa,
 )
 
+from libs.ecf_common.auth import certificado_activo
+
 from . import configuracion_repository as conf_repo
-from . import membresia
+from . import membresia, padron
 from .config import ErpApiSettings, get_settings
 from .contabilidad_calculos import ddl_semilla_catalogo
+from .padron import Contribuyente
 from .repository import DatosInvalidosError
 
 logger = logging.getLogger(__name__)
@@ -105,8 +109,14 @@ class ConsultaRnc(BaseModel):
     rnc: str
     # Ya es una empresa de esta instalación (no se puede agregar de nuevo).
     registrada: bool
+    # Padrón de RNC de la DGII (padron.py): razón social, nombre comercial,
+    # actividad, estado y régimen. None = no aparece o el padrón no se ha
+    # importado (padron_detalle lo explica).
+    padron: Contribuyente | None = None
+    padron_detalle: str | None = None
     # Lo que dice el directorio de contribuyentes electrónicos de la DGII
-    # (consulta_directorio); None si no se pudo consultar.
+    # (consulta_directorio, solo con certificado digital); `consultado`
+    # false si no se pudo consultar (`detalle` lo explica).
     consultado: bool
     nombre: str | None = None
     emisor_electronico: bool | None = None
@@ -243,23 +253,44 @@ async def recordar_seleccion(pool, usuario_id: str, empresa_id: int) -> None:
     invalidar_cache()
 
 
+SIN_CERTIFICADO_DIRECTORIO = (
+    "Para saber si es emisor electrónico hace falta el certificado digital (.p12) de la empresa en uso "
+    "(Configuración → Certificado digital): la DGII solo responde esa consulta con él."
+)
+DIRECTORIO_NO_RESPONDE = (
+    "No se pudo saber si es emisor electrónico: la consulta del directorio de la DGII no respondió "
+    "(necesita el certificado digital vigente de la empresa en uso). Puede seguir: no hace falta para agregarla."
+)
+
+
+def _hay_certificado(settings: ErpApiSettings) -> bool:
+    try:
+        estado = certificado_activo.estado_certificado(settings.certificado_path, settings.certificado_password, "")
+    except Exception:  # noqa: BLE001 (best-effort: sin certificado legible no se consulta)
+        return False
+    return estado.get("estado") in ("vigente", "por_vencer")
+
+
 async def consultar_directorio(settings: ErpApiSettings, rnc: str) -> dict[str, Any]:
-    """Nombre del contribuyente en el directorio de emisores electrónicos de
-    la DGII (consulta_directorio). Best-effort: sin respuesta, se sigue con
-    los datos que escriba el usuario."""
+    """Si el RNC está en el directorio de emisores electrónicos de la DGII
+    (consulta_directorio). Best-effort y solo con certificado digital (la
+    DGII pide el token de la empresa): sin él, se explica y se sigue."""
+    if not await asyncio.to_thread(_hay_certificado, settings):
+        return {"consultado": False, "detalle": SIN_CERTIFICADO_DIRECTORIO}
     try:
         async with httpx.AsyncClient(timeout=settings.consulta_rnc_timeout_segundos) as cliente:
             respuesta = await cliente.get(
                 f"{settings.consulta_directorio_url.rstrip('/')}/directorio/{rnc}", headers=cabeceras_empresa()
             )
-    except httpx.HTTPError as exc:
-        return {"consultado": False, "detalle": f"No se pudo consultar la DGII: {exc.__class__.__name__}"}
+    except httpx.HTTPError:
+        return {"consultado": False, "detalle": DIRECTORIO_NO_RESPONDE}
     if respuesta.status_code >= 400:
-        return {"consultado": False, "detalle": f"La consulta a la DGII respondió {respuesta.status_code}"}
+        logger.info("consulta_directorio respondió %s para %s", respuesta.status_code, rnc)
+        return {"consultado": False, "detalle": DIRECTORIO_NO_RESPONDE}
     try:
         entradas = respuesta.json()
     except ValueError:
-        return {"consultado": False, "detalle": "Respuesta inválida de la consulta a la DGII"}
+        return {"consultado": False, "detalle": DIRECTORIO_NO_RESPONDE}
     entrada = next((e for e in entradas if isinstance(e, dict) and _digitos(e.get("rnc")) == rnc), None) if isinstance(
         entradas, list
     ) else None
@@ -334,14 +365,27 @@ async def responder_invitacion(request: Request, empresa_id: int, payload: Respu
 
 @router.get("/consulta-rnc/{rnc}", response_model=ConsultaRnc)
 async def consulta_rnc(request: Request, rnc: str, settings: ErpApiSettings = Depends(get_settings)):
-    """Antes de agregar una empresa: si ya está registrada aquí y qué dice la
-    DGII de ese RNC (para proponer la razón social)."""
+    """Antes de agregar una empresa: si ya está registrada aquí, sus datos en
+    el padrón de RNC de la DGII (razón social, nombre comercial, actividad,
+    estado, régimen) y, con certificado, si es emisor electrónico."""
     limpio = _digitos(rnc)
     if len(limpio) not in (9, 11):
         raise HTTPException(status_code=422, detail="El RNC debe tener 9 dígitos (o 11 si es una cédula)")
-    async with _pool(request).acquire() as conn:
+    pool = _pool(request)
+    async with pool.acquire() as conn:
         registrada = bool(await conn.fetchval("SELECT 1 FROM configuracion.empresas WHERE rnc = $1", limpio))
-    return {"rnc": limpio, "registrada": registrada, **await consultar_directorio(settings, limpio)}
+    en_padron, detalle_padron = None, None
+    try:
+        en_padron = await padron.buscar(pool, settings, limpio)
+        if en_padron is None:
+            async with pool.acquire() as conn:
+                detalle_padron = padron.texto_no_encontrado(limpio, await padron.leer_estado(conn))
+    except padron.PadronNoDisponibleError as exc:
+        detalle_padron = str(exc)
+    directorio = await consultar_directorio(settings, limpio)
+    if en_padron is not None:
+        directorio["nombre"] = en_padron["razon_social"]
+    return {"rnc": limpio, "registrada": registrada, "padron": en_padron, "padron_detalle": detalle_padron, **directorio}
 
 
 # --- rutas públicas (portal de clientes, retorno de la pasarela de pagos) ---------------------------

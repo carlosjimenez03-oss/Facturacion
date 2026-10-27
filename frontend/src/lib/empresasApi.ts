@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { empresaSeleccionada, seleccionarEmpresa } from "./empresaActual";
 import { ERP_API_URL, ErpApiError } from "./erpApi";
+import type { Contribuyente } from "./padronApi";
 import { fetchConSesion } from "./sesion";
 
 export type RolEmpresa = "admin" | "usuario";
@@ -54,6 +55,10 @@ export interface NuevaEmpresa {
 export interface ConsultaRnc {
   rnc: string;
   registrada: boolean;
+  /** Padrón de RNC de la DGII (null: no aparece o no se ha importado; padron_detalle lo explica). */
+  padron: Contribuyente | null;
+  padron_detalle: string | null;
+  /** Directorio de emisores electrónicos (solo con certificado digital). */
   consultado: boolean;
   nombre: string | null;
   emisor_electronico: boolean | null;

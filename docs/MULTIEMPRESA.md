@@ -71,7 +71,8 @@ lo pone Postgres.
   sin empresa) van con otro rol, `kontara_todas`, y su propia política
   `empresa_todas FOR SELECT TO kontara_todas USING (true)`: solo lee.
 - Siguen globales (sin `empresa_id`): `nomina.parametros` (tasas de ley del
-  país), `soluciones.suscripcion` y `soluciones.solicitudes_plan` (el plan es
+  país), `configuracion.padron_rnc` y su estado (el listado público de RNC
+  de la DGII, ver PADRON_RNC.md), `soluciones.suscripcion` y `soluciones.solicitudes_plan` (el plan es
   de la instalación: Planes cuenta los e-CF de todas las empresas y los
   desglosa por empresa), `inventario.schema_version`.
 
@@ -246,9 +247,11 @@ volver, restáurelo.
   agrega empresas y cambia los parámetros de nómina (tasas de la TSS y
   escala del ISR, de todas las empresas: `PUT/DELETE /nomina/parametros`).
 - "Agregar empresa" (Mis empresas, barra superior): el administrador de la
-  instalación verifica el RNC (registro local y directorio de emisores
-  electrónicos de la DGII por `consulta_directorio`, best-effort), completa
-  los datos fiscales y queda como administrador de la nueva.
+  instalación verifica el RNC (registro local, padrón de RNC de la DGII
+  —razón social, nombre comercial, actividad, estado y régimen, ver
+  PADRON_RNC.md— y, con certificado digital, el directorio de emisores
+  electrónicos por `consulta_directorio`, best-effort), completa los datos
+  fiscales y queda como administrador de la nueva.
 
 ## Navegador
 

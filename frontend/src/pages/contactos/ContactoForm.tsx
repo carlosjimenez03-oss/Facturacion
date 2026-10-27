@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { Toast } from "../../components/detalle/Toast";
 import type { Aviso } from "../../components/detalle/Toast";
@@ -6,6 +6,8 @@ import { IconAlerta } from "../../layout/icons";
 import { erpApi, ErpApiError } from "../../lib/erpApi";
 import type { Cliente, ClientePayload, CuentaPorCobrar, TipoContacto, TipoIdentificacion } from "../../lib/erpApi";
 import { formatoMonto, formatoRnc } from "../../lib/marca";
+import { padronApi, type ResultadoPadron } from "../../lib/padronApi";
+import { estadoPadron, fechaPadron, rncParaPadron, textoRegimen } from "../../lib/padronUtil";
 import {
   correoValido,
   errorIdentificacion,
@@ -86,6 +88,11 @@ export function ContactoForm() {
   const [guardando, setGuardando] = useState(false);
   const [duplicado, setDuplicado] = useState<Cliente | null>(null);
   const [verificado, setVerificado] = useState<string | null>(null);
+  /** Padrón de RNC de la DGII para el número escrito (null = sin consultar). */
+  const [padron, setPadron] = useState<(ResultadoPadron & { rnc: string }) | null>(null);
+  const [consultandoPadron, setConsultandoPadron] = useState(false);
+  /** El último nombre que llenó el padrón (se reemplaza al verificar otro número; lo escrito a mano no). */
+  const nombreAuto = useRef("");
   const [cuentas, setCuentas] = useState<CuentaPorCobrar[] | null>(null);
   const [errorCuentas, setErrorCuentas] = useState<string | null>(null);
   const [eliminar, setEliminar] = useState<{ bloqueo?: string } | null>(null);
@@ -121,6 +128,19 @@ export function ContactoForm() {
 
   const rncCliente = cliente?.rnc;
   const esCliente = cliente != null && cliente.tipo !== "proveedor";
+  // Estado DGII del contacto guardado (panel lateral): del padrón, sin pulsar nada.
+  useEffect(() => {
+    const rnc = cliente && cliente.tipo_identificacion !== "pasaporte" ? rncParaPadron(cliente.rnc ?? "") : null;
+    if (!rnc) return;
+    let vigente = true;
+    padronApi
+      .consultar(rnc)
+      .then((r) => vigente && setPadron({ ...r, rnc }))
+      .catch(() => undefined);
+    return () => {
+      vigente = false;
+    };
+  }, [cliente]);
   useEffect(() => {
     if (!rncCliente || !esCliente) return;
     erpApi
@@ -142,25 +162,51 @@ export function ContactoForm() {
     setCampos((prev) => ({ ...prev, rnc: limpio, tipoIdentificacion: detectado ?? prev.tipoIdentificacion }));
     setDuplicado(null);
     setVerificado(null);
+    setPadron(null);
+  }
+
+  async function consultarPadron(rnc: string) {
+    setConsultandoPadron(true);
+    try {
+      const r = await padronApi.consultar(rnc);
+      setPadron({ ...r, rnc });
+      if (r.tipo === "encontrado") {
+        const p = r.contribuyente;
+        // El nombre se llena si está vacío o si era el de otra consulta.
+        setCampos((prev) => {
+          if (prev.nombre.trim() && prev.nombre !== nombreAuto.current) return prev;
+          nombreAuto.current = p.razon_social;
+          return { ...prev, nombre: p.razon_social };
+        });
+      }
+    } catch {
+      setPadron({ tipo: "no_disponible", mensaje: "No se pudo consultar el padrón de la DGII en este momento.", rnc });
+    } finally {
+      setConsultandoPadron(false);
+    }
   }
 
   async function verificar() {
     setDuplicado(null);
     setVerificado(null);
+    setPadron(null);
     const problema = errorIdentificacion(campos.tipoIdentificacion, campos.rnc);
     if (problema) return setError(problema);
     setError(null);
+    const rnc = campos.tipoIdentificacion === "pasaporte" ? null : rncParaPadron(campos.rnc);
+    const enPadron = rnc ? consultarPadron(rnc) : Promise.resolve();
     try {
       const existente = await erpApi.clientePorRnc(campos.rnc);
       if (existente.id !== cliente?.id) setDuplicado(existente);
       else setVerificado("Este es el número registrado para este contacto.");
     } catch (err) {
       if (err instanceof ErpApiError && err.status === 404) {
-        setVerificado("Formato válido y sin registrar en sus contactos. La consulta al padrón de la DGII aún no está disponible.");
+        setVerificado("Formato válido y sin registrar en sus contactos.");
       } else {
         setError(mensajeErp(err));
       }
     }
+    await enPadron;
   }
 
   function validar(): string | null {
@@ -405,6 +451,8 @@ export function ContactoForm() {
                   <span>{verificado}</span>
                 </div>
               )}
+              {consultandoPadron && <span className="hint" style={{ gridColumn: "1 / -1" }}>Consultando el padrón de la DGII…</span>}
+              {padron && padron.rnc === rncParaPadron(campos.rnc) && <PadronResultado resultado={padron} />}
             </div>
           </section>
 
@@ -576,10 +624,8 @@ export function ContactoForm() {
             <section className="card">
               <dl className="kv card-b">
                 <dt>Estado DGII</dt>
-                <dd>
-                  <span className="tip r" data-tip="La consulta del RNC o cédula en el padrón de la DGII aún no está disponible en Kontara.">
-                    <span className="bd b-borr nodot">Sin verificar</span>
-                  </span>
+                <dd data-estado-dgii-panel>
+                  <EstadoDgii resultado={padron && padron.rnc === rncParaPadron(cliente.rnc ?? "") ? padron : null} pasaporte={cliente.tipo_identificacion === "pasaporte" || !cliente.rnc} />
                 </dd>
                 <dt>Creado</dt>
                 <dd>{new Date(cliente.creado_en).toLocaleString("es-DO")}</dd>
@@ -603,5 +649,66 @@ export function ContactoForm() {
       )}
       <Toast aviso={aviso} onCerrar={cerrarAviso} />
     </div>
+  );
+}
+
+/** Resultado del padrón bajo el número: nombre, estado (badge), régimen y aviso si no está activo. */
+function PadronResultado({ resultado }: { resultado: ResultadoPadron }) {
+  if (resultado.tipo !== "encontrado") {
+    return (
+      <div className="al al-i" style={{ gridColumn: "1 / -1" }} data-padron="sin-datos">
+        <span>{resultado.mensaje}</span>
+      </div>
+    );
+  }
+  const p = resultado.contribuyente;
+  const estado = estadoPadron(p.estado);
+  const regimen = textoRegimen(p.regimen);
+  return (
+    <div className={`al ${estado.aviso ? "al-w" : "al-s"}`} style={{ gridColumn: "1 / -1" }} data-padron="encontrado">
+      {estado.aviso && <IconAlerta />}
+      <span>
+        <b>Padrón de la DGII:</b> {p.razon_social}
+        {p.nombre_comercial && <> ({p.nombre_comercial})</>}{" "}
+        <span className={estado.cls} data-estado-dgii>
+          {estado.label}
+        </span>
+        {regimen && <> · Régimen {regimen}</>}
+        {p.actividad && <span style={{ display: "block", marginTop: 2 }}>{p.actividad}</span>}
+        {estado.aviso && <span style={{ display: "block", marginTop: 4 }}>{estado.aviso}</span>}
+      </span>
+    </div>
+  );
+}
+
+function EstadoDgii({ resultado, pasaporte }: { resultado: ResultadoPadron | null; pasaporte: boolean }) {
+  if (pasaporte) return <span className="bd b-borr nodot">No aplica</span>;
+  if (!resultado) {
+    return (
+      <span className="tip r" data-tip="Pulse «Verificar» para consultarlo en el padrón de RNC de la DGII.">
+        <span className="bd b-borr nodot">Sin verificar</span>
+      </span>
+    );
+  }
+  if (resultado.tipo === "no_encontrado") {
+    return (
+      <span className="tip r" data-tip={resultado.mensaje}>
+        <span className="bd b-rech nodot">No aparece</span>
+      </span>
+    );
+  }
+  if (resultado.tipo === "no_disponible") {
+    return (
+      <span className="tip r" data-tip={resultado.mensaje}>
+        <span className="bd b-borr nodot">Sin verificar</span>
+      </span>
+    );
+  }
+  const estado = estadoPadron(resultado.contribuyente.estado);
+  const fecha = fechaPadron(resultado.contribuyente.padron_actualizado_en);
+  return (
+    <span className="tip r" data-tip={`Padrón de RNC de la DGII${fecha ? ` del ${fecha}` : ""}`}>
+      <span className={estado.cls}>{estado.label}</span>
+    </span>
   );
 }
