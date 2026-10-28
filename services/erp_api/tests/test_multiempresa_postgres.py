@@ -218,14 +218,26 @@ OBLIGATORIAS = {
 }
 
 
-def _rutas(app, ids: dict[str, str]):
+def _rutas_api(app):
+    """Rutas de la API con su path completo. Desde FastAPI 0.116 los routers
+    incluidos quedan agrupados en `app.routes` (no como APIRoute sueltas):
+    sus rutas salen de `effective_route_contexts()`, con path, methods y
+    dependant igual que una APIRoute."""
     for ruta in app.routes:
-        if not isinstance(ruta, APIRoute) or "GET" not in ruta.methods or ruta.path in _OMITIR:
+        if isinstance(ruta, APIRoute):
+            yield ruta
+        elif hasattr(ruta, "effective_route_contexts"):
+            yield from ruta.effective_route_contexts()
+
+
+def _rutas(app, ids: dict[str, str]):
+    for ruta in _rutas_api(app):
+        if "GET" not in ruta.methods or ruta.path in _OMITIR:
             continue
         if ruta.path.startswith("/portal/publico"):
             continue  # se prueba aparte: entra a la empresa del enlace
-        params = {p.name: _VALORES[p.name] for p in ruta.dependant.query_params if p.required and p.name in _VALORES}
-        if any(p.required and p.name not in _VALORES for p in ruta.dependant.query_params):
+        params = {p.name: _VALORES[p.name] for p in ruta.dependant.query_params if p.field_info.is_required() and p.name in _VALORES}
+        if any(p.field_info.is_required() and p.name not in _VALORES for p in ruta.dependant.query_params):
             continue
         caminos = [(ruta.path, ruta.path)]
         for p in ruta.dependant.path_params:
