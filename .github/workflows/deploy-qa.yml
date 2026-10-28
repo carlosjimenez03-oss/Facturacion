@@ -55,7 +55,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build y push de imagen (ambiente QA) - ${{ matrix.modulo }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: services/${{ matrix.modulo }}/Dockerfile
@@ -98,7 +98,7 @@ jobs:
       # (se hornea en el bundle en build time). Configurar como variable del
       # environment "qa" en Settings > Environments > qa > Variables.
       - name: Build y push de imagen (ambiente QA) - frontend
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ./frontend
           file: frontend/Dockerfile
