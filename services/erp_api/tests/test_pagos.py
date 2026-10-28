@@ -65,11 +65,13 @@ def test_las_unicas_rutas_publicas_son_las_del_portal():
     """ERP_REQUIRE_AUTH deja pasar /portal/publico/*: que no haya caído ahí
     nada más que el portal y el pago (la configuración y el listado de
     pagos piden sesión)."""
+    # Desde la especificación OpenAPI y no de `app.routes`: desde FastAPI
+    # 0.116 los routers incluidos quedan agrupados (no como rutas sueltas).
     publicas = {
-        (metodo, r.path)
-        for r in main.app.routes
-        if getattr(r, "path", "").startswith(main.RUTA_PORTAL_PUBLICO)
-        for metodo in r.methods
+        (metodo.upper(), ruta)
+        for ruta, operaciones in main.app.openapi()["paths"].items()
+        if ruta.startswith(main.RUTA_PORTAL_PUBLICO)
+        for metodo in operaciones
     }
     assert publicas == {
         ("GET", "/portal/publico/{token}"),
