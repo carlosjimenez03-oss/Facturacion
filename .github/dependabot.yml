@@ -1,9 +1,33 @@
 version: 2
 updates:
   - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # Requieren ESLint 9+; el proyecto está en ESLint 8.
+      - dependency-name: "eslint-plugin-react-refresh"
+        versions: [">=0.5.0"]
+      - dependency-name: "eslint"
+        versions: [">=9.0.0"]
+    groups:
+      npm-menores:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: "pip"
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+      # Cada versión nueva de ruff agrega reglas: se actualiza a mano.
+      - dependency-name: "ruff"
+    groups:
+      pip-menores:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
