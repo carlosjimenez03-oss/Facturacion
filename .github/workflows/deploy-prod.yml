@@ -40,7 +40,7 @@ jobs:
           - formato_606
           - erp_api
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Los nombres de repositorio en un registro OCI/Docker deben ser en
       # minusculas; github.repository conserva las mayusculas del nombre
@@ -84,7 +84,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Normalizar nombre de imagen a minusculas
         id: repo
