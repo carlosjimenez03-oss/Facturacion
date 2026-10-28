@@ -3,12 +3,12 @@ uvicorn[standard]==0.32.1
 pydantic==2.10.3
 pydantic-settings==2.7.0
 httpx==0.28.1
-python-dotenv==1.0.1
-python-multipart==0.0.20
+python-dotenv==1.2.2
+python-multipart==0.0.31
 cryptography==50.0.1
 signxml==5.1.0
-PyJWT==2.10.1
-lxml==5.3.0
+PyJWT==2.15.0
+lxml==6.1.0
 asyncpg==0.30.0
 reportlab==4.2.5
 qrcode[pil]==8.0
