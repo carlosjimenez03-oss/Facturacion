@@ -95,7 +95,7 @@ def _frase(texto: str) -> str:
 
 def _huella(ids: list[str]) -> str:
     """Clave de una tarea que agrupa varios documentos: cambia si cambia el conjunto."""
-    return hashlib.sha1(",".join(sorted(ids)).encode()).hexdigest()[:12]
+    return hashlib.sha1(",".join(sorted(ids)).encode(), usedforsecurity=False).hexdigest()[:12]
 
 
 def _motivo_dgii(respuesta: str | None, error: str | None) -> str | None:
