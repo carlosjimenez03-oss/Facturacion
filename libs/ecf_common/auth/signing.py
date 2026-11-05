@@ -25,6 +25,8 @@ from signxml.algorithms import (
     SignatureMethod,
 )
 
+from ..diagnostico import es_placeholder
+
 
 @dataclass
 class CredencialFirma:
@@ -58,6 +60,12 @@ def cargar_certificado_p12(path: str, password: str, *, preferir_activo: bool = 
                     raise ValueError(SIN_CERTIFICADO_EMPRESA) from None
         if not usa_certificado_de_variables():
             raise FileNotFoundError(SIN_CERTIFICADO_EMPRESA)
+    if es_placeholder(password):
+        raise ValueError(
+            "CERTIFICADO_PASSWORD es un texto de relleno, no la contraseña real "
+            f"del certificado {path}: corrígelo en Dokploy → Environment y vuelve "
+            "a desplegar, o carga el .p12 en Configuración → Certificado."
+        )
     with open(path, "rb") as fh:
         p12_bytes = fh.read()
     private_key, certificate, _ = pkcs12.load_key_and_certificates(

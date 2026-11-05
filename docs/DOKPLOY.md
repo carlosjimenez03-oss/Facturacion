@@ -27,6 +27,8 @@ datos es **Supabase** (self-hosted, recurso aparte en Dokploy) — ver
 |---|---|
 | `EMISOR_RNC` | RNC del emisor autorizado como electrónico por la DGII |
 | `CERTIFICADO_PASSWORD` | Contraseña del certificado `.p12` (ver paso 3) |
+| `ALLOWED_ORIGINS` | Orígenes CORS permitidos, en formato JSON. En producción: `["https://front.acentosdeco.lat"]` (ver sección 10) |
+| `KONTARA_TOKEN_INTERNO` | Secreto compartido entre servicios (32+ caracteres, `openssl rand -hex 32`): con la cabecera `X-Kontara-Interno` pasan el `REQUIRE_AUTH` sin sesión. Nginx borra esa cabecera de los requests del navegador |
 | `DATABASE_URL` | Cadena de conexión al Postgres de Supabase (pooler Supavisor, puerto 5432). Ver [`SUPABASE.md`](SUPABASE.md), paso 2 |
 | `SUPABASE_NETWORK` | Red de Docker del recurso de Supabase (p. ej. `facturacion-supabase-soscqp_default`), para llegar a `supavisor` por la red interna. Ver [`SUPABASE.md`](SUPABASE.md), paso 2 |
 | `EMISOR_100_ELECTRONICO` | Opcional, por defecto `true`: la empresa emite solo e-CF, así que el 607 y el 608 aparecen como "No aplica". Póngalo en `false` si todavía emite NCF serie B. Ver [`ERP_API.md`](ERP_API.md) |
@@ -38,7 +40,6 @@ Opcionales (con default razonable si se omiten):
 | Variable | Default | Descripción |
 |---|---|---|
 | `APP_ENV` | `production` | `test` \| `qa` \| `production` — determina el ambiente DGII (TesteCF/CerteCF/eCF) |
-| `ALLOWED_ORIGINS` | `["*"]` | Orígenes CORS permitidos, formato JSON |
 | `LOG_LEVEL` | `INFO` | Nivel de log |
 | `DEBUG` | `false` | Modo debug de FastAPI |
 | `VITE_API_URL` | `/api` | Base URL que el frontend usa para llamar a `facturas-api`. El default `/api` hace que nginx (dentro del propio contenedor `frontend`) reenvíe esas llamadas a `facturas-api` por la red interna `facturacion` -- mismo origen que el frontend, sin CORS ni el problema de "mixed content" de llamar a un backend `http://` desde un frontend `https://`. **No hace falta cambiarlo** salvo que quieras exponer `facturas-api` con su propia URL pública. Se hornea en el bundle del frontend en build time — cambiarlo exige reconstruir la imagen (redeploy), no basta con reiniciar el contenedor |
@@ -391,3 +392,32 @@ resolver `postgres` después de un redeploy, no es un problema del
 ese servicio. Ver "IMPORTANTE: no asignar un 'Domain' de Dokploy a
 `facturas-api` ni a `inventario-api`" en la sección 4 arriba para la causa
 raíz y el fix permanente (no requiere tocar código).
+
+## 10. Diagnóstico de configuración
+
+Un servicio puede arrancar sin un solo error y aun así estar mal configurado.
+El 2026-11-05 el despliegue quedó `running (healthy)` con `APP_ENV=test`, un
+`CERTIFICADO_PASSWORD` que era el texto de ejemplo `<deje la que ya tiene>` y un
+`EMISOR_RNC` de relleno (`101000000`). Nada de eso impedía arrancar: el fallo
+aparecía después, al firmar el XML o al enviar un comprobante a la DGII.
+
+Cada servicio revisa su configuración al arrancar
+(`libs/ecf_common/diagnostico.py`) y deja un `WARNING` por cada problema en el
+log del contenedor. **No se cae el servicio a propósito**: es preferible
+arrancar avisando que tumbar algo que ya está sirviendo. Para verlos:
+
+```bash
+docker compose logs <servicio> | grep "config:"
+```
+
+| Aviso en el log | Qué corregir |
+|---|---|
+| `APP_ENV=test: ...` | Si el despliegue es de producción, `APP_ENV=production`. Ojo: el ambiente que manda es Configuración → Ambiente DGII (`configuracion.ambiente_dgii`), ver `libs/ecf_common/ambiente.py`. Sin un certificado válido, cambiar `APP_ENV` a `production` apunta los envíos al eCF real |
+| `ALLOWED_ORIGINS contiene "*"` | Poner la lista real de dominios, p. ej. `["https://front.acentosdeco.lat"]` |
+| `CERTIFICADO_PASSWORD contiene un texto de relleno` | Cargar la contraseña real del `.p12` (paso 3). Es el único caso que **sí** rompe: `cargar_certificado_p12` lanza `ValueError` en vez de intentar firmar con una contraseña que no puede funcionar |
+| `EMISOR_RNC ... de relleno` / `no tiene 9 dígitos` | Poner el RNC real del emisor autorizado como electrónico por la DGII |
+| `KONTARA_TOKEN_INTERNO ...` | Generar uno nuevo con `openssl rand -hex 32` (mínimo 32 caracteres) y redeployar |
+
+La validación del RNC es solo de forma (9 dígitos) y contra una lista de
+valores de ejemplo (`101000000`, `000000000`, `999999999`): a propósito no se
+valida el dígito verificador, para no rechazar empresas reales.
