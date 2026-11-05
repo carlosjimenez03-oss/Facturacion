@@ -6,6 +6,9 @@ __pycache__/
 venv/
 .env
 .env.local
+.env.production
+.env.qa
+.env.development
 .env.*.local
 *.log
 .pytest_cache/
